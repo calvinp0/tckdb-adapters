@@ -9,12 +9,9 @@ built payload against the *real* published ``tckdb_schemas`` models. This is the
 regression that catches a shared-schema bump breaking the ARC↔TCKDB wire shape
 in the adapter repo — instead of months later in an ARC run.
 
-TODO: freeze a real ``arcbench`` ``output.yml`` (+ its ``tckdb_evidence``
-sidecar once it exists) into ``tests/fixtures/golden/`` and drive it here. Until
-then the corpus is built from the existing synthetic doc/record helpers in
-``test_adapter`` / ``test_ts_upload`` (``_reaction_output_doc``,
-``_reaction_record``, ``_fake_output_doc``, ``_full_record``, ``_compose``),
-which already mirror ``arc/output.py``'s emitted shapes.
+The Phase 3 cases use the checked-in, sanitized ARC ``output.yml`` and its
+matching evidence sidecar from ``tests/fixtures/golden``.  The older synthetic
+cases remain useful as a compact compatibility corpus for schema 1.0 output.
 
 Also asserts the forbidden-key boundary: ARC-internal keys the wire must never
 carry (``atom_map``, ``ts_report``, ``successful_methods``, ``server``,
@@ -22,11 +19,16 @@ carry (``atom_map``, ``ts_report``, ``successful_methods``, ``server``,
 """
 
 import copy
+import hashlib
 import json
 import os
+from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest import mock
+
+import yaml
 
 from tckdb_arc.adapter import TCKDBAdapter
 from tckdb_arc.config import TCKDBConfig
@@ -106,6 +108,21 @@ class TestGoldenCorpus(unittest.TestCase):
         self.assertTrue(outcome.payload_path.exists())
         return json.loads(outcome.payload_path.read_text())
 
+    def _phase3_corpus(self):
+        fixture_dir = Path(__file__).parent / "fixtures" / "golden"
+        output_doc = yaml.safe_load((fixture_dir / "phase3_output.yml").read_text())
+        (Path(self.tmp) / "output").mkdir()
+        shutil.copyfile(fixture_dir / "tckdb_evidence.json",
+                        Path(self.tmp) / "output" / "tckdb_evidence.json")
+        return output_doc
+
+    @staticmethod
+    def _canonical_sha256(payload):
+        encoded = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
     # --- computed species -------------------------------------------------
     def test_computed_species_payload_validates(self):
         adapter = self._adapter("computed_species")
@@ -164,6 +181,57 @@ class TestGoldenCorpus(unittest.TestCase):
         # SpeciesEntryIdentityPayload — a reactant's species_entry.
         species_entry = payload["reaction"]["reactants"][0]["species_entry"]
         SpeciesEntryIdentityPayload.model_validate(species_entry)
+
+    def test_phase3_disk_corpus_builds_all_payloads_from_sidecar(self):
+        output_doc = self._phase3_corpus()
+        adapter = self._adapter("all")
+
+        # The fixture deliberately contains no ARC calculation files. Poison
+        # every legacy parser boundary as an additional proof that valid
+        # sidecar evidence is sufficient.
+        with mock.patch("tckdb_arc._arc_optional.require_arc_parser",
+                        side_effect=AssertionError("legacy ARC parser used")):
+            species = self._built_payload(
+                adapter.submit_computed_species_from_output(
+                    output_doc=output_doc, species_record=output_doc["species"][0],
+                )
+            )
+            reaction = self._built_payload(
+                adapter.submit_computed_reaction_from_output(
+                    output_doc=output_doc, reaction_record=output_doc["reactions"][0],
+                )
+            )
+            transition_state = self._built_payload(
+                adapter.submit_computed_ts_from_output(
+                    output_doc=output_doc,
+                    ts_record=output_doc["transition_states"][0],
+                    reaction_record=output_doc["reactions"][0],
+                )
+            )
+
+        ComputedSpeciesUploadRequest.model_validate(species)
+        ComputedReactionUploadRequest.model_validate(reaction)
+        TransitionStateUploadRequest(**transition_state)
+        for label, payload in (
+            ("computed_species", species),
+            ("computed_reaction", reaction),
+            ("transition_state", transition_state),
+        ):
+            _assert_no_forbidden_keys(self, payload, label)
+
+        # Canonical snapshots make any wire-shape change an explicit review.
+        self.assertEqual(
+            {
+                "computed_species": "416d7d91be1fe1383b369e37b6c582cfe99ec4555053d2a941f4166a0a471739",
+                "computed_reaction": "89b167b98459263e83ef31f1a8a47750977267be94074a10ff30c43e9a9e6dbc",
+                "transition_state": "c1093e8efb7f825bb001022ec78457001905e9d68e758d4ffcc826e738972a3a",
+            },
+            {
+                "computed_species": self._canonical_sha256(species),
+                "computed_reaction": self._canonical_sha256(reaction),
+                "transition_state": self._canonical_sha256(transition_state),
+            },
+        )
 
 
 if __name__ == "__main__":

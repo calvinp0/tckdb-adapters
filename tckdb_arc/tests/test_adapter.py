@@ -43,7 +43,12 @@ except ImportError:
     ARC_PATH = None
     ARC_TESTING_PATH = None
 
-from tckdb_schemas.fragments.calculation import HessianPayload, HessianSource
+from tckdb_schemas.fragments.calculation import (
+    HessianPayload,
+    HessianSource,
+    IRCResultPayload,
+    PathSearchResultPayload,
+)
 from tckdb_schemas.workflows.computed_species_upload import (
     ComputedSpeciesUploadRequest,
 )
@@ -8832,6 +8837,131 @@ class TestReactionSweepPartialGating(unittest.TestCase):
         _run_reaction_sweep(adapter=adapter, output_doc=doc, tckdb_config=cfg)
         self.assertEqual(adapter.calls, 1)
         self.assertFalse(adapter.last_is_partial)
+
+
+class TestPhase3EvidenceParity(unittest.TestCase):
+    """Sidecar-normalized and legacy-parser-normalized results stay identical."""
+
+    @staticmethod
+    def _canonical(value):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+    def test_species_and_ts_hessian_sidecar_matches_fallback(self):
+        geometry = "2\nH2\nH 0 0 0\nH 0 0 0.7"
+        triangle = [float(i) / 100 for i in range(21)]
+        for is_ts in (False, True):
+            with self.subTest(is_ts=is_ts), tempfile.TemporaryDirectory() as root:
+                pathlib.Path(root, "freq.log").write_text("fixture")
+                record = {"label": "TS0" if is_ts else "H2", "is_ts": is_ts,
+                          "freq_log": "freq.log"}
+                adapter = TCKDBAdapter(
+                    TCKDBConfig(enabled=True, base_url="http://x", upload=False),
+                    project_directory=root,
+                )
+                parser = mock.Mock()
+                parser.parse_cartesian_hessian_lower_triangle.return_value = triangle
+                with mock.patch("tckdb_arc._arc_optional.determine_ess", return_value="gaussian"), \
+                     mock.patch("tckdb_arc._arc_optional.ess_factory", return_value=parser):
+                    fallback = adapter._build_freq_hessian_payload(
+                        output_doc={"schema_version": "1.0"}, species_record=record,
+                        geometry_xyz_text=geometry,
+                    )
+                evidence_value = {
+                    "source_log": "freq.log", "geometry_xyz_text": geometry,
+                    "atom_count": 2, "matrix_dimension": 6,
+                    "packing": "lower_triangle_row_major_including_diagonal",
+                    "units": "hartree_per_bohr_squared", "source": "parsed_log",
+                    "parser_version": "arc-hessian-1", "lower_triangle": triangle,
+                }
+                sidecar = {
+                    "geometry": {"xyz_text": evidence_value["geometry_xyz_text"]},
+                    "lower_triangle_hartree_bohr2": triangle,
+                    "source": "parsed_log", "parser_version": "arc-hessian-1",
+                }
+                self.assertEqual(fallback, sidecar)
+                self.assertEqual(self._canonical(fallback), self._canonical(sidecar))
+                HessianPayload(**sidecar)
+
+    def test_irc_sidecar_matches_rich_fallback(self):
+        from tckdb_arc.adapter import _build_irc_result_payload, _normalize_xyz_text
+        from tckdb_arc._vendor import xyz_to_str
+
+        xyz = {"symbols": ("H", "H"), "isotopes": (1, 1),
+               "coords": ((0.0, 0.0, 0.0), (0.0, 0.0, 0.7))}
+        xyz_text = _normalize_xyz_text(xyz_to_str(xyz_dict=xyz), None)
+        fallback_trajectories = [{
+            "direction": "forward", "geom_points": None,
+            "rich_points": [{
+                "point_number": 1, "direction": "forward", "xyz": xyz,
+                "electronic_energy_hartree": -1.2, "reaction_coordinate": 0.4,
+                "max_gradient": 0.01, "rms_gradient": 0.005,
+            }],
+        }]
+        sidecar_trajectories = [{
+            "direction": "forward", "geom_points": None,
+            "rich_points": [{
+                "point_number": 1, "direction": "forward",
+                "geometry_xyz_text": xyz_text,
+                "electronic_energy_hartree": -1.2, "reaction_coordinate": 0.4,
+                "max_gradient": 0.01, "rms_gradient": 0.005,
+            }],
+        }]
+        marker = {"xyz_text": xyz_text, "electronic_energy_hartree": -1.1}
+        fallback = _build_irc_result_payload(fallback_trajectories, -1.1, marker)
+        sidecar = _build_irc_result_payload(sidecar_trajectories, -1.1, marker)
+        self.assertEqual(fallback, sidecar)
+        self.assertEqual(self._canonical(fallback), self._canonical(sidecar))
+        IRCResultPayload(**sidecar)
+
+    def test_gsm_sidecar_matches_fallback_with_absolute_energies(self):
+        from tckdb_arc.adapter import _build_path_search_result_payload, _normalize_xyz_text
+        from tckdb_arc._vendor import xyz_to_str
+
+        frames = [
+            {"symbols": ("H", "H"), "isotopes": (1, 1),
+             "coords": ((0.0, 0.0, 0.0), (0.0, 0.0, z))}
+            for z in (0.7, 0.8, 0.9)
+        ]
+        metadata = {1: {"electronic_energy_hartree": -1.2},
+                    2: {"electronic_energy_hartree": -1.0,
+                        "max_gradient": 0.03, "rms_gradient": 0.01}}
+        with mock.patch("tckdb_arc._arc_optional.parse_trajectory", return_value=frames), \
+             mock.patch("tckdb_arc._arc_optional.kabsch", return_value=0.1), \
+             mock.patch("tckdb_arc.adapter._read_gsm_node_outputs", return_value=metadata), \
+             mock.patch("tckdb_arc._arc_optional.parse_gsm_stringfile_energies",
+                        return_value=[0.0, 0.0, 0.0]):
+            fallback = _build_path_search_result_payload(
+                method="gsm", log_path="stringfile.xyz0000",
+                fallback_xyz_text=None, node_outputs_dir="nodes",
+            )
+        evidence_points = []
+        for index, frame in enumerate(frames):
+            point = {
+                "source_point_index": index,
+                "node_label": index or None,
+                "geometry_xyz_text": _normalize_xyz_text(
+                    xyz_to_str(xyz_dict=frame), f"gsm_point_{index}",
+                ),
+                "path_coordinate_angstrom": index * 0.1,
+                "stringfile_relative_energy_kcal_mol": 0.0,
+            }
+            if index in metadata:
+                point.update({
+                    "electronic_energy_hartree": metadata[index]["electronic_energy_hartree"],
+                    **({"max_gradient_hartree_per_bohr": metadata[index]["max_gradient"],
+                        "rms_gradient_hartree_per_bohr": metadata[index]["rms_gradient"]}
+                       if "max_gradient" in metadata[index] else {}),
+                })
+            evidence_points.append(point)
+        with mock.patch("tckdb_arc._arc_optional.parse_trajectory",
+                        side_effect=AssertionError("fallback parser used")):
+            sidecar = _build_path_search_result_payload(
+                method="gsm", log_path=None, fallback_xyz_text=None,
+                gsm_evidence={"selected_source_point_index": 2, "points": evidence_points},
+            )
+        self.assertEqual(fallback, sidecar)
+        self.assertEqual(self._canonical(fallback), self._canonical(sidecar))
+        PathSearchResultPayload(**sidecar)
 
 
 if __name__ == "__main__":
