@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tckdb-arc"
+version = "0.1.0"
+description = "ARC → TCKDB upload adapter (payload builder + sidecar writer + uploader)."
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+dependencies = [
+    "tckdb-client>=0.27,<0.28",   # transport + idempotency + replay (pinned tag tckdb-client-v0.27.1)
+    "PyYAML>=6",                  # vendored read_yaml_file + element data loader
+    "numpy>=1.23",               # vendored xyz_from_data / xyz_to_str
+]
+
+[project.optional-dependencies]
+# NOTE: ARC is NOT pip-installable as `arc` from PyPI — it is a conda/PYTHONPATH
+# install. This extra is a *documented marker* only; it does NOT resolve ARC via
+# pip. The three parser-coupled paths (Hessian / IRC / GSM) degrade gracefully
+# through tckdb_arc._arc_optional when ARC is not importable. Run the arc-gated
+# tests only where ARC is already on the path.
+arc = []
+test = ["pytest", "tckdb-schemas>=0.8,<0.9"]   # tckdb-schemas is a TEST-only dep (model_validate)
+
+[project.scripts]
+tckdb-arc-upload = "tckdb_arc.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tckdb_arc*"]
+
+[tool.setuptools.package-data]
+tckdb_arc = ["data/*.yml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

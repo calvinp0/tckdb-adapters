@@ -1,0 +1,7 @@
+# Workspace / dev-tooling aggregator only. Each adapter (e.g. tckdb_arc/) is an
+# independently-installable, independently-versioned package with its own
+# pyproject.toml — this top-level file is NOT a distributable package. Install a
+# specific adapter with `pip install -e ./tckdb_arc[test]`.
+
+[tool.tckdb_adapters]
+packages = ["tckdb_arc"]

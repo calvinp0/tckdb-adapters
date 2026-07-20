@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tckdb-arc:
+    name: tckdb-arc (base, no-ARC)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: tckdb_arc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install the shared layer (pinned tags)
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            "tckdb-client @ git+https://github.com/calvinp0/tckdbv2.git@tckdb-client-v0.27.1#subdirectory=clients/python" \
+            "tckdb-schemas @ git+https://github.com/calvinp0/tckdbv2.git@tckdb-schemas-v0.8.0#subdirectory=schemas/python/tckdb-schemas"
+
+      - name: Install tckdb-arc (base + test extra)
+        run: pip install -e ".[test]"
+
+      - name: Run the base (no-ARC) test suite
+        # ARC is NOT installed here, so the arc-coupled tests self-skip via
+        # pytest.importorskip("arc"). The base suite must be fully green.
+        run: pytest -q
+
+  # ── ARC-coupled leg (documented, NOT run in CI) ──────────────────────────
+  # ARC is a conda/PYTHONPATH install, not a PyPI package, so CI cannot
+  # `pip install arc`. To exercise the arc-gated tests (freq-Hessian / IRC /
+  # GSM reparse), run the suite in an environment that already has ARC on the
+  # PYTHONPATH (e.g. ARC's `arc_env` on a dev box / zeus):
+  #
+  #     conda run -n arc_env pip install -e "tckdb_arc[test]"
+  #     conda run -n arc_env pytest tckdb_arc/tests -q
+  #
+  # There the 12 `importorskip("arc")` tests execute instead of skipping.

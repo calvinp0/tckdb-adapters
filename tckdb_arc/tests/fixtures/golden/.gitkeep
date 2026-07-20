@@ -1,0 +1,3 @@
+# TODO(phase 1): freeze a real arcbench output.yml (+ tckdb_evidence sidecar)
+# here and drive tests/test_golden_corpus.py from it. Until then the golden
+# corpus is built from the synthetic doc helpers in test_adapter/test_ts_upload.
