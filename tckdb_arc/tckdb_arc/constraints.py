@@ -107,8 +107,9 @@ def serialize_constraints(
     """Serialize an iterable of constraints into TCKDB payload shape.
 
     Accepts either :class:`TCKDBCalculationConstraint` instances or the
-    parser-shaped dicts ``{'constraint_kind', 'atoms', 'target_value'}``
-    that the Gaussian/ORCA parsers emit. Mixed input is fine.
+    legacy parser dicts ``{'constraint_kind', 'atoms', 'target_value'}`` or
+    tool-neutral ARC records with ``coordinate_type``, ``atom_indices`` and an
+    explicit ``index_base``. Mixed input is fine.
 
     Output shape per element::
 
@@ -166,6 +167,15 @@ def _coerce(
         return None
     kind = raw.get('constraint_kind')
     atoms = raw.get('atoms')
+    if kind is None and raw.get('coordinate_type') is not None:
+        kind = {
+            'cartesian': 'cartesian_atom',
+            'distance': 'bond',
+            'angle': 'angle',
+            'dihedral': 'dihedral',
+            'improper': 'improper',
+        }.get(str(raw.get('coordinate_type')))
+        atoms = raw.get('atom_indices')
     if not isinstance(kind, str):
         logger.warning("TCKDB constraint: missing or non-string "
                        "'constraint_kind' in %r; dropping", raw)
@@ -180,6 +190,16 @@ def _coerce(
         logger.warning("TCKDB constraint: non-integer atom index in %r; "
                        "dropping", raw)
         return None
+    if raw.get('coordinate_type') is not None:
+        try:
+            index_base = int(raw.get('index_base'))
+        except (TypeError, ValueError):
+            logger.warning("TCKDB constraint: invalid index_base in %r; dropping", raw)
+            return None
+        if index_base not in (0, 1):
+            logger.warning("TCKDB constraint: unsupported index_base=%r; dropping", index_base)
+            return None
+        atom_ints = [atom - index_base + 1 for atom in atom_ints]
     target_value = raw.get('target_value')
     if target_value is not None:
         try:

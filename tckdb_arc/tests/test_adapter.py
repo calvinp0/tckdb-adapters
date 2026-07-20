@@ -9042,5 +9042,72 @@ class TestPhase3EvidenceParity(unittest.TestCase):
             ComputedReactionUploadRequest.model_validate(sidecar_payload)
 
 
+class TestNeutralArcResultTranslation(unittest.TestCase):
+    """ARC records scientific facts; this package owns TCKDB projection."""
+
+    def test_native_constraint_indices_are_normalized_at_adapter_boundary(self):
+        from tckdb_arc.constraints import serialize_constraints
+
+        self.assertEqual(serialize_constraints([{
+            "coordinate_type": "distance",
+            "atom_indices": [0, 1],
+            "index_base": 0,
+            "target_value": 1.4,
+        }]), [{
+            "constraint_index": 1,
+            "constraint_kind": "bond",
+            "atom1_index": 1,
+            "atom2_index": 2,
+            "target_value": 1.4,
+        }])
+
+    def test_neutral_rotor_scan_maps_to_scan_payload(self):
+        from tckdb_arc.adapter import _scan_entries_from_record
+
+        entries = _scan_entries_from_record({"rotor_scans": [{
+            "key": "scan_rotor_0",
+            "result": {
+                "dimension": 1,
+                "relaxed": True,
+                "coordinate": {
+                    "coordinate_type": "dihedral",
+                    "atom_indices": [1, 2, 3, 4],
+                    "index_base": 1,
+                    "unit": "degree",
+                    "requested_step_size": 120.0,
+                },
+                "samples": [
+                    {"source_index": 0, "angle_degrees": 0.0,
+                     "relative_energy_kj_mol": 0.0,
+                     "geometry_xyz": "H 0 0 0\nH 0 0 1"},
+                    {"source_index": 1, "angle_degrees": 120.0,
+                     "relative_energy_kj_mol": 2.0},
+                ],
+            },
+        }]})
+        scan = entries[0]["scan_result"]
+        self.assertEqual(scan["coordinates"][0]["atom1_index"], 1)
+        self.assertEqual(scan["coordinates"][0]["step_size"], 120.0)
+        self.assertEqual(scan["points"][0]["point_index"], 1)
+        self.assertTrue(scan["points"][0]["geometry"]["xyz_text"].startswith("2\n"))
+
+    def test_neutral_corrections_map_to_tckdb_schemes(self):
+        from tckdb_arc.adapter import _correction_records_from_record
+
+        records = _correction_records_from_record({"energy_corrections": [{
+            "correction_type": "atom_energy",
+            "model": "arkane_atom_energy",
+            "level_of_theory": {"method": "wb97xd"},
+            "total": {"value": -0.02, "unit": "hartree"},
+            "components": [],
+            "parameter_table": {"unit": "hartree", "values": {"H": -0.5}},
+        }]})
+        self.assertEqual(records[0]["application_role"], "aec_total")
+        self.assertEqual(records[0]["scheme"]["kind"], "atom_energy")
+        self.assertEqual(records[0]["scheme"]["atom_params"], [
+            {"element": "H", "value": -0.5},
+        ])
+
+
 if __name__ == "__main__":
     unittest.main()
