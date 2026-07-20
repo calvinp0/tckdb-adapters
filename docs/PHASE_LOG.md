@@ -447,9 +447,10 @@ independently of the pre-Phase-3 `0.1.0` package.
 
 Final local verification on the clean-main branch:
 
-- consolidated ARC parser/output/evidence/scripts suite: **245 passed**;
-- standalone evidence/golden/real-producer parity selection: **36 passed**, 2
-  subtests passed (487 unrelated tests deselected);
+- consolidated ARC parser/output/evidence/scripts/xTB-GSM suite: **259 passed**
+  (the unavailable live external xTB execution test was excluded);
+- standalone adapter suite: **491 passed, 3 skipped, 34 subtests passed**;
+- standalone evidence/golden suites: **32 passed**;
 - `git diff --check origin/main..HEAD`: clean;
 - the existing live `test_execute_incore` xTB-GSM test could not run because
   the local environment has no `xtb`/GSM executable; its deterministic wrapper,
