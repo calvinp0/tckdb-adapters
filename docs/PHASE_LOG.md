@@ -415,6 +415,10 @@ Corrected source-branch results supersede the earlier counts above:
 
 - ARC source evidence/output: **203 passed, 0 skipped, 0 failed** (three new
   isolation/normalization tests; previously 200).
+- Corrected maintained integrations: `tckdb-imp` `5093deb9`; `arcbench` and
+  mirrored `crest_adapter` `5a179479`. Integrated arcbench evidence/output:
+  **220 passed, 0 skipped, 0 failed**. Ledger follow-up is local-only
+  `mindless` commit `8d19442`.
 - Standalone full, ARC importable: **658 passed, 3 skipped, 0 failed, 34
   subtests passed** (three record-isolation tests plus one real-producer parity
   test; previously 654).
