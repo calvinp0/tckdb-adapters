@@ -1,0 +1,85 @@
+schema_version: '1.1'
+project: phase3_golden
+arc_version: 1.1.0
+arc_git_commit: e5f3d22f
+opt_level: {method: wb97xd, basis: def2-svp, software: gaussian}
+freq_level: {method: wb97xd, basis: def2-svp, software: gaussian}
+sp_level: {method: wb97xd, basis: def2-tzvp, software: gaussian}
+tckdb_evidence:
+  path: tckdb_evidence.json
+  schema_name: arc-tckdb-evidence
+  schema_version: '1.0'
+  document_id: 0123456789abcdef0123456789abcdef
+species:
+  - label: H2
+    smiles: '[H][H]'
+    charge: 0
+    multiplicity: 1
+    is_ts: false
+    converged: true
+    xyz: |-
+      H 0.00000000 0.00000000 0.00000000
+      H 0.00000000 0.00000000 0.74000000
+    opt_input_xyz: |-
+      H 0.00000000 0.00000000 0.00000000
+      H 0.00000000 0.00000000 0.80000000
+    opt_n_steps: 4
+    opt_final_energy_hartree: -1.10
+    opt_converged: true
+    freq_n_imag: 0
+    zpe_hartree: 0.01
+    sp_energy_hartree: -1.17
+    freq_log: calcs/Species/H2/freq/output.log
+    ess_versions: {opt: Gaussian 16, freq: Gaussian 16, sp: Gaussian 16}
+  - label: H
+    smiles: '[H]'
+    charge: 0
+    multiplicity: 2
+    is_ts: false
+    converged: true
+    xyz: H 0.00000000 0.00000000 0.00000000
+    opt_n_steps: null
+    opt_final_energy_hartree: null
+    opt_converged: true
+    freq_n_imag: null
+    zpe_hartree: null
+    sp_energy_hartree: -0.50
+    ess_versions: {sp: Gaussian 16}
+transition_states:
+  - label: TS0
+    smiles: null
+    charge: 0
+    multiplicity: 2
+    is_ts: true
+    converged: true
+    xyz: |-
+      H 0.00000000 0.00000000 -0.80000000
+      H 0.00000000 0.00000000 0.00000000
+      H 0.00000000 0.00000000 0.80000000
+    opt_input_xyz: |-
+      H 0.00000000 0.00000000 -1.00000000
+      H 0.00000000 0.00000000 0.00000000
+      H 0.00000000 0.00000000 1.00000000
+    opt_n_steps: 8
+    opt_final_energy_hartree: -1.50
+    opt_converged: true
+    freq_n_imag: 1
+    imag_freq_cm1: -900.0
+    zpe_hartree: 0.02
+    sp_energy_hartree: -1.60
+    freq_log: calcs/TSs/TS0/freq/output.log
+    chosen_ts_method: xtb_gsm
+    gsm_log: calcs/TSs/TS0/xtb_gsm/stringfile.xyz0000
+    irc_logs: [calcs/TSs/TS0/irc_forward/output.log, calcs/TSs/TS0/irc_reverse/output.log]
+    irc_log_directions: [forward, reverse]
+    irc_converged: true
+    rxn_label: H2 + H <=> H + H2
+    ess_versions: {opt: Gaussian 16, freq: Gaussian 16, sp: Gaussian 16}
+reactions:
+  - label: H2 + H <=> H + H2
+    family: H_Abstraction
+    multiplicity: 2
+    reactant_labels: [H2, H]
+    product_labels: [H, H2]
+    ts_label: TS0
+    kinetics: null

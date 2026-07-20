@@ -251,3 +251,181 @@ It is recorded in the branch ledger as Base=`tckdb-imp`, PR=`n`.
 - Post-rollback verification: the checkout reports `d9fb8546`, the package is
   absent, and `ARC.TCKDBConfig` resolves to `arc.tckdb.config`. The pre-existing
   untracked `.codex` path was preserved. No ARC/PBS job was submitted.
+
+---
+
+## Phase 3 — versioned ARC evidence sidecar (2026-07-20)
+
+**Status:** DONE. New ARC output emits a matching parser-neutral evidence
+sidecar, and standalone `tckdb-arc` consumes it without importing ARC or
+retaining the original calculation artifacts. Work and verification were
+strictly local/offline: no Zeus/HPC access, deployment, scheduler submission,
+environment installation, benchmark run, live TCKDB upload, or network call
+was performed.
+
+### Branches and commits
+
+- Standalone source branch: `feature_phase3_tckdb_evidence_consumer`, based on
+  `origin/main` at `30154e1`; implementation commit `8adbeb8`.
+- ARC producer source branch: `feature_tckdb_evidence_sidecar`, based on
+  `origin/tckdb-imp` at `6efc4e12`; source commit `d5906ad5`, pushed.
+- ARC maintained integrations: `tckdb-imp` `b2ba7413`; `arcbench` `c67a1ff3`;
+  `crest_adapter` mirrors `c67a1ff3`. All three were pushed. The arcbench
+  conflict resolution retained its newer output cost/TS-guess tests and the
+  Phase 3 writer tests.
+- ARC branch-ledger entry: local-only `mindless` commit `99d0636` in
+  `~/code/arcbench/BRANCHES.md`; only the new Phase 3 row was staged from the
+  pre-existing dirty worktree.
+- Deployment is recorded as `n`. `AGENTS.md` was not changed.
+
+### Producer contract and files
+
+ARC adds `arc/tckdb_evidence.py` with
+`build_tckdb_evidence(...)`, `write_tckdb_evidence_atomic(...)`, per-kind
+Hessian/IRC/GSM builders, strict finite-JSON helpers, and parser-version
+constants. `arc/output.py::write_output_yml` now:
+
+1. builds output schema `1.1` in memory;
+2. creates one lowercase UUID hex `document_id`;
+3. builds each evidence kind independently, representing attempted failures as
+   authoritative `unavailable` envelopes;
+4. atomically writes `output/tckdb_evidence.json` first using deterministic
+   UTF-8 JSON (`indent=2`, sorted keys, trailing newline, `allow_nan=False`,
+   flush/fsync/replace);
+5. adds the matching descriptor and atomically replaces `output.yml` second;
+6. still writes output schema 1.1 without a descriptor if the evidence document
+   itself cannot be built or written.
+
+The final evidence identity is schema name `arc-tckdb-evidence`, version `1.0`.
+Hessian values retain hartree/bohr² lower triangles, IRC retains rich native
+coordinates/energies/reaction coordinates/gradients with geometry-only
+fallback and omitted-source reporting, and GSM retains frames, source indices,
+node labels, cumulative Kabsch distances, relative comment energies, and
+absolute node energy/gradient precedence. The producer imports none of
+`tckdb_arc`, `tckdb_client`, or `tckdb_schemas` and lives outside `arc/tckdb/`
+so it survives Phase 4.
+
+### Consumer contract and files
+
+Standalone adds `tckdb_arc.evidence` with `EvidenceIssue`, `EvidenceLookup`,
+`EvidenceStore`, `validate_output_schema`, and strict document/envelope/value
+validators. The store lazily reads `<project>/output/tckdb_evidence.json` once,
+bounds it to 256 MiB, rejects duplicate JSON keys, unsafe paths, generation or
+schema mismatches, unknown keys, invalid identities/enums/indices/XYZ/shapes,
+and non-finite scientific values, then caches either its index or failure.
+Output schemas `1.0` and `1.1` are supported; sweeps fail clearly on any other
+version.
+
+Adapter precedence is implemented independently for Hessian, IRC, and GSM:
+
+- valid `available`: use the sidecar only and do not touch `_arc_optional` or
+  source artifacts;
+- valid `unavailable`: omit the optional result authoritatively and do not
+  reparse;
+- absent, mismatched, malformed, unsupported, incomplete, or individually
+  invalid evidence: bounded warning and the existing legacy parser fallback.
+
+Hessian keys are translated into the existing payload shape. IRC evidence and
+fallback converge on the same trajectory/result composer, including global
+point indices and the synthesized TS marker. GSM evidence and fallback converge
+on the same path-search composer, preserving absolute-energy precedence,
+relative-comment fallback, and the flat-zero sentinel. `_arc_optional.py` and
+the in-tree ARC implementation remain intact for old/partial runs.
+
+### Golden fixture and parity
+
+`tckdb_arc/tests/fixtures/golden/phase3_output.yml` and
+`tckdb_evidence.json` form the shared cross-repository contract. They derive
+from the `tckdb-imp` contract at `6efc4e12` plus the Phase 3 producer schema and
+were reduced to a sanitized H/H2 exchange: run-relative paths only, no user,
+server, job, credential, timestamp, or irrelevant log content. The fixture
+retains species and TS Hessians, forward/reverse IRC evidence, and a three-frame
+GSM path with an energy-less endpoint and absolute interior-node energies.
+
+ARC producer tests assemble and compare against this exact JSON document.
+Standalone golden tests load both files from disk, remove all source-artifact
+requirements, poison the ARC parser boundary, build computed-species,
+computed-reaction, and standalone-TS payloads offline, validate the pinned
+schemas, enforce the forbidden-key walker, and freeze canonical JSON hashes.
+Additional parity tests prove deep and canonical equality between sidecar and
+legacy-fallback Hessian/IRC/GSM result dictionaries, including both species and
+TS Hessian identities.
+
+### Verification
+
+- ARC source branch, focused producer/writer:
+  `HOME=<temp> RMG_DB_PATH=/home/calvin/code/RMG-database conda run -n arc_env python -m pytest arc/tckdb_evidence_test.py arc/output_test.py -o addopts="" -p no:cacheprovider -q`
+  — **200 passed, 0 skipped, 0 failed**. ARC importable.
+- ARC integrated `arcbench`, same command after conflict resolution —
+  **217 passed, 0 skipped, 0 failed**. ARC importable.
+- Standalone focused:
+  `conda run -n arc_env pytest -q tckdb_arc/tests/test_evidence.py tckdb_arc/tests/test_adapter.py tckdb_arc/tests/test_golden_corpus.py -o addopts="" -p no:cacheprovider`
+  — **513 passed, 3 skipped, 0 failed, 32 subtests passed**. ARC importable.
+- Standalone full repository:
+  `conda run -n arc_env pytest -q -o addopts="" -p no:cacheprovider`
+  — **654 passed, 3 skipped, 0 failed, 34 subtests passed**. ARC importable.
+- Standalone base/no-ARC leg used a test-only `sitecustomize` import blocker and
+  `PYTHONPATH=/tmp/phase3-noarc` with the full suite — **642 passed, 15 skipped,
+  0 failed, 34 subtests passed**. ARC deliberately unimportable; all Phase 3
+  golden payloads passed and only legacy ARC-gated tests skipped.
+- `py_compile`, `git diff --check` for implementation files, and import-boundary
+  `rg` scans passed. The only `diff --check` findings in the complete commit
+  were two intentional Markdown hard-break spaces already present in the
+  user-supplied `PHASE_3_BRIEF.md`.
+
+### Deviations and deferred work
+
+There is no schema or behavioral deviation from `PHASE_3_BRIEF.md`. The only
+adjacent cleanup was importing the already-used `TSGuess` class in the
+`tckdb-imp` `arc/output_test.py`, fixing two pre-existing NameErrors so the
+complete adjacent output suite is green.
+
+Phase 4 must not begin until a separately approved integration smoke test has
+confirmed an actual new ARC-produced output/evidence pair through the
+standalone package. Phase 4 may then remove `arc/tckdb/` and the dual-path
+fallback; until that approval and smoke result, both rollback boundaries remain
+independent and intact.
+
+### Sol-high correction follow-up
+
+The initial implementation passed its suites but Sol-high found two contract
+gaps that helper-generated evidence had hidden. These are corrected by ARC
+source follow-up `e5f3d22f` and standalone follow-up `94ba441`:
+
+- producer XYZ now exactly matches legacy payload normalization: Hessian uses
+  the record label comment, IRC uses a blank comment, GSM uses
+  `gsm_point_<index>`, and none adds a trailing newline;
+- each IRC log is normalized and finite-checked independently; malformed or
+  NaN sources enter `omitted_source_paths`, all-failed becomes `unavailable`,
+  and a final per-kind guard prevents an unexpected builder exception from
+  discarding unrelated Hessian/IRC/GSM evidence;
+- malformed, duplicate, but addressable sidecar records now poison only their
+  `(record_kind, label)` identity. Root/schema/generation failures remain
+  document-global, and unrelated valid records remain available with bounded
+  warnings;
+- a new integration regression executes the real ARC `_build_hessian`,
+  `_build_irc`, and `_build_gsm` paths, writes strict JSON, reads it through
+  `EvidenceStore`, builds the final computed-reaction payload, and proves deep
+  and canonical equality with the legacy fallback payload;
+- the golden document and hashes were regenerated for corrected producer
+  metadata `e5f3d22f`; its README no longer attributes corrected bytes to the
+  pre-producer base commit.
+
+Corrected source-branch results supersede the earlier counts above:
+
+- ARC source evidence/output: **203 passed, 0 skipped, 0 failed** (three new
+  isolation/normalization tests; previously 200).
+- Corrected maintained integrations: `tckdb-imp` `5093deb9`; `arcbench` and
+  mirrored `crest_adapter` `5a179479`. Integrated arcbench evidence/output:
+  **220 passed, 0 skipped, 0 failed**. Ledger follow-up is local-only
+  `mindless` commit `8d19442`.
+- Standalone full, ARC importable: **658 passed, 3 skipped, 0 failed, 34
+  subtests passed** (three record-isolation tests plus one real-producer parity
+  test; previously 654).
+- Standalone full with ARC blocked: **645 passed, 16 skipped, 0 failed, 34
+  subtests passed**. The real-producer parity test is the one additional
+  ARC-gated skip; the three record-isolation tests still run in the base leg.
+
+These were correctness fixes to implement the brief as written, not a schema
+deviation. The schema names and versions remain output `1.1` and
+`arc-tckdb-evidence` `1.0`.

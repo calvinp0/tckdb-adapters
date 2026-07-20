@@ -36,6 +36,7 @@ from tckdb_arc.config import (
     UPLOAD_MODE_COMPUTED_SPECIES,
     UPLOAD_MODE_COMPUTED_TS,
 )
+from tckdb_arc.evidence import validate_output_schema
 
 
 logger = get_logger()
@@ -62,6 +63,7 @@ def run_upload_sweep(*, adapter, project_directory, tckdb_config):
         return
 
     output_doc = read_yaml_file(path=output_path)
+    validate_output_schema(output_doc)
 
     if tckdb_config.upload_mode == UPLOAD_MODE_COMPUTED_REACTION:
         # Reaction mode is its own iteration shape: one POST per

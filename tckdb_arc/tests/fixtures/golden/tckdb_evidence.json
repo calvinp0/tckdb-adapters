@@ -1,0 +1,73 @@
+{
+  "document_id": "0123456789abcdef0123456789abcdef",
+  "output_schema_version": "1.1",
+  "producer": {
+    "git_commit": "e5f3d22f",
+    "name": "ARC",
+    "version": "1.1.0"
+  },
+  "records": [
+    {
+      "freq_hessian": {
+        "status": "available",
+        "value": {
+          "atom_count": 2,
+          "geometry_xyz_text": "2\nH2\nH 0.00000000 0.00000000 0.00000000\nH 0.00000000 0.00000000 0.74000000",
+          "lower_triangle": [0.1, 0.0, 0.2, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.4, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.6],
+          "matrix_dimension": 6,
+          "packing": "lower_triangle_row_major_including_diagonal",
+          "parser_version": "arc-hessian-1",
+          "source": "parsed_log",
+          "source_log": "calcs/Species/H2/freq/output.log",
+          "units": "hartree_per_bohr_squared"
+        }
+      },
+      "label": "H2",
+      "record_kind": "species"
+    },
+    {
+      "freq_hessian": {
+        "status": "available",
+        "value": {
+          "atom_count": 3,
+          "geometry_xyz_text": "3\nTS0\nH 0.00000000 0.00000000 -0.80000000\nH 0.00000000 0.00000000 0.00000000\nH 0.00000000 0.00000000 0.80000000",
+          "lower_triangle": [0.1, 0.0, 0.2, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.4, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.9],
+          "matrix_dimension": 9,
+          "packing": "lower_triangle_row_major_including_diagonal",
+          "parser_version": "arc-hessian-1",
+          "source": "parsed_log",
+          "source_log": "calcs/TSs/TS0/freq/output.log",
+          "units": "hartree_per_bohr_squared"
+        }
+      },
+      "gsm": {
+        "status": "available",
+        "value": {
+          "method": "gsm",
+          "parser_version": "arc-gsm-stringfile-1",
+          "points": [
+            {"geometry_xyz_text": "3\ngsm_point_0\nH 0 0 -1.2\nH 0 0 0\nH 0 0 1.2", "node_label": null, "path_coordinate_angstrom": 0.0, "source_point_index": 0},
+            {"electronic_energy_hartree": -1.70, "geometry_xyz_text": "3\ngsm_point_1\nH 0 0 -1.0\nH 0 0 0\nH 0 0 1.0", "node_label": 1, "path_coordinate_angstrom": 0.2, "source_point_index": 1},
+            {"electronic_energy_hartree": -1.55, "geometry_xyz_text": "3\ngsm_point_2\nH 0 0 -0.8\nH 0 0 0\nH 0 0 0.8", "max_gradient_hartree_per_bohr": 0.03, "node_label": 2, "path_coordinate_angstrom": 0.4, "rms_gradient_hartree_per_bohr": 0.01, "source_point_index": 2}
+          ],
+          "selected_source_point_index": 2,
+          "source_stringfile": "calcs/TSs/TS0/xtb_gsm/stringfile.xyz0000"
+        }
+      },
+      "irc": {
+        "status": "available",
+        "value": {
+          "parser_version": "arc-irc-path-1",
+          "trajectories": [
+            {"declared_direction": "forward", "points": [{"direction": "forward", "electronic_energy_hartree": -1.62, "geometry_xyz_text": "3\n\nH 0 0 -0.7\nH 0 0 0\nH 0 0 0.9", "max_gradient_hartree_per_bohr": 0.002, "reaction_coordinate_sqrt_amu_bohr": 0.4, "rms_gradient_hartree_per_bohr": 0.001, "source_point_index": 1}], "source_log": "calcs/TSs/TS0/irc_forward/output.log"},
+            {"declared_direction": "reverse", "points": [{"direction": "reverse", "electronic_energy_hartree": -1.64, "geometry_xyz_text": "3\n\nH 0 0 -0.9\nH 0 0 0\nH 0 0 0.7", "source_point_index": 1}], "source_log": "calcs/TSs/TS0/irc_reverse/output.log"}
+          ]
+        }
+      },
+      "label": "TS0",
+      "record_kind": "transition_state"
+    }
+  ],
+  "schema_name": "arc-tckdb-evidence",
+  "schema_version": "1.0"
+}

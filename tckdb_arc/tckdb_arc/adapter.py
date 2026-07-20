@@ -60,6 +60,7 @@ from tckdb_arc.idempotency import (
     build_idempotency_key,
 )
 from tckdb_arc.constraints import serialize_constraints
+from tckdb_arc.evidence import EvidenceStore
 from tckdb_arc.payload_writer import (
     ArtifactSidecarMetadata,
     PayloadWriter,
@@ -569,6 +570,7 @@ class TCKDBAdapter:
         self._preflight_checked = False
         self._preflight_metadata: dict[str, Any] | None = None
         self._preflight_error: TCKDBReadinessError | None = None
+        self._evidence = EvidenceStore(self._project_directory)
         # Emit the "artifacts unsupported for standalone TS uploads"
         # warning at most once per adapter instance rather than once per
         # TS (or per calc) — a sweep of many TSs would otherwise spam it.
@@ -1267,6 +1269,7 @@ class TCKDBAdapter:
         # it can never break payload construction.
         if role == _CALC_KEY_FREQ:
             hessian = self._build_freq_hessian_payload(
+                output_doc=output_doc,
                 species_record=species_record,
                 geometry_xyz_text=conformer_xyz_text,
             )
@@ -1574,6 +1577,7 @@ class TCKDBAdapter:
     def _build_freq_hessian_payload(
         self,
         *,
+        output_doc: Mapping[str, Any],
         species_record: Mapping[str, Any],
         geometry_xyz_text: str | None,
     ) -> dict[str, Any] | None:
@@ -1597,7 +1601,19 @@ class TCKDBAdapter:
         The Hessian is strictly optional and must never break payload
         construction.
         """
-        if not geometry_xyz_text:
+        record_kind = "transition_state" if species_record.get("is_ts") else "species"
+        lookup = self._evidence.lookup(
+            output_doc, record_kind, str(species_record.get("label") or ""), "freq_hessian"
+        )
+        if lookup.state == "available":
+            value = lookup.value or {}
+            return {
+                "geometry": {"xyz_text": value["geometry_xyz_text"]},
+                "lower_triangle_hartree_bohr2": list(value["lower_triangle"]),
+                "source": value["source"],
+                "parser_version": value["parser_version"],
+            }
+        if lookup.state == "unavailable" or not geometry_xyz_text:
             return None
         log_path = species_record.get(_LOG_FIELD_BY_CALC_KEY[_CALC_KEY_FREQ])
         if not log_path:
@@ -1639,6 +1655,7 @@ class TCKDBAdapter:
 
     def _parse_irc_trajectories(
         self,
+        output_doc: Mapping[str, Any],
         ts_record: Mapping[str, Any],
     ) -> list[dict[str, Any]] | None:
         """Parse each IRC log into a trajectory dict for payload assembly.
@@ -1680,6 +1697,31 @@ class TCKDBAdapter:
         every parse attempt failed. The caller uses ``None`` as the
         signal to omit ``irc_result`` (partial-data fallback per spec).
         """
+        lookup = self._evidence.lookup(
+            output_doc, "transition_state", str(ts_record.get("label") or ""), "irc"
+        )
+        if lookup.state == "available":
+            return [
+                {
+                    "direction": trajectory.get("declared_direction"),
+                    "rich_points": [
+                        {
+                            "point_number": point["source_point_index"],
+                            "direction": point.get("direction"),
+                            "geometry_xyz_text": point["geometry_xyz_text"],
+                            "electronic_energy_hartree": point.get("electronic_energy_hartree"),
+                            "reaction_coordinate": point.get("reaction_coordinate_sqrt_amu_bohr"),
+                            "max_gradient": point.get("max_gradient_hartree_per_bohr"),
+                            "rms_gradient": point.get("rms_gradient_hartree_per_bohr"),
+                        }
+                        for point in trajectory["points"]
+                    ],
+                    "geom_points": None,
+                }
+                for trajectory in (lookup.value or {})["trajectories"]
+            ]
+        if lookup.state == "unavailable":
+            return None
         log_paths = ts_record.get("irc_logs") or []
         if not log_paths:
             return None
@@ -2319,6 +2361,9 @@ class TCKDBAdapter:
             and ts_guess_log_field
             and ts_record.get(ts_guess_log_field)
         ):
+            gsm_lookup = self._evidence.lookup(
+                output_doc, "transition_state", str(ts_record.get("label") or ""), "gsm"
+            ) if ts_guess_method == "gsm" else None
             # Resolve the on-disk log path (gsm_log/neb_log are stored
             # run-relative on the record) so the trajectory parser can
             # read it. Falls back to ``opt_input_xyz`` for the single-
@@ -2340,6 +2385,8 @@ class TCKDBAdapter:
                 log_path=str(log_local) if log_local is not None else None,
                 fallback_xyz_text=ts_record.get("opt_input_xyz"),
                 node_outputs_dir=node_outputs_dir,
+                gsm_evidence=(gsm_lookup.value if gsm_lookup and gsm_lookup.state == "available" else None),
+                evidence_unavailable=bool(gsm_lookup and gsm_lookup.state == "unavailable"),
             )
             if path_search_payload is None:
                 logger.warning(
@@ -2499,7 +2546,7 @@ class TCKDBAdapter:
                 # ``attach_calculation_output_geometries`` uniqueness check
                 # would 422. We therefore attach only ``irc_result`` and
                 # let the server own the output-geometry links.
-                irc_parsed = self._parse_irc_trajectories(ts_record)
+                irc_parsed = self._parse_irc_trajectories(output_doc, ts_record)
                 if irc_parsed is not None:
                     zero_ref = _resolve_irc_zero_energy_reference(
                         output_doc=output_doc,
@@ -5682,6 +5729,7 @@ def _build_irc_result_payload(
             iter_records = (
                 {
                     "xyz": rp.get("xyz"),
+                    "geometry_xyz_text": rp.get("geometry_xyz_text"),
                     "direction": rp.get("direction") or traj_direction,
                     "electronic_energy_hartree": rp.get("electronic_energy_hartree"),
                     "reaction_coordinate": rp.get("reaction_coordinate"),
@@ -5694,6 +5742,7 @@ def _build_irc_result_payload(
             iter_records = (
                 {
                     "xyz": xyz,
+                    "geometry_xyz_text": None,
                     "direction": traj_direction,
                     "electronic_energy_hartree": None,
                     "reaction_coordinate": None,
@@ -5713,7 +5762,8 @@ def _build_irc_result_payload(
             if direction in (_IRC_DIRECTION_FORWARD, _IRC_DIRECTION_REVERSE):
                 point["direction"] = direction
             xyz_dict = record["xyz"]
-            if xyz_dict is not None:
+            normalized = record.get("geometry_xyz_text")
+            if normalized is None and xyz_dict is not None:
                 try:
                     xyz_str = xyz_to_str(xyz_dict=xyz_dict)
                 except Exception as exc:
@@ -5723,8 +5773,8 @@ def _build_irc_result_payload(
                     )
                     xyz_str = None
                 normalized = _normalize_xyz_text(xyz_str, None)
-                if normalized:
-                    point["geometry"] = {"xyz_text": normalized}
+            if normalized:
+                point["geometry"] = {"xyz_text": normalized}
             energy = record["electronic_energy_hartree"]
             if energy is not None:
                 point["electronic_energy_hartree"] = float(energy)
@@ -6055,6 +6105,8 @@ def _build_path_search_result_payload(
     log_path: str | Path | None,
     fallback_xyz_text: str | None,
     node_outputs_dir: str | Path | None = None,
+    gsm_evidence: Mapping[str, Any] | None = None,
+    evidence_unavailable: bool = False,
 ) -> dict[str, Any] | None:
     """Build a TCKDB ``PathSearchResultPayload``-shaped dict for the
     chosen TS-guess parent calc.
@@ -6104,14 +6156,38 @@ def _build_path_search_result_payload(
     # preservation) — points stay geometry-only, no inventing.
     node_metadata: dict[int, dict[str, float]] = (
         _read_gsm_node_outputs(node_outputs_dir)
-        if node_outputs_dir is not None and method == "gsm"
+        if gsm_evidence is None and not evidence_unavailable and node_outputs_dir is not None and method == "gsm"
         else {}
     )
 
     points: list[dict[str, Any]] = []
     selected_index: int | None = None
+    evidence_relative_kcal: dict[int, float] = {}
 
-    if method == "gsm" and log_path is not None:
+    if method == "gsm" and gsm_evidence is not None:
+        selected_index = int(gsm_evidence["selected_source_point_index"])
+        for source_point in gsm_evidence["points"]:
+            index = int(source_point["source_point_index"])
+            point: dict[str, Any] = {
+                "point_index": index,
+                "geometry": {"xyz_text": source_point["geometry_xyz_text"]},
+            }
+            if "path_coordinate_angstrom" in source_point:
+                point["path_coordinate"] = source_point["path_coordinate_angstrom"]
+            if index == selected_index:
+                point["is_ts_guess"] = True
+            for evidence_key, payload_key in (
+                ("electronic_energy_hartree", "electronic_energy_hartree"),
+                ("max_gradient_hartree_per_bohr", "max_gradient"),
+                ("rms_gradient_hartree_per_bohr", "rms_gradient"),
+            ):
+                if evidence_key in source_point:
+                    point[payload_key] = source_point[evidence_key]
+            if "stringfile_relative_energy_kcal_mol" in source_point:
+                evidence_relative_kcal[index] = source_point["stringfile_relative_energy_kcal_mol"]
+            points.append(point)
+
+    if method == "gsm" and gsm_evidence is None and not evidence_unavailable and log_path is not None:
         path_str = str(log_path)
         try:
             traj = parse_trajectory(path_str)
@@ -6196,6 +6272,8 @@ def _build_path_search_result_payload(
                         point["rms_gradient"] = meta["rms_gradient"]
                 points.append(point)
 
+    if not points and evidence_unavailable:
+        return None
     if not points:
         # Single-point fallback: emit the chosen guess's geometry as
         # one TS-guess point. Honest about scope (lossy: we know one
@@ -6254,12 +6332,18 @@ def _build_path_search_result_payload(
     # fabricated flat-zero profile. When a build *does* emit energies,
     # this populates ``relative_energy_kj_mol`` for every node and marks
     # the peak node ``is_climbing_image``.
-    if zero_e_h is None and not any(e is not None for e in energies) \
-            and method == "gsm" and log_path is not None:
-        try:
-            rel_kcal = parse_gsm_stringfile_energies(str(log_path))
-        except Exception as exc:  # OptionalArcUnavailable (no [arc]) or parse error
-            logger.debug("TCKDB path_search: GSM string-file energies unavailable (%s)", exc)
+    if zero_e_h is None and not any(e is not None for e in energies) and method == "gsm":
+        if gsm_evidence is not None:
+            rel_kcal = [evidence_relative_kcal.get(p["point_index"]) for p in points]
+            if not rel_kcal or any(value is None for value in rel_kcal):
+                rel_kcal = None
+        elif log_path is not None:
+            try:
+                rel_kcal = parse_gsm_stringfile_energies(str(log_path))
+            except Exception as exc:  # OptionalArcUnavailable (no [arc]) or parse error
+                logger.debug("TCKDB path_search: GSM string-file energies unavailable (%s)", exc)
+                rel_kcal = None
+        else:
             rel_kcal = None
         if rel_kcal is not None:
             point_indices = [p["point_index"] for p in points]
