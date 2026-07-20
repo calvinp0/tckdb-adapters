@@ -248,6 +248,7 @@ class EvidenceStore:
         self._project_directory = Path(project_directory) if project_directory is not None else None
         self._loaded_for: int | None = None
         self._records: dict[tuple[str, str], Mapping[str, Any]] = {}
+        self._record_issues: dict[tuple[str, str], EvidenceIssue] = {}
         self._document_issue: EvidenceIssue | None = None
         self._warned: set[str] = set()
 
@@ -266,6 +267,7 @@ class EvidenceStore:
             return self
         self._loaded_for = identity
         self._records = {}
+        self._record_issues = {}
         self._document_issue = None
         try:
             version = validate_output_schema(output_doc)
@@ -327,22 +329,33 @@ class EvidenceStore:
             records = document["records"]
             if not isinstance(records, list):
                 raise ValueError("records must be a list")
-            for record in records:
+            for index, record in enumerate(records):
                 if not isinstance(record, Mapping):
-                    raise ValueError("evidence record must be a mapping")
-                allowed = {"record_kind", "label", *_KINDS}
-                _exact_keys(record, allowed, {"record_kind", "label"}, "evidence record")
-                key = (record["record_kind"], record["label"])
-                if record["record_kind"] not in {"species", "transition_state"} or not isinstance(record["label"], str):
-                    raise ValueError("invalid evidence record identity")
-                if key in self._records:
-                    raise ValueError("duplicate evidence record identity")
-                if key not in output_keys:
-                    raise ValueError("evidence record is absent from output.yml")
-                self._records[key] = record
+                    self._warn_once(EvidenceIssue(f"record:{index}", "evidence record must be a mapping"))
+                    continue
+                kind, label = record.get("record_kind"), record.get("label")
+                if kind not in {"species", "transition_state"} or not isinstance(label, str):
+                    self._warn_once(EvidenceIssue(f"record:{index}", "invalid evidence record identity"))
+                    continue
+                key = (kind, label)
+                if key in self._records or key in self._record_issues:
+                    self._records.pop(key, None)
+                    self._record_issues[key] = EvidenceIssue(
+                        f"record:{kind}:{label}", "duplicate evidence record identity",
+                    )
+                    continue
+                try:
+                    allowed = {"record_kind", "label", *_KINDS}
+                    _exact_keys(record, allowed, {"record_kind", "label"}, "evidence record")
+                    if key not in output_keys:
+                        raise ValueError("evidence record is absent from output.yml")
+                    self._records[key] = record
+                except Exception as exc:
+                    self._record_issues[key] = EvidenceIssue(f"record:{kind}:{label}", str(exc))
             logger.info("Accepted ARC evidence schema %s with %d records", evidence_version, len(self._records))
         except Exception as exc:  # evidence is optional; fallback is the compatibility contract
             self._records = {}
+            self._record_issues = {}
             self._failure("document", str(exc))
         return self
 
@@ -352,7 +365,12 @@ class EvidenceStore:
             raise ValueError(f"unknown evidence kind {evidence_kind!r}")
         if self._document_issue is not None:
             return EvidenceLookup("fallback", issue=self._document_issue)
-        record = self._records.get((record_kind, label))
+        identity = (record_kind, label)
+        record_issue = self._record_issues.get(identity)
+        if record_issue is not None:
+            self._warn_once(record_issue)
+            return EvidenceLookup("fallback", issue=record_issue)
+        record = self._records.get(identity)
         if record is None or evidence_kind not in record:
             return EvidenceLookup.fallback(f"missing:{record_kind}:{label}:{evidence_kind}", "evidence entry is absent")
         envelope = record[evidence_kind]

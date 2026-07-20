@@ -222,9 +222,9 @@ class TestGoldenCorpus(unittest.TestCase):
         # Canonical snapshots make any wire-shape change an explicit review.
         self.assertEqual(
             {
-                "computed_species": "416d7d91be1fe1383b369e37b6c582cfe99ec4555053d2a941f4166a0a471739",
-                "computed_reaction": "89b167b98459263e83ef31f1a8a47750977267be94074a10ff30c43e9a9e6dbc",
-                "transition_state": "c1093e8efb7f825bb001022ec78457001905e9d68e758d4ffcc826e738972a3a",
+                "computed_species": "062e2397d885d7449535681e6870408bf35de961f98fb43d6bf29389d44bc17f",
+                "computed_reaction": "6423aa45b7d610b29f392ea5a0a40e059e95ab90ec395b37f6033f96f0b57da6",
+                "transition_state": "6ec8967ae44ed2c82eb6aa0f114086322a3e57121a0e4c9399d766719f00351c",
             },
             {
                 "computed_species": self._canonical_sha256(species),

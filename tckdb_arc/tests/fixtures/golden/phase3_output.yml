@@ -1,7 +1,7 @@
 schema_version: '1.1'
 project: phase3_golden
 arc_version: 1.1.0
-arc_git_commit: 6efc4e12
+arc_git_commit: e5f3d22f
 opt_level: {method: wb97xd, basis: def2-svp, software: gaussian}
 freq_level: {method: wb97xd, basis: def2-svp, software: gaussian}
 sp_level: {method: wb97xd, basis: def2-tzvp, software: gaussian}

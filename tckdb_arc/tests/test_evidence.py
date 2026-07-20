@@ -144,6 +144,32 @@ def test_duplicate_json_key_rejected(tmp_path):
     assert store.lookup(output, "species", "H2", "freq_hessian").state == "fallback"
 
 
+def test_malformed_addressable_record_isolated_from_unrelated_record(tmp_path, caplog):
+    document = evidence_doc()
+    document["records"][0]["unknown"] = True
+    store, output = write_pair(tmp_path, document)
+    assert store.lookup(output, "species", "H2", "freq_hessian").state == "fallback"
+    assert store.lookup(output, "species", "H2", "freq_hessian").state == "fallback"
+    assert store.lookup(output, "transition_state", "TS0", "irc").state == "available"
+    assert sum("evidence record keys invalid" in record.message for record in caplog.records) == 1
+
+
+def test_duplicate_record_poisons_only_that_identity(tmp_path):
+    document = evidence_doc()
+    document["records"].insert(1, dict(document["records"][0]))
+    store, output = write_pair(tmp_path, document)
+    assert store.lookup(output, "species", "H2", "freq_hessian").state == "fallback"
+    assert store.lookup(output, "transition_state", "TS0", "gsm").state == "available"
+
+
+def test_unaddressable_record_does_not_poison_valid_records(tmp_path):
+    document = evidence_doc()
+    document["records"].insert(0, {"record_kind": "wrong", "label": 1})
+    store, output = write_pair(tmp_path, document)
+    assert store.lookup(output, "species", "H2", "freq_hessian").state == "available"
+    assert store.lookup(output, "transition_state", "TS0", "irc").state == "available"
+
+
 def test_authoritative_unavailable_is_distinct_from_fallback(tmp_path):
     document = evidence_doc()
     document["records"][0]["freq_hessian"] = {

@@ -7,6 +7,7 @@ These tests do not require a live TCKDB server. The TCKDBClient is
 replaced by a stub via the adapter's ``client_factory`` parameter.
 """
 
+import copy
 import json
 import os
 import pathlib
@@ -8962,6 +8963,83 @@ class TestPhase3EvidenceParity(unittest.TestCase):
         self.assertEqual(fallback, sidecar)
         self.assertEqual(self._canonical(fallback), self._canonical(sidecar))
         PathSearchResultPayload(**sidecar)
+
+    def test_actual_arc_producer_to_evidence_store_matches_fallback_payload(self):
+        """Exercise ARC builders, JSON writer, EvidenceStore, and final composer together."""
+        import yaml
+        pytest.importorskip("arc")
+        from arc.tckdb_evidence import build_tckdb_evidence, write_tckdb_evidence_atomic
+
+        fixture = pathlib.Path(__file__).parent / "fixtures" / "golden" / "phase3_output.yml"
+        base = yaml.safe_load(fixture.read_text())
+        xyz = {"symbols": ("H", "H", "H"), "isotopes": (1, 1, 1),
+               "coords": ((0.0, 0.0, -0.8), (0.0, 0.0, 0.0), (0.0, 0.0, 0.8))}
+        frames = [dict(xyz) for _ in range(3)]
+
+        with tempfile.TemporaryDirectory() as root:
+            for record in (base["species"][0], base["transition_states"][0]):
+                for field in ("freq_log", "gsm_log"):
+                    if record.get(field):
+                        path = pathlib.Path(root, record[field]); path.parent.mkdir(parents=True, exist_ok=True); path.write_text("x")
+                        if field == "gsm_log":
+                            (path.parent / "gsm_node_outputs").mkdir()
+                for relative in record.get("irc_logs") or []:
+                    path = pathlib.Path(root, relative); path.parent.mkdir(parents=True, exist_ok=True); path.write_text("x")
+
+            def parser_for(path, _ess):
+                parser = mock.Mock()
+                parser.parse_cartesian_hessian_lower_triangle.return_value = (
+                    [0.01] * (45 if "TS0" in path else 21)
+                )
+                return parser
+
+            def irc_points(log_file_path, **_kwargs):
+                direction = "forward" if "forward" in log_file_path else "reverse"
+                return [{"point_number": 1, "direction": direction, "xyz": xyz,
+                         "electronic_energy_hartree": -1.62}]
+
+            producer_metadata = {1: {"electronic_energy_hartree": -1.7},
+                                 2: {"electronic_energy_hartree": -1.55}}
+            with mock.patch("arc.tckdb_evidence.determine_ess", return_value="gaussian"), \
+                 mock.patch("arc.tckdb_evidence.ess_factory", side_effect=parser_for), \
+                 mock.patch("arc.tckdb_evidence.parse_irc_path", side_effect=irc_points), \
+                 mock.patch("arc.tckdb_evidence.parse_trajectory", return_value=frames), \
+                 mock.patch("arc.tckdb_evidence.parse_gsm_stringfile_energies", return_value=[0.0, 0.0, 0.0]), \
+                 mock.patch("arc.tckdb_evidence.kabsch", return_value=0.2), \
+                 mock.patch("arc.tckdb_evidence._node_outputs", return_value=producer_metadata):
+                evidence = build_tckdb_evidence(
+                    output_doc=base, project_directory=root,
+                    document_id="0123456789abcdef0123456789abcdef",
+                )
+            write_tckdb_evidence_atomic(evidence_doc=evidence, output_directory=pathlib.Path(root, "output"))
+            sidecar_doc = copy.deepcopy(base)
+            sidecar_doc["tckdb_evidence"] = {
+                "path": "tckdb_evidence.json", "schema_name": "arc-tckdb-evidence",
+                "schema_version": "1.0", "document_id": evidence["document_id"],
+            }
+            cfg = TCKDBConfig(enabled=True, base_url="http://x", upload=False)
+            sidecar_payload = TCKDBAdapter(cfg, project_directory=root)._build_computed_reaction_payload(
+                output_doc=sidecar_doc, reaction_record=sidecar_doc["reactions"][0],
+            )
+
+            fallback_doc = copy.deepcopy(base)
+            fallback_doc["schema_version"] = "1.0"
+            fallback_doc.pop("tckdb_evidence", None)
+            consumer_metadata = {1: {"electronic_energy_hartree": -1.7},
+                                 2: {"electronic_energy_hartree": -1.55}}
+            with mock.patch("tckdb_arc._arc_optional.determine_ess", return_value="gaussian"), \
+                 mock.patch("tckdb_arc._arc_optional.ess_factory", side_effect=parser_for), \
+                 mock.patch("tckdb_arc._arc_optional.parse_irc_path", side_effect=irc_points), \
+                 mock.patch("tckdb_arc._arc_optional.parse_trajectory", return_value=frames), \
+                 mock.patch("tckdb_arc._arc_optional.parse_gsm_stringfile_energies", return_value=[0.0, 0.0, 0.0]), \
+                 mock.patch("tckdb_arc._arc_optional.kabsch", return_value=0.2), \
+                 mock.patch("tckdb_arc.adapter._read_gsm_node_outputs", return_value=consumer_metadata):
+                fallback_payload = TCKDBAdapter(cfg, project_directory=root)._build_computed_reaction_payload(
+                    output_doc=fallback_doc, reaction_record=fallback_doc["reactions"][0],
+                )
+            self.assertEqual(sidecar_payload, fallback_payload)
+            self.assertEqual(self._canonical(sidecar_payload), self._canonical(fallback_payload))
+            ComputedReactionUploadRequest.model_validate(sidecar_payload)
 
 
 if __name__ == "__main__":
