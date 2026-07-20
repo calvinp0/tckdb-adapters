@@ -385,3 +385,43 @@ confirmed an actual new ARC-produced output/evidence pair through the
 standalone package. Phase 4 may then remove `arc/tckdb/` and the dual-path
 fallback; until that approval and smoke result, both rollback boundaries remain
 independent and intact.
+
+### Sol-high correction follow-up
+
+The initial implementation passed its suites but Sol-high found two contract
+gaps that helper-generated evidence had hidden. These are corrected by ARC
+source follow-up `e5f3d22f` and standalone follow-up `94ba441`:
+
+- producer XYZ now exactly matches legacy payload normalization: Hessian uses
+  the record label comment, IRC uses a blank comment, GSM uses
+  `gsm_point_<index>`, and none adds a trailing newline;
+- each IRC log is normalized and finite-checked independently; malformed or
+  NaN sources enter `omitted_source_paths`, all-failed becomes `unavailable`,
+  and a final per-kind guard prevents an unexpected builder exception from
+  discarding unrelated Hessian/IRC/GSM evidence;
+- malformed, duplicate, but addressable sidecar records now poison only their
+  `(record_kind, label)` identity. Root/schema/generation failures remain
+  document-global, and unrelated valid records remain available with bounded
+  warnings;
+- a new integration regression executes the real ARC `_build_hessian`,
+  `_build_irc`, and `_build_gsm` paths, writes strict JSON, reads it through
+  `EvidenceStore`, builds the final computed-reaction payload, and proves deep
+  and canonical equality with the legacy fallback payload;
+- the golden document and hashes were regenerated for corrected producer
+  metadata `e5f3d22f`; its README no longer attributes corrected bytes to the
+  pre-producer base commit.
+
+Corrected source-branch results supersede the earlier counts above:
+
+- ARC source evidence/output: **203 passed, 0 skipped, 0 failed** (three new
+  isolation/normalization tests; previously 200).
+- Standalone full, ARC importable: **658 passed, 3 skipped, 0 failed, 34
+  subtests passed** (three record-isolation tests plus one real-producer parity
+  test; previously 654).
+- Standalone full with ARC blocked: **645 passed, 16 skipped, 0 failed, 34
+  subtests passed**. The real-producer parity test is the one additional
+  ARC-gated skip; the three record-isolation tests still run in the base leg.
+
+These were correctness fixes to implement the brief as written, not a schema
+deviation. The schema names and versions remain output `1.1` and
+`arc-tckdb-evidence` `1.0`.
