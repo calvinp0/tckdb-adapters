@@ -441,6 +441,10 @@ diagnostics, calculation/scan provenance, and thermo points/applied
 corrections. No `arc/tckdb` implementation or TCKDB payload/schema mapping was
 introduced into ARC.
 
+The standalone package version is advanced to `0.2.0`, making the merged
+Phase 3 evidence consumer and its clean-ARC integration boundary identifiable
+independently of the pre-Phase-3 `0.1.0` package.
+
 Final local verification on the clean-main branch:
 
 - consolidated ARC parser/output/evidence/scripts suite: **245 passed**;
