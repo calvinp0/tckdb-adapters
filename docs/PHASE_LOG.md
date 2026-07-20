@@ -188,8 +188,8 @@ branch) and MUST be logged in `~/code/arcbench/BRANCHES.md`. Do NOT delete
 ## Phase 2 — ARC-side dual-path shim (2026-07-20)
 
 **Status:** DONE. ARC prefers the installed standalone `tckdb-arc` package and
-retains the in-tree `arc/tckdb/` fallback. The standalone package is deployed on
-Zeus; no benchmark job was submitted or rerun.
+retains the in-tree `arc/tckdb/` fallback. The code is integrated but is not
+deployed on Zeus; no benchmark job was submitted or rerun.
 
 ### ARC edits
 
@@ -241,12 +241,13 @@ It is recorded in the branch ledger as Base=`tckdb-imp`, PR=`n`.
   the distinct temporary project paths. This reused a completed reaction; no
   ARC/PBS job or network upload was started.
 
-### Zeus deployment
+### Zeus deployment rollback
 
-- `~/Code/ARC` fast-forwarded on `crest_adapter` to `74f962a0` and remains clean
-  apart from the pre-existing untracked `.codex` path.
-- Installed `tckdb-arc` 0.1.0 from standalone repo commit `dff080b` into Zeus
-  `arc_env`. The brief's HTTPS pip URL could not authenticate to the private
-  repository, so installation used the equivalent GitHub SSH URL and the same
-  `main#subdirectory=tckdb_arc` target.
-- Zeus verification prints `tckdb_arc.config` for `ARC.TCKDBConfig`.
+- An initial deployment fast-forwarded `~/Code/ARC` to `74f962a0` and installed
+  `tckdb-arc` 0.1.0 from standalone commit `dff080b` into `arc_env`.
+- This was outside the user's intended Phase 2 scope and was rolled back on
+  request. `~/Code/ARC` was restored to its exact pre-deployment commit
+  `d9fb8546`, and `tckdb-arc` was uninstalled from `arc_env`.
+- Post-rollback verification: the checkout reports `d9fb8546`, the package is
+  absent, and `ARC.TCKDBConfig` resolves to `arc.tckdb.config`. The pre-existing
+  untracked `.codex` path was preserved. No ARC/PBS job was submitted.
