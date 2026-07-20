@@ -429,3 +429,33 @@ Corrected source-branch results supersede the earlier counts above:
 These were correctness fixes to implement the brief as written, not a schema
 deviation. The schema names and versions remain output `1.1` and
 `arc-tckdb-evidence` `1.0`.
+
+## Clean ARC-main re-home implementation (2026-07-20)
+
+The audited ARC-owned producer work was rebuilt from `origin/main` on
+`feature_arc_result_export_contract`; `tckdb-imp` was not merged. The branch is
+an ordered ten-commit series covering Cartesian Hessians, GSM energy parsing,
+rich Gaussian IRC paths, xTB-GSM artifact preservation, TS path provenance,
+the corrected evidence producer, the one-way optional standalone hook, spin
+diagnostics, calculation/scan provenance, and thermo points/applied
+corrections. No `arc/tckdb` implementation or TCKDB payload/schema mapping was
+introduced into ARC.
+
+The standalone package version is advanced to `0.2.0`, making the merged
+Phase 3 evidence consumer and its clean-ARC integration boundary identifiable
+independently of the pre-Phase-3 `0.1.0` package.
+
+Final local verification on the clean-main branch:
+
+- consolidated ARC parser/output/evidence/scripts/xTB-GSM suite: **259 passed**
+  (the unavailable live external xTB execution test was excluded);
+- standalone adapter suite: **491 passed, 3 skipped, 34 subtests passed**;
+- standalone evidence/golden suites: **32 passed**;
+- `git diff --check origin/main..HEAD`: clean;
+- the existing live `test_execute_incore` xTB-GSM test could not run because
+  the local environment has no `xtb`/GSM executable; its deterministic wrapper,
+  permission, and artifact-preservation tests passed.
+
+This is local implementation and review work only. It does not satisfy the
+separate Phase 4 gate requiring a fresh local scientific calculation, and no
+Zeus/PBS/HPC deployment or submission was performed.

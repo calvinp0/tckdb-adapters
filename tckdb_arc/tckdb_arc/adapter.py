@@ -94,6 +94,165 @@ def _serialize_calc_constraints(source) -> list[dict]:
         return []
 
 
+def _scan_entries_from_record(record: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Return legacy TCKDB-shaped scan entries, translating neutral ARC scans.
+
+    ARC output 1.1 records parser-native ``rotor_scans``. Older consolidated
+    outputs carried ``additional_calculations`` already shaped like the TCKDB
+    calculation model; retain that path for replay compatibility.
+    """
+    legacy = record.get("additional_calculations")
+    if isinstance(legacy, list):
+        return [entry for entry in legacy if isinstance(entry, Mapping)]
+    scans = record.get("rotor_scans")
+    if not isinstance(scans, list):
+        return []
+    translated: list[Mapping[str, Any]] = []
+    for scan in scans:
+        if not isinstance(scan, Mapping):
+            continue
+        key = scan.get("key")
+        result = scan.get("result")
+        if not isinstance(key, str) or not key or not isinstance(result, Mapping):
+            continue
+        scan_result = _neutral_scan_result_to_tckdb(result)
+        if scan_result is None:
+            continue
+        translated.append({
+            "key": key,
+            "type": _CALC_KEY_SCAN,
+            "scan_result": scan_result,
+            "constraints": scan.get("constraints") or [],
+        })
+    return translated
+
+
+def _neutral_scan_result_to_tckdb(result: Mapping[str, Any]) -> dict[str, Any] | None:
+    coordinate = result.get("coordinate")
+    samples = result.get("samples")
+    if not isinstance(coordinate, Mapping) or not isinstance(samples, list) or not samples:
+        return None
+    atoms = coordinate.get("atom_indices")
+    if not isinstance(atoms, list) or not atoms:
+        return None
+    try:
+        index_base = int(coordinate.get("index_base", 1))
+        one_based = [int(atom) - index_base + 1 for atom in atoms]
+    except (TypeError, ValueError):
+        return None
+    kind = {
+        "cartesian": "cartesian_atom",
+        "distance": "bond",
+        "angle": "angle",
+        "dihedral": "dihedral",
+    }.get(str(coordinate.get("coordinate_type") or ""))
+    if kind is None or len(one_based) > 4:
+        return None
+    coord_out: dict[str, Any] = {
+        "coordinate_index": 1,
+        "coordinate_kind": kind,
+        "step_count": len(samples),
+        "value_unit": str(coordinate.get("unit") or "degree"),
+    }
+    for position, atom in enumerate(one_based, start=1):
+        coord_out[f"atom{position}_index"] = atom
+    optional_map = {
+        "symmetry_number": "symmetry_number",
+        "requested_step_size": "step_size",
+        "requested_start": "start_value",
+        "requested_end": "end_value",
+    }
+    for source_key, target_key in optional_map.items():
+        if coordinate.get(source_key) is not None:
+            coord_out[target_key] = coordinate[source_key]
+    if coordinate.get("requested_step_size") is not None:
+        coord_out["resolution_degrees"] = coordinate["requested_step_size"]
+
+    points: list[dict[str, Any]] = []
+    for point_index, sample in enumerate(samples, start=1):
+        if not isinstance(sample, Mapping) or sample.get("angle_degrees") is None:
+            return None
+        point: dict[str, Any] = {
+            "point_index": point_index,
+            "coordinate_values": [{
+                "coordinate_index": 1,
+                "coordinate_value": float(sample["angle_degrees"]),
+                "value_unit": str(coordinate.get("unit") or "degree"),
+            }],
+        }
+        for key in ("electronic_energy_hartree", "relative_energy_kj_mol"):
+            if sample.get(key) is not None:
+                point[key] = float(sample[key])
+        geometry = _normalize_xyz_text(sample.get("geometry_xyz"), f"scan_point_{point_index}")
+        if geometry is not None:
+            point["geometry"] = {"xyz_text": geometry}
+        points.append(point)
+    out: dict[str, Any] = {
+        "dimension": int(result.get("dimension", 1)),
+        "is_relaxed": bool(result.get("relaxed", True)),
+        "coordinates": [coord_out],
+        "points": points,
+    }
+    if result.get("zero_energy_reference_hartree") is not None:
+        out["zero_energy_reference_hartree"] = float(result["zero_energy_reference_hartree"])
+    return out
+
+
+def _correction_records_from_record(record: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Translate neutral ARC correction facts to the legacy adapter boundary."""
+    legacy = record.get("applied_energy_corrections")
+    if isinstance(legacy, list):
+        return [dict(entry) for entry in legacy if isinstance(entry, Mapping)]
+    neutral = record.get("energy_corrections")
+    if not isinstance(neutral, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for correction in neutral:
+        if not isinstance(correction, Mapping):
+            continue
+        correction_type = correction.get("correction_type")
+        model = correction.get("model")
+        total = correction.get("total")
+        if not isinstance(total, Mapping) or total.get("value") is None:
+            continue
+        if correction_type == "atom_energy":
+            application_role = "aec_total"
+            scheme_kind = "atom_energy"
+        elif correction_type == "bond_additivity" and model in ("petersson", "melius"):
+            application_role = "bac_total"
+            scheme_kind = "bac_petersson" if model == "petersson" else "bac_melius"
+        else:
+            continue
+        unit = str(total.get("unit") or ("hartree" if correction_type == "atom_energy" else "kcal_mol"))
+        scheme: dict[str, Any] = {
+            "kind": scheme_kind,
+            "name": scheme_kind,
+            "level_of_theory": correction.get("level_of_theory"),
+            "units": unit,
+        }
+        table = correction.get("parameter_table")
+        if isinstance(table, Mapping) and isinstance(table.get("values"), Mapping):
+            values = table["values"]
+            if correction_type == "atom_energy":
+                scheme["atom_params"] = [
+                    {"element": str(key), "value": float(value)}
+                    for key, value in sorted(values.items())
+                ]
+            elif model == "petersson":
+                scheme["bond_params"] = [
+                    {"bond_key": str(key), "value": float(value)}
+                    for key, value in sorted(values.items())
+                ]
+        out.append({
+            "application_role": application_role,
+            "value": float(total["value"]),
+            "value_unit": unit,
+            "scheme": scheme,
+            "components": correction.get("components") or [],
+        })
+    return out
+
+
 logger = get_logger()
 
 CONFORMER_UPLOAD_ENDPOINT = "/uploads/conformers"
@@ -841,7 +1000,7 @@ class TCKDBAdapter:
         }
 
         applied_corrections = _build_applied_energy_corrections(
-            species_record.get("applied_energy_corrections") or [],
+            _correction_records_from_record(species_record),
             source_calculation_key=(
                 _CALC_KEY_SP if _CALC_KEY_SP in included_keys else None
             ),
@@ -1012,7 +1171,7 @@ class TCKDBAdapter:
         # fallback because rotors_dict has no per-scan level field. The
         # ``depends_on`` edge points back to opt — the scan is a series
         # of constrained reoptimizations from that geometry.
-        for scan_entry in (species_record.get("additional_calculations") or []):
+        for scan_entry in _scan_entries_from_record(species_record):
             if not isinstance(scan_entry, Mapping):
                 continue
             if scan_entry.get("type") != _CALC_KEY_SCAN:
@@ -2187,7 +2346,7 @@ class TCKDBAdapter:
         #    bundles must point at the conformer geometry (same reason
         #    freq/sp set it above).
         scan_key_renames: dict[str, str] = {}
-        for scan_entry in (species_record.get("additional_calculations") or []):
+        for scan_entry in _scan_entries_from_record(species_record):
             if not isinstance(scan_entry, Mapping):
                 continue
             if scan_entry.get("type") != _CALC_KEY_SCAN:
@@ -2260,7 +2419,7 @@ class TCKDBAdapter:
         # ``_persist_species_applied_corrections`` and would 422 on a
         # cross-species reference.
         applied_corrections = _build_applied_energy_corrections(
-            species_record.get("applied_energy_corrections") or [],
+            _correction_records_from_record(species_record),
             source_calculation_key=calc_keys.get(_CALC_KEY_SP),
         )
         if applied_corrections:
@@ -2608,7 +2767,7 @@ class TCKDBAdapter:
         # keys (r0_sp / p1_sp) belong to other species and a cross-owner
         # reference would 422.
         applied_corrections = _build_applied_energy_corrections(
-            ts_record.get("applied_energy_corrections") or [],
+            _correction_records_from_record(ts_record),
             source_calculation_key=calc_keys.get(_CALC_KEY_SP),
         )
         if applied_corrections:
@@ -5097,7 +5256,7 @@ def _build_slim_torsions(
         # reference matches the namespaced calc key. Computed-species
         # bundles have a single species and pass ``None``: the original
         # un-prefixed key is already unique.
-        scan_key = entry.get("source_scan_calculation_key")
+        scan_key = entry.get("source_scan_key") or entry.get("source_scan_calculation_key")
         if isinstance(scan_key, str) and scan_key:
             if scan_key_renames is not None:
                 scan_key = scan_key_renames.get(scan_key, scan_key)
