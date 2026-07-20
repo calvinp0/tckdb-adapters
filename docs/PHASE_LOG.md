@@ -182,3 +182,71 @@ reaction through it to confirm the sweep output is byte-identical to the in-tree
 path. This is an ARC-side change (arcbench branch first, then a main-based
 branch) and MUST be logged in `~/code/arcbench/BRANCHES.md`. Do NOT delete
 `arc/tckdb/` until Phase 4.
+
+---
+
+## Phase 2 — ARC-side dual-path shim (2026-07-20)
+
+**Status:** DONE. ARC prefers the installed standalone `tckdb-arc` package and
+retains the in-tree `arc/tckdb/` fallback. The standalone package is deployed on
+Zeus; no benchmark job was submitted or rerun.
+
+### ARC edits
+
+Only `ARC.py` changed:
+
+1. The top-level `TCKDBConfig` and `run_upload_sweep` imports now try
+   `tckdb_arc` first and catch `ImportError` to import the same names from
+   `arc.tckdb` until Phase 4 removes the in-tree package.
+2. The end-of-run inline `TCKDBAdapter` import likewise tries
+   `tckdb_arc.adapter` first and falls back to `arc.tckdb.adapter`.
+
+No payload/upload behavior changed, and `arc/tckdb/` plus its tests remain in
+place.
+
+### Branches and commits
+
+- Source branch: `feature_tckdb_arc_dualpath_shim`
+- Source commit: `f2d460d6` (`Prefer standalone tckdb-arc package`), pushed to
+  `origin/feature_tckdb_arc_dualpath_shim`
+- Source base: `origin/tckdb-imp` at `d76208f4`
+- Arcbench cherry-pick: `74f962a0`, pushed to `origin/arcbench` and mirrored to
+  `origin/crest_adapter`
+- tckdb-imp cherry-pick: `6efc4e12`, pushed to `origin/tckdb-imp`
+- Arcbench ledger: local-only `mindless` commit `d2a5a35` in
+  `~/code/arcbench/BRANCHES.md` (not pushed)
+
+**Documented base deviation:** the brief required a branch from current `main`,
+but current `origin/main` (`59ac3f01`) has neither the TCKDB wiring in `ARC.py`
+nor `arc/tckdb/`. A main-based two-import shim would therefore have a missing
+fallback and break ARC when `tckdb-arc` is absent; making it functional would
+require importing the entire historical TCKDB implementation, outside Phase 2's
+additive-shim-only scope. Per ARC's documented last-resort exception for
+genuinely TCKDB-only code, the isolated source commit was based on `tckdb-imp`.
+It is recorded in the branch ledger as Base=`tckdb-imp`, PR=`n`.
+
+### Verification
+
+- Fallback path with `tckdb-arc` absent from local `arc_env`:
+  `622 passed, 3 skipped, 32 subtests passed` for `arc/tckdb/`.
+- Preferred path after installing the local Phase 1 package into `arc_env`:
+  importing `TCKDBConfig` through `ARC.py` prints `tckdb_arc.config`.
+- Adjacent ARC dispatcher regression: `ARC_test.py` — `15 passed`.
+- Offline end-to-end equivalence: copied the completed Zeus
+  `reaction_05_h_abstraction/output/output.yml` to `/tmp`, ran both the in-tree
+  and standalone computed-reaction sweeps with `upload=False`, and compared all
+  five emitted payload JSON files using `cmp`. The partial reaction payload and
+  four salvaged computed-species payloads were byte-identical. Metadata
+  sidecars were not compared byte-for-byte because they intentionally contain
+  the distinct temporary project paths. This reused a completed reaction; no
+  ARC/PBS job or network upload was started.
+
+### Zeus deployment
+
+- `~/Code/ARC` fast-forwarded on `crest_adapter` to `74f962a0` and remains clean
+  apart from the pre-existing untracked `.codex` path.
+- Installed `tckdb-arc` 0.1.0 from standalone repo commit `dff080b` into Zeus
+  `arc_env`. The brief's HTTPS pip URL could not authenticate to the private
+  repository, so installation used the equivalent GitHub SSH URL and the same
+  `main#subdirectory=tckdb_arc` target.
+- Zeus verification prints `tckdb_arc.config` for `ARC.TCKDBConfig`.
