@@ -157,7 +157,10 @@ def main(argv=None, *, adapter_factory=None):
 
     if adapter_factory is None:
         from tckdb_arc.adapter import TCKDBAdapter
-        adapter = TCKDBAdapter(cfg, project_directory=project_directory)
+        # The parsed input.yml lets the adapter detect ``adaptive_levels``
+        # even when it does not live in the project directory.
+        adapter = TCKDBAdapter(
+            cfg, project_directory=project_directory, input_dict=input_dict)
     else:
         adapter = adapter_factory(cfg, project_directory)
 

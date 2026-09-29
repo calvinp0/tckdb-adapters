@@ -363,7 +363,7 @@ def _submit_reaction(live, tmp_path, name):
 
 @pytest.mark.parametrize("name", ["golden_kinetics", "synthetic_reaction"])
 def test_reaction_kinetics_participants_and_ts(live_tckdb, tmp_path, name):
-    doc, _, response = _submit_reaction(live_tckdb, tmp_path, name)
+    doc, outcome, response = _submit_reaction(live_tckdb, tmp_path, name)
     reaction = doc["reactions"][0]
     keys = response["calculation_keys"]
 
@@ -409,9 +409,11 @@ def test_reaction_kinetics_participants_and_ts(live_tckdb, tmp_path, name):
         assert stored["lower_triangle_hartree_bohr2"] == ts_hessian["lower_triangle"]
         irc = live_tckdb.get(f"/calculations/{keys['ts_irc']}/irc-result")
         assert irc["has_forward"] and irc["has_reverse"] and irc["point_count"] == len(irc["points"])
-        path = live_tckdb.get(f"/calculations/{keys['ts_guess']}/path-search-result")
-        assert path["method"] == "gsm" and path["n_points"] == len(path["points"])
-        assert any(p["electronic_energy_hartree"] is None for p in path["points"])
+        # TS0's guess is an xtb-gsm path search and ARC exports no GSM level, so
+        # the adapter files no path-search calculation (never one at opt_level)
+        # and says so.
+        assert "ts_guess" not in keys
+        assert "ts_guess_level_not_stated" in _codes(outcome.warnings)
 
 
 def test_standalone_ts_upload_carries_its_calculations(live_tckdb, tmp_path):
@@ -422,7 +424,7 @@ def test_standalone_ts_upload_carries_its_calculations(live_tckdb, tmp_path):
     entry = live_tckdb.get(f"/transition-states/entries/{response['id']}")
     assert (entry["charge"], entry["multiplicity"]) == (0, 2)
     calcs = live_tckdb.get("/calculations", transition_state_entry_id=response["id"], limit=50)["items"]
-    assert Counter(c["type"] for c in calcs) == Counter(["opt", "freq", "sp", "irc", "path_search"])
+    assert Counter(c["type"] for c in calcs) == Counter(["opt", "freq", "sp", "irc"])
 
 
 def test_irc_jobs_completing_is_not_deposited_as_validation(live_tckdb, tmp_path):
@@ -435,10 +437,6 @@ def test_irc_jobs_completing_is_not_deposited_as_validation(live_tckdb, tmp_path
     assert _ts_validation(live_tckdb, response["transition_state_entry_id"]) == ("absent", [])
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "adapter gap: ARC's IRC verdict (ts_checks.IRC) is never read, so a TS "
-    "whose IRC ARC judged to connect reactants and products is deposited "
-    "without passed IRC validation evidence"))
 def test_passed_irc_verdict_is_deposited_as_validation_evidence(live_tckdb, tmp_path):
     _, outcome, response = _submit_reaction(live_tckdb, tmp_path, "golden_irc_passed")
     irc, evidence = _ts_validation(live_tckdb, response["transition_state_entry_id"])
@@ -446,9 +444,6 @@ def test_passed_irc_verdict_is_deposited_as_validation_evidence(live_tckdb, tmp_
     assert "transition_state_missing_irc_evidence" not in _codes(outcome.warnings)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "adapter gap: ARC's failed IRC verdict (ts_checks.IRC = false) is never "
-    "deposited as failed IRC validation evidence"))
 def test_failed_irc_verdict_is_deposited_as_failed_evidence(live_tckdb, tmp_path):
     _, _, response = _submit_reaction(live_tckdb, tmp_path, "golden_irc_failed")
     irc, evidence = _ts_validation(live_tckdb, response["transition_state_entry_id"])

@@ -44,6 +44,14 @@ from tckdb_schemas.fragments.refs import (
 from tckdb_schemas.utils import normalize_tunneling_model
 
 from tckdb_arc._logging import get_logger
+from tckdb_arc.adaptive import (
+    RUN_LEVEL,
+    UNDETERMINABLE,
+    AdaptiveLevels,
+    RestartInfo,
+    detect_adaptive_levels,
+    read_restart_info,
+)
 from tckdb_arc.config import (
     IMPLEMENTED_ARTIFACT_KINDS,
     TCKDBConfig,
@@ -839,8 +847,16 @@ class TCKDBAdapter:
         *,
         project_directory: str | Path | None = None,
         client_factory=None,
+        input_dict: Mapping[str, Any] | None = None,
     ):
         self._config = config
+        # ARC's parsed ``input.yml`` when the caller has it (the CLI), used with
+        # the project's ``restart.yml`` / ``input.yml`` to detect
+        # ``adaptive_levels`` runs (see ``tckdb_arc.adaptive``).
+        self._input_dict = input_dict
+        self._adaptive_levels_checked = False
+        self._adaptive_levels: AdaptiveLevels | None = None
+        self._restart_info: RestartInfo | None = None
         self._project_directory = (
             Path(project_directory) if project_directory is not None else None
         )
@@ -864,6 +880,52 @@ class TCKDBAdapter:
     # Public entry points
     # ------------------------------------------------------------------
 
+    def _with_adaptive_levels(
+        self,
+        output_doc: Mapping[str, Any],
+        warnings: list[dict[str, Any]] | None = None,
+    ) -> Mapping[str, Any]:
+        """Attach what the project's ``restart.yml`` / ``input.yml`` say about levels.
+
+        Returns ``output_doc`` unchanged when neither file says anything;
+        otherwise a shallow copy carrying ``_RESTART_KEY`` (``restart.yml``'s
+        adaptive ranges, IRC level and conformer level, see
+        ``tckdb_arc.adaptive``) and, for an ``adaptive_levels`` run,
+        ``_ADAPTIVE_LEVELS_KEY``. ``_resolve_level`` then attributes each
+        adaptively-chosen level exactly where ``restart.yml`` allows and
+        otherwise states nothing (``_report_adaptive_omissions`` lists what
+        was left out after the build).
+        """
+        if not self._adaptive_levels_checked:
+            self._adaptive_levels = detect_adaptive_levels(
+                self._project_directory, self._input_dict)
+            self._restart_info = read_restart_info(self._project_directory)
+            self._adaptive_levels_checked = True
+        detection, restart = self._adaptive_levels, self._restart_info
+        if detection is None and restart is None:
+            return output_doc
+        marked = dict(output_doc)
+        if restart is not None:
+            marked[_RESTART_KEY] = restart
+        if detection is not None:
+            marked[_ADAPTIVE_LEVELS_KEY] = {
+                "named": detection.job_types,
+                "sources": detection.sources,
+                # kind -> labels whose level could not be attributed
+                "omitted": {},
+            }
+        return marked
+
+    @staticmethod
+    def _report_adaptive_omissions(
+        output_doc: Mapping[str, Any],
+        warnings: list[dict[str, Any]] | None,
+    ) -> None:
+        """One warning per level kind that ``adaptive_levels`` left unattributed."""
+        marker = _adaptive_marker(output_doc)
+        if marker is not None:
+            _warn_adaptive_omissions(warnings, marker)
+
     def submit_from_output(
         self,
         *,
@@ -884,10 +946,13 @@ class TCKDBAdapter:
         if not self._config.enabled:
             return None
 
+        build_warnings: list[dict[str, Any]] = []
+        output_doc = self._with_adaptive_levels(output_doc, build_warnings)
         payload = self._build_payload(
             output_doc=output_doc,
             species_record=species_record,
         )
+        self._report_adaptive_omissions(output_doc, build_warnings)
 
         species_label = species_record.get("label") or "unlabeled"
         conformer_label = extra_label or f"conf{conformer_index}"
@@ -908,6 +973,7 @@ class TCKDBAdapter:
             idempotency_key=idempotency_key,
             payload_kind=PAYLOAD_KIND,
             base_url=self._config.base_url,
+            warnings=build_warnings,
         )
         logger.info(
             "TCKDB payload written: %s (key=%s)",
@@ -1050,12 +1116,14 @@ class TCKDBAdapter:
         project_label = self._config.project_label or output_doc.get("project")
 
         build_warnings: list[dict[str, Any]] = []
+        output_doc = self._with_adaptive_levels(output_doc, build_warnings)
         payload = self._build_computed_species_payload(
             output_doc=output_doc,
             species_record=species_record,
             conformer_key=conformer_label,
             warnings=build_warnings,
         )
+        self._report_adaptive_omissions(output_doc, build_warnings)
 
         idempotency_inputs = IdempotencyInputs.from_payload(
             project_label=project_label,
@@ -1126,6 +1194,7 @@ class TCKDBAdapter:
             species_record=species_record,
             selected_xyz_text=selected_xyz,
             selected_key=conformer_key,
+            warnings=warnings,
         )
 
         bundle: dict[str, Any] = {
@@ -1149,6 +1218,10 @@ class TCKDBAdapter:
         if applied_corrections:
             bundle["applied_energy_corrections"] = applied_corrections
 
+        energy_level = (
+            _thermo_energy_level(output_doc, species_record)
+            if isinstance(species_record.get("thermo"), Mapping) else None
+        )
         thermo_block = _build_thermo_block(
             species_record.get("thermo"),
             # Computed-species has a single, unscoped calc namespace, so
@@ -1160,9 +1233,10 @@ class TCKDBAdapter:
             # ``source_calculations``.
             target_model="ThermoInBundle",
             warnings=warnings,
-            energy_level=_thermo_energy_level(output_doc),
+            energy_level=energy_level,
             header_corrections_level=output_doc.get("arkane_level_of_theory"),
             element_symbols=_species_element_symbols(species_record),
+            energy_level_unattributable=_energy_level_unattributable(output_doc, energy_level),
         )
         # This route has no bundle-level analysis_software_release (the
         # reaction bundle does, and its thermo/statmech inherit it), so the
@@ -1373,6 +1447,7 @@ class TCKDBAdapter:
                     conformer_xyz_text=conformer_xyz_text,
                     calc_role=_CALC_KEY_SCAN,
                     source_constraints=scan_entry.get("constraints"),
+                    level_job_type=_scan_job_type(output_doc, species_record, scan_key),
                 ))
                 included.append(scan_key)
             except ValueError as exc:
@@ -1401,124 +1476,131 @@ class TCKDBAdapter:
         species_record: Mapping[str, Any],
         selected_xyz_text: str,
         selected_key: str,
+        warnings: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Build additional ``ConformerInBundle`` dicts for screened conformers.
+        """Additional ``ConformerInBundle`` dicts for ARC's screened conformers.
 
-        ARC's conformer screen often optimizes several geometries at the
-        same level before picking one as the conformer of record. The
-        ``output.yml`` species record carries those alongside the
-        selected one as ``conformers`` (xyz strings).
+        ARC's ``output.yml`` species record lists the conformers its screen
+        optimized alongside the selected one (``conformers``, xyz strings).
+        Each needs a primary ``opt`` calculation, and TCKDB requires a
+        ``level_of_theory`` on every calculation
+        (``ConformerInBundle.primary_calculation``), so there is no honest
+        partial form.
 
-        For each unique alt geometry we emit a minimal
-        ``ConformerInBundle``:
+        ARC screens conformers at its *conformer* level (``conformer_opt_level``;
+        default ``wb97xd/def2svp``, lower than the ``opt_level`` default), and
+        ``output.yml`` exports no conformer level. The project's ``restart.yml``
+        does record ``conformer_opt_level`` and ``job_types`` (``arc/main.py``
+        ``as_dict``), so the screened conformers are filed at that level, with
+        the program the level names, when all of these hold
+        (``_conformer_screen_level``):
 
-        * deterministic key ``alt0``, ``alt1``, … (indexed by position
-          in the dedup'd input list, never by iteration order over an
-          unsorted dict). Collisions with ``selected_key`` are resolved
-          by skipping any candidate whose key would clash.
-        * geometry pulled from ``conformers[i]`` after normalization.
-        * a bare opt ``primary_calculation`` carrying the same level /
-          software as the selected conformer's opt, with **no**
-          ``opt_result`` (no absolute hartree we can attest to here)
-          and **no** relative-energy annotation.
+        * ``restart.yml`` records the level and ``job_types['conf_opt']`` is true
+          (otherwise the geometries are force-field ones, never optimized by an
+          ESS);
+        * the adaptive levels do not name ``conf_opt`` for the species' range
+          (a species-specific screening level);
+        * the conformer's own ``conformer_energies`` entry is not null (ARC
+          fills it, and replaces the force-field geometry with the optimized
+          one, only when that conformer's ``conf_opt`` finished; a missing or
+          misaligned energies list leaves every conformer unverified).
 
-        Note on ``conformer_energies``: ARC's
-        ``species.conformer_energies`` are workflow-local relative E0
-        values (the reference is "lowest in this screening set", which
-        depends on which conformers ARC chose to screen and on its
-        ranking procedure). Those semantics do not survive a round-trip
-        through TCKDB, which is intentionally workflow-tool agnostic
-        and stores final scientific records — not ARC's internal
-        ranking context. The adapter therefore IGNORES
-        ``conformer_energies`` and never emits a relative-energy field
-        on a screened conformer (not in ``note``, not in
-        ``parameters_json``). The raw value still lives in ARC's
-        artifacts for debugging.
+        Gap: when no conformer converged ARC re-runs all of them at a
+        troubleshooting level (``arc/scheduler.py`` 5050-5078,
+        ``ess_trsh_methods`` ``'conf_opt: <level>'``), but nothing durable
+        records that (it lives in the job objects, kept in ``restart.yml`` only
+        while running), so ``conformer_opt_level`` may then be wrong.
 
-        Skips: empty ``conformers`` list, candidates whose xyz fails to
-        normalize, exact xyz duplicates of the selected geometry or of
-        an earlier alt, and candidates whose minimal opt calc cannot be
-        built (e.g. opt level not resolvable). Failures log + continue;
-        they never fail the whole bundle.
+        Otherwise, and whenever the level lacks a program, they are omitted and
+        reported once per species as ``conformer_level_not_stated`` (ARC should
+        export the conformer level, BRIDGE_ROADMAP B3). Each conformer is a bare
+        ``opt`` marked as a screened-conformer anchor (``tckdb_origin``), with
+        no ``opt_result`` and no relative energy: ``conformer_energies`` are
+        workflow-local values (the reference is the lowest of ARC's screening
+        set), which TCKDB, being workflow-tool agnostic, does not receive.
+
+        Skips: an empty ``conformers`` list, xyz strings that fail to normalize,
+        and exact duplicates of the selected geometry or of an earlier
+        candidate. Failures log and continue; they never fail the bundle.
         """
         raw_conformers = species_record.get("conformers")
         if not isinstance(raw_conformers, (list, tuple)) or not raw_conformers:
             return []
 
         label = species_record.get("label")
-        opt_level = _resolve_level(output_doc, "opt")
-
+        candidates: list[str] = []
+        unoptimized: list[str] = []
         seen_xyz: set[str] = {selected_xyz_text}
-        blocks: list[dict[str, Any]] = []
-        for src_idx, raw_xyz in enumerate(raw_conformers):
+        energies = species_record.get("conformer_energies")
+        lockstep = isinstance(energies, (list, tuple)) and len(energies) == len(raw_conformers)
+        for index, raw_xyz in enumerate(raw_conformers):
             normalized = _normalize_xyz_text(raw_xyz, label)
-            if normalized is None:
-                continue
-            if normalized in seen_xyz:
+            if normalized is None or normalized in seen_xyz:
                 continue
             seen_xyz.add(normalized)
+            candidates.append(normalized)
+            # ARC replaces conformers[i] with the optimized geometry only when
+            # its conf_opt finished (arc/scheduler.py:3133-3134, else it just
+            # warns), and fills conformer_energies[i] at the same time; a null
+            # energy means the geometry is still the force-field one.
+            if not lockstep or energies[index] is None:
+                unoptimized.append(normalized)
+        if not candidates:
+            return []
 
-            alt_idx = len(blocks)
-            alt_key = f"alt{alt_idx}"
-            if alt_key == selected_key:
-                # Caller picked a selected key in our alt-key namespace
-                # (e.g. conformer_index=0 → "alt0"). Skip rather than
-                # silently shadow the selected entry — never produces
-                # in practice with the conformer label scheme but keeps
-                # the namespace contract loud.
-                logger.warning(
-                    "TCKDB computed-species: alt conformer #%d for label=%s "
-                    "would collide with selected key %r; skipping.",
-                    src_idx, label, selected_key,
-                )
-                continue
-
-            try:
-                opt_calc = self._calculation_payload(
-                    output_doc, species_record,
-                    calc_type="opt",
-                    level=opt_level,
-                    ess_job_key="opt",
-                    result_field="opt_result",
-                    result_payload=None,
-                    # ``tckdb_origin`` lands under ``parameters_json``
-                    # and tags the row as a screened-conformer anchor,
-                    # NOT a parsed opt job. This is the loud signal —
-                    # without it, an alt opt row would look like an
-                    # ordinary opt that happened to lack result data.
-                    tckdb_origin=_screened_conformer_origin(),
-                )
-            except ValueError as exc:
-                logger.warning(
-                    "TCKDB computed-species: alt conformer #%d for label=%s "
-                    "skipped (opt calc not buildable): %s",
-                    src_idx, label, exc,
-                )
-                continue
-
-            opt_calc["key"] = f"{alt_key}_opt"
-            # Anchor opt's output_geometries to the alt xyz explicitly:
-            # backend's auto-fill would otherwise pin every conformer's
-            # opt output to the selected conformer's geometry of record.
-            opt_calc["output_geometries"] = [
-                {"geometry": {"xyz_text": normalized}, "role": "final"},
-            ]
-
-            block: dict[str, Any] = {
-                "key": alt_key,
-                "geometry": {"xyz_text": normalized},
-                "primary_calculation": opt_calc,
-                "additional_calculations": [],
-            }
-            if label:
-                block["label"] = str(label)[:64]
-            # ``conformer_energies`` are workflow-local relative E0
-            # values and are deliberately dropped at this seam — see the
-            # method docstring. Do not re-introduce a ``note`` /
-            # ``parameters_json`` carrier for them.
-
-            blocks.append(block)
-
+        level = _conformer_screen_level(output_doc, species_record)
+        blocks: list[dict[str, Any]] = []
+        if level is not None:
+            for normalized in candidates:
+                if normalized in unoptimized:
+                    continue
+                alt_key = f"alt{len(blocks)}"
+                if alt_key == selected_key:
+                    # Caller picked a selected key in our alt-key namespace;
+                    # skip rather than silently shadow the selected entry.
+                    logger.warning(
+                        "TCKDB computed-species: alt conformer for label=%s "
+                        "would collide with selected key %r; skipping.",
+                        label, selected_key,
+                    )
+                    continue
+                try:
+                    opt_calc = self._calculation_payload(
+                        output_doc, species_record,
+                        calc_type="opt",
+                        level=level,
+                        ess_job_key="conf_opt",
+                        result_field="opt_result",
+                        result_payload=None,
+                        # ``tckdb_origin`` tags the row as a screened-conformer
+                        # anchor, NOT a parsed opt job of the selected conformer.
+                        tckdb_origin=_screened_conformer_origin(),
+                    )
+                except ValueError as exc:
+                    logger.warning(
+                        "TCKDB computed-species: alt conformers of label=%s "
+                        "skipped (opt calc not buildable): %s", label, exc,
+                    )
+                    break
+                opt_calc["key"] = f"{alt_key}_opt"
+                # Anchor opt's output_geometries to the alt xyz explicitly: the
+                # backend's auto-fill would pin every conformer's opt output to
+                # the selected conformer's geometry of record.
+                opt_calc["output_geometries"] = [
+                    {"geometry": {"xyz_text": normalized}, "role": "final"},
+                ]
+                block: dict[str, Any] = {
+                    "key": alt_key,
+                    "geometry": {"xyz_text": normalized},
+                    "primary_calculation": opt_calc,
+                    "additional_calculations": [],
+                }
+                if label:
+                    block["label"] = str(label)[:64]
+                blocks.append(block)
+        omitted = len(candidates) - len(blocks)
+        if omitted:
+            _warn_conformer_level_not_stated(warnings, label=label, omitted=omitted)
         return blocks
 
     def _build_calc_in_bundle(
@@ -1538,6 +1620,8 @@ class TCKDBAdapter:
         calc_role: str | None = None,
         source_constraints: list | None = None,
         include_artifacts: bool = True,
+        level_job_type: str | None = None,
+        level_override: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build one CalculationInBundle dict.
 
@@ -1567,7 +1651,11 @@ class TCKDBAdapter:
           self-describing and removes ambiguity for any consumer that
           doesn't replicate the auto-fill rule.
         """
-        level = _resolve_level(output_doc, level_kind)
+        level = (
+            level_override if level_override is not None
+            else _resolve_level(output_doc, level_kind, species_record,
+                                job_type=level_job_type)
+        )
         role = calc_role if calc_role is not None else calc_key
         final_settings = _final_settings_for_calc(
             species_record=species_record,
@@ -2197,11 +2285,13 @@ class TCKDBAdapter:
         project_label = self._config.project_label or output_doc.get("project")
 
         build_warnings: list[dict[str, Any]] = []
+        output_doc = self._with_adaptive_levels(output_doc, build_warnings)
         payload = self._build_computed_reaction_payload(
             output_doc=output_doc,
             reaction_record=reaction_record,
             warnings=build_warnings,
         )
+        self._report_adaptive_omissions(output_doc, build_warnings)
 
         idempotency_inputs = IdempotencyInputs.from_payload(
             project_label=project_label,
@@ -2603,6 +2693,8 @@ class TCKDBAdapter:
                     tckdb_origin=None,
                     conformer_xyz_text=conformer_xyz_text,
                     source_constraints=scan_entry.get("constraints"),
+                    level_job_type=_scan_job_type(
+                        output_doc, species_record, original_scan_key),
                 )
                 scan_calc["geometry_key"] = geom_key
                 additional.append(scan_calc)
@@ -2626,6 +2718,10 @@ class TCKDBAdapter:
             ],
             "calculations": additional,
         }
+        energy_level = (
+            _thermo_energy_level(output_doc, species_record)
+            if isinstance(species_record.get("thermo"), Mapping) else None
+        )
         thermo_block = _build_thermo_block(
             species_record.get("thermo"),
             # The current reaction root accepts species-scoped thermo provenance.
@@ -2633,9 +2729,10 @@ class TCKDBAdapter:
             target_model="BundleThermoIn",
             warnings=warnings,
             warning_field=f"species[{actor_key}].thermo",
-            energy_level=_thermo_energy_level(output_doc),
+            energy_level=energy_level,
             header_corrections_level=output_doc.get("arkane_level_of_theory"),
             element_symbols=_species_element_symbols(species_record),
+            energy_level_unattributable=_energy_level_unattributable(output_doc, energy_level),
         )
         if thermo_block is not None:
             species_block["thermo"] = thermo_block
@@ -2766,37 +2863,50 @@ class TCKDBAdapter:
             _TS_GUESS_LOG_FIELD_BY_METHOD.get(ts_guess_method)
             if ts_guess_method else None
         )
+        # The path-search calculation's level. ARC exports ``neb_level`` (the
+        # ORCA NEB level, arc/output.py) and ``ess_software.neb`` /
+        # ``ess_versions.neb`` for NEB, and nothing for GSM (xtb-gsm has no
+        # level export). TCKDB requires a level on every calculation, so a
+        # guess whose level ARC does not state is not filed at all: never at
+        # ``opt_level``, which is not what the path search ran at.
+        ts_guess_level: Mapping[str, Any] | None = None
+        ts_guess_level_kind: str | None = None
         if (
             ts_guess_method
             and ts_guess_log_field
             and ts_record.get(ts_guess_log_field)
         ):
-            gsm_lookup = self._evidence.lookup(
-                output_doc, "transition_state", str(ts_record.get("label") or ""), "gsm"
-            ) if ts_guess_method == "gsm" else None
-            # Resolve the on-disk log path (gsm_log/neb_log are stored
-            # run-relative on the record) so the trajectory parser can
-            # read it. Falls back to ``opt_input_xyz`` for the single-
-            # point branch when the trajectory parser is unavailable
-            # (NEB today; any GSM run whose stringfile didn't parse).
+            neb_level = (
+                _resolve_level(output_doc, "neb") if ts_guess_method == "neb" else None)
+            # ``neb_level`` is ORCA's (orca_neb_settings) but ARC's Level
+            # deduces a software from the method alone (wb97xd/def2tzvp gives
+            # gaussian), so ``neb_level.software`` says nothing about what
+            # ran. The program is the one observed on the NEB log
+            # (``ess_software.neb``), or none: then nothing is filed.
+            observed = ts_record.get("ess_software")
+            if neb_level is not None and not (
+                    isinstance(observed, Mapping) and observed.get("neb")):
+                _warn_ts_guess_level_not_stated(
+                    warnings, ts_label=ts_label, method=ts_guess_method,
+                    reason="ARC recorded no ess_software.neb for the NEB log",
+                    software=True)
+            elif neb_level is None:
+                _warn_ts_guess_level_not_stated(
+                    warnings, ts_label=ts_label, method=ts_guess_method)
+            else:
+                ts_guess_level = neb_level
+                ts_guess_level_kind = "neb"
+        if ts_guess_level is not None and ts_guess_level_kind is not None:
+            # Resolve the on-disk log path (neb_log is stored run-relative on
+            # the record). NEB has no image parser, so the payload is the
+            # single TS-guess point from ``opt_input_xyz``.
             log_local = self._resolve_local_path(
                 ts_record.get(ts_guess_log_field),
             )
-            # The patched ``ograd`` writes preserved per-node files
-            # into ``<gsm_run_dir>/gsm_node_outputs/`` — the run
-            # directory is the parent of the stringfile log.
-            node_outputs_dir: Path | None = None
-            if log_local is not None:
-                candidate = log_local.parent / "gsm_node_outputs"
-                if candidate.is_dir():
-                    node_outputs_dir = candidate
             path_search_payload = _build_path_search_result_payload(
                 method=ts_guess_method,
                 log_path=str(log_local) if log_local is not None else None,
                 fallback_xyz_text=ts_record.get("opt_input_xyz"),
-                node_outputs_dir=node_outputs_dir,
-                gsm_evidence=(gsm_lookup.value if gsm_lookup and gsm_lookup.state == "available" else None),
-                evidence_unavailable=bool(gsm_lookup and gsm_lookup.state == "unavailable"),
             )
             if path_search_payload is None:
                 logger.warning(
@@ -2813,10 +2923,8 @@ class TCKDBAdapter:
                         calc_key=ts_guess_key,
                         calc_role=_CALC_KEY_TS_GUESS,
                         calc_type="path_search",
-                        # No ts_guess_level in output_doc today; fall back
-                        # to opt_level (consistent with how irc resolves).
-                        level_kind="opt",
-                        ess_job_key="opt",
+                        level_kind=ts_guess_level_kind,
+                        ess_job_key=ts_guess_level_kind,
                         result_field="path_search_result",
                         result_payload=path_search_payload,
                         depends_on=None,
@@ -2829,6 +2937,9 @@ class TCKDBAdapter:
                         "TCKDB computed-reaction: ts_guess (%s) calc skipped: %s",
                         ts_guess_method, exc,
                     )
+                    _warn_ts_guess_level_not_stated(
+                        warnings, ts_label=ts_label, method=ts_guess_method,
+                        reason=str(exc))
 
         ts_opt_depends_on: list[Mapping[str, Any]] | None = None
         if ts_guess_calc is not None:
@@ -2930,7 +3041,32 @@ class TCKDBAdapter:
         # (so kinetics.source_calculations(role=irc) and the dependency
         # edge can stand on their own) but omit irc_result rather than
         # fabricating incomplete structured data.
-        if ts_record.get("irc_logs"):
+        # The IRC level: the adaptive level ``restart.yml`` gives this TS when the
+        # adaptive levels name ``irc``, else the ``irc_level`` restart.yml
+        # records (ARC records it whenever it differs from the settings
+        # default), else assumed (below). A named ``irc`` that cannot be
+        # attributed states no level, so no IRC calculation.
+        irc_level, irc_level_unattributable = _irc_level(output_doc, ts_record)
+        if irc_level is not None and not irc_level.get("software"):
+            # ARC's IRC program rule gives no ESS this adapter can name.
+            logger.warning(
+                "TCKDB irc_software_not_stated: TS %r IRC calculation not filed: "
+                "its level's method (%s) is not run in Gaussian, and ARC records no "
+                "IRC program.", ts_label, irc_level.get("method"))
+            if warnings is not None:
+                warnings.append({
+                    "code": "irc_software_not_stated",
+                    "message": (
+                        f"The IRC calculation of {ts_label!r} was not uploaded: ARC runs "
+                        "an IRC in Gaussian (arc/level.py deduce_software) except for "
+                        f"UMA/torchani/xtb-type methods ({irc_level.get('method')!r}), "
+                        "and records no program for it."),
+                    "field": "transition_state.irc.software_release",
+                    "context": {"source": "tckdb_arc_self_check",
+                                "action": "irc_calculation_omitted"},
+                })
+            irc_level_unattributable = True
+        if ts_record.get("irc_logs") and not irc_level_unattributable:
             try:
                 irc_calc = self._build_calc_in_bundle(
                     output_doc=output_doc,
@@ -2940,11 +3076,15 @@ class TCKDBAdapter:
                     calc_type="irc",
                     # ARC runs IRC at ``irc_level`` (arc/scheduler.py
                     # ``run_irc_job``), which output.yml does not export.
-                    # Pending that export (BRIDGE_ROADMAP B3) the level is
-                    # assumed to be ``opt_level`` and every such calc is
+                    # When restart.yml records it (or the adaptive levels
+                    # give it), that is the level, and the program is the one
+                    # the level names (there is no ``ess_software.irc``). If
+                    # not, the level is the run's settings default, which is
+                    # unreadable here; it is assumed to be ``opt_level`` and
                     # reported (``irc_level_assumed_opt_level``, below).
-                    level_kind="opt",
-                    ess_job_key="opt",
+                    level_kind="irc" if irc_level is not None else "opt",
+                    ess_job_key="irc" if irc_level is not None else "opt",
+                    level_override=irc_level,
                     result_field=None,
                     result_payload=None,
                     depends_on=[{"parent_calculation_key": ts_opt_key, "role": "irc_start"}],
@@ -2966,6 +3106,7 @@ class TCKDBAdapter:
                     zero_ref = _resolve_irc_zero_energy_reference(
                         output_doc=output_doc,
                         ts_record=ts_record,
+                        irc_level=irc_level,
                     )
                     # Build the optional TS marker from the seed-saddle
                     # record. ``conformer_xyz_text`` is the same TS xyz
@@ -2992,7 +3133,8 @@ class TCKDBAdapter:
                         irc_calc["irc_result"] = irc_result
                 additional.append(irc_calc)
                 calc_keys[_CALC_KEY_IRC] = ts_irc_key
-                _warn_irc_level_assumed(warnings, irc_calc["level_of_theory"])
+                if irc_level is None:
+                    _warn_irc_level_assumed(warnings, irc_calc["level_of_theory"])
             except ValueError as exc:
                 logger.debug("TCKDB computed-reaction: ts irc calc skipped: %s", exc)
 
@@ -3023,6 +3165,7 @@ class TCKDBAdapter:
                     conformer_xyz_text=conformer_xyz_text,
                     source_constraints=scan_entry.get("constraints"),
                     include_artifacts=include_artifacts,
+                    level_job_type=_scan_job_type(output_doc, ts_record, scan_key),
                 )
                 additional.append(scan_calc)
             except ValueError as exc:
@@ -3056,6 +3199,18 @@ class TCKDBAdapter:
         }
         if unmapped_smiles:
             ts_block["unmapped_smiles"] = str(unmapped_smiles)
+
+        # ARC's verdict on whether the IRC connects the declared reactants and
+        # products, from ``ts_checks['IRC']`` and nothing else (never
+        # ``irc_converged``, which only says the IRC jobs finished).
+        validation_evidence = _ts_irc_validation_evidence(
+            ts_record,
+            irc_calc_key=calc_keys.get(_CALC_KEY_IRC),
+            ts_label=ts_label,
+            warnings=warnings,
+        )
+        if validation_evidence:
+            ts_block["validation_evidence"] = validation_evidence
 
         # TS-side AEC/BAC corrections target the TS entry directly via
         # ``target_transition_state_entry_id`` server-side — never via the
@@ -3112,12 +3267,14 @@ class TCKDBAdapter:
         project_label = self._config.project_label or output_doc.get("project")
 
         build_warnings: list[dict[str, Any]] = []
+        output_doc = self._with_adaptive_levels(output_doc, build_warnings)
         payload = self._compose_transition_state_request(
             output_doc=output_doc,
             ts_record=ts_record,
             reaction_record=reaction_record,
             warnings=build_warnings,
         )
+        self._report_adaptive_omissions(output_doc, build_warnings)
 
         idempotency_inputs = IdempotencyInputs.from_payload(
             project_label=project_label,
@@ -3280,6 +3437,14 @@ class TCKDBAdapter:
         }
         if additional_calculations:
             request["additional_calculations"] = additional_calculations
+        # The standalone route has no calculation-key namespace: evidence binds
+        # to the upload's single irc additional calculation and must omit
+        # ``source_calculation_key``.
+        if ts_block.get("validation_evidence"):
+            request["validation_evidence"] = [
+                {k: v for k, v in evidence.items() if k != "source_calculation_key"}
+                for evidence in ts_block["validation_evidence"]
+            ]
         unmapped_smiles = ts_block.get("unmapped_smiles")
         if unmapped_smiles:
             request["unmapped_smiles"] = str(unmapped_smiles)
@@ -3500,7 +3665,7 @@ class TCKDBAdapter:
             output_doc,
             record,
             calc_type="opt",
-            level=_resolve_level(output_doc, "opt"),
+            level=_resolve_level(output_doc, "opt", record),
             ess_job_key="opt",
             result_field="opt_result",
             result_payload=_opt_result_payload(record),
@@ -3509,7 +3674,7 @@ class TCKDBAdapter:
         additional: list[dict[str, Any]] = []
         freq_result = _freq_result_payload(record)
         if freq_result is not None:
-            freq_level = _resolve_level(output_doc, "freq")
+            freq_level = _resolve_level(output_doc, "freq", record)
             try:
                 additional.append(
                     cls._calculation_payload(
@@ -3530,7 +3695,7 @@ class TCKDBAdapter:
 
         sp_result = _sp_result_payload(record)
         if sp_result is not None:
-            sp_level = _resolve_level(output_doc, "sp")
+            sp_level = _resolve_level(output_doc, "sp", record)
             sp_origin = _reused_origin("opt") if _sp_is_reused_from_opt(output_doc) else None
             try:
                 additional.append(
@@ -3567,9 +3732,15 @@ class TCKDBAdapter:
         final_settings: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not isinstance(level, Mapping):
+            adaptive = (
+                f" ARC ran with adaptive_levels naming {calc_type}, and the level "
+                f"this species ran at cannot be attributed "
+                f"({_W_ADAPTIVE_LEVEL_NOT_ATTRIBUTABLE.get(calc_type, calc_type + '_level_adaptive_not_attributable')})."
+                if _adaptive_kind_named(output_doc, calc_type) else ""
+            )
             raise ValueError(
-                f"no level of theory available for {calc_type} calculation; "
-                "cannot build TCKDB calculation payload."
+                f"no level of theory available for {calc_type} calculation;"
+                f"{adaptive} cannot build TCKDB calculation payload."
             )
         method = level.get("method")
         if not method:
@@ -3617,12 +3788,13 @@ class TCKDBAdapter:
             # job-specific entry is missing (often the case for combined
             # opt+freq runs or shared sp/freq logs).
             ess_version = ess_versions.get(ess_job_key)
-            if not ess_version and ess_job_key != _CALC_KEY_SCAN:
-                # Never borrow optimization provenance for a scan or pair
+            if not ess_version and ess_job_key not in (_CALC_KEY_SCAN, "conf_opt", "irc"):
+                # Never borrow optimization provenance for a scan or a
+                # conformer screen, or pair
                 # another program's banner with this program.
                 opt_software = (
                     ess_software.get("opt") if isinstance(ess_software, Mapping)
-                    else (_resolve_level(output_doc, "opt") or {}).get("software")
+                    else (_resolve_level(output_doc, "opt", record) or {}).get("software")
                 )
                 if (opt_software and str(opt_software).lower() == str(software_name).lower()):
                     ess_version = ess_versions.get("opt")
@@ -4640,7 +4812,11 @@ def _stated_integer(
 
 
 def _resolve_level(
-    output_doc: Mapping[str, Any], job_kind: str
+    output_doc: Mapping[str, Any],
+    job_kind: str,
+    record: Mapping[str, Any] | None = None,
+    *,
+    job_type: str | None = None,
 ) -> Mapping[str, Any] | None:
     """Return the level-of-theory dict for ``job_kind`` ('opt'/'freq'/'sp').
 
@@ -4650,7 +4826,11 @@ def _resolve_level(
     null`` / ``sp_level: null``. To avoid silently dropping the freq/sp
     additional calculations in the common case, fall back to ``opt_level``
     when the job-specific level is absent. Scans require their own level;
-    ARC can run them at a different method from optimization. A present-but-distinct
+    ARC can run them at a different method from optimization. ``neb`` is the
+    ORCA NEB path-search level (``neb_level``, exported only when the
+    ``orca_neb`` TS adapter was configured) and never falls back to the opt
+    level either: the NEB runs at ``orca_neb_settings['level']``, not at any of
+    the run's opt/freq/sp levels. A present-but-distinct
     ``freq_level`` / ``sp_level`` is treated as authoritative.
 
     The fallback follows ARC's own semantics (kept in adapter 0.6.0 by
@@ -4662,15 +4842,44 @@ def _resolve_level(
     when ``not self.job_types['sp']``); an ``sp_level`` equal to
     ``opt_level`` likewise reuses the optimization output (``run_sp_job``).
     output.yml's ``sp_energy_hartree`` is that ``e_elect``.
+
+    Under ARC ``adaptive_levels`` (``output_doc`` marked by
+    ``TCKDBAdapter._with_adaptive_levels``) a job type the adaptive levels name
+    has a per-species level that output.yml does not record. With ``record``
+    (the species or TS) and a ``restart.yml`` holding the adaptive spec and
+    the species, ARC's own choice is replayed exactly
+    (``tckdb_arc.adaptive.RestartInfo.attribute_level``); a job type the
+    species' range does not name runs at the run's regular level, as
+    everywhere else. Otherwise ``None`` is returned (and noted, for the
+    warning) and the caller states no level. ``job_type`` names the ARC job
+    type when a kind has several (``scan`` / ``directed_scan``). A null
+    ``sp_level`` reuses the optimization's energy, so it follows the
+    (attributed) opt level; a null ``freq_level`` beside an adaptive opt has
+    no stated source and yields ``None``.
     """
-    if job_kind in {"opt", "scan"}:
+    if _adaptive_kind_named(output_doc, job_kind) if job_type is None else (
+            job_type in (_adaptive_marker(output_doc) or {}).get("named", ())):
+        types = (job_type,) if job_type else _JOB_TYPES_BY_KIND.get(job_kind, (job_kind,))
+        status = (
+            _adaptive_level_status(output_doc, record, types[0])
+            if len(types) == 1 else UNDETERMINABLE
+        )
+        if isinstance(status, Mapping):
+            return status
+        if status == UNDETERMINABLE:
+            _note_adaptive_omission(output_doc, job_kind, record)
+            return None
+        # RUN_LEVEL: the species' range does not name it; the run level applies.
+    if job_kind in {"opt", "scan", "neb"}:
         level = output_doc.get(f"{job_kind}_level")
         return level if isinstance(level, Mapping) else None
     job_level = output_doc.get(f"{job_kind}_level")
     if isinstance(job_level, Mapping):
         return job_level
-    opt_level = output_doc.get("opt_level")
-    return opt_level if isinstance(opt_level, Mapping) else None
+    if job_kind == "freq" and _adaptive_kind_named(output_doc, "opt"):
+        _note_adaptive_omission(output_doc, job_kind, record)
+        return None
+    return _resolve_level(output_doc, "opt", record)
 
 
 def _opt_result_payload(record: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -5711,18 +5920,27 @@ def _nasa_h298_kj_mol(nasa: Mapping[str, float]) -> float:
     return h_rt * _GAS_CONSTANT_J_MOL_K * t / 1000.0
 
 
-def _thermo_energy_level(output_doc: Mapping[str, Any]) -> Mapping[str, Any] | None:
+def _thermo_energy_level(
+    output_doc: Mapping[str, Any], record: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any] | None:
     """Return the level a species' energies were computed at.
 
     ``composite_method`` when set, else the SP level (``opt_level`` when
     ``sp_level`` is null, as ARC then reuses the opt energy). output.yml
-    records one level per run, so under ARC ``adaptive_levels`` this is
-    not every species' energy level.
+    records one level per run, so under ARC ``adaptive_levels`` the level is
+    the one ``restart.yml`` attributes to ``record`` (see ``_resolve_level``),
+    or ``None`` when that cannot be worked out.
     """
     composite = output_doc.get("composite_method")
     if isinstance(composite, Mapping):
+        if _adaptive_kind_named(output_doc, "composite"):
+            status = _adaptive_level_status(output_doc, record, "composite")
+            if isinstance(status, Mapping):
+                return status
+            if status == UNDETERMINABLE:
+                return None
         return composite
-    return _resolve_level(output_doc, "sp")
+    return _resolve_level(output_doc, "sp", record)
 
 
 def _normalize_level_name(name: Any) -> str | None:
@@ -6048,6 +6266,7 @@ def _build_thermo_block(
     energy_level: Mapping[str, Any] | None = None,
     header_corrections_level: Any = None,
     element_symbols: Any = None,
+    energy_level_unattributable: bool = False,
 ) -> dict[str, Any] | None:
     """Build a ``target_model``-shaped thermo dict from ``output.yml`` thermo data.
 
@@ -6075,7 +6294,10 @@ def _build_thermo_block(
     ``_thermo_energy_level``); without that switch, against the document's
     ``arkane_level_of_theory`` (``header_corrections_level``) and the
     species' composition (``element_symbols``, see
-    ``_species_element_symbols``). Enthalpy that is not a formation enthalpy is
+    ``_species_element_symbols``). With ``energy_level_unattributable`` (an
+    ``adaptive_levels`` run, ``_energy_level_unattributable``) the energy level
+    is not known per species, so no enthalpy is verifiable and all of it is
+    stripped (``enthalpy_adaptive_levels_unverifiable``). Enthalpy that is not a formation enthalpy is
     stripped, keeping S298, point S and Cp; the refusal is appended to
     ``warnings`` under ``warning_field`` with action
     ``thermo_enthalpy_omitted`` (``thermo_omitted`` when nothing is left).
@@ -6166,8 +6388,22 @@ def _build_thermo_block(
     # fate is known.
     refusals: list[tuple[str, str, dict[str, str]]] = []
     if _has_enthalpy_content(block):
-        enthalpy_refusal = _enthalpy_validity_error(
-            block, thermo_record, energy_level, header_corrections_level, element_symbols)
+        enthalpy_refusal = (
+            (
+                _W_ENTHALPY_ADAPTIVE_LEVELS_UNVERIFIABLE,
+                "ARC ran with adaptive_levels, which chooses each species' "
+                "energy level by heavy-atom count, while output.yml records one "
+                "sp_level per run. The level this species' energy was computed "
+                "at is not known, so it cannot be checked against the level "
+                "Arkane's atom-energy corrections were applied at; H298, the "
+                "NASA fit and point H/G may not be formation enthalpies and are "
+                "omitted.",
+                {"adaptive_levels": "detected"},
+            )
+            if energy_level_unattributable else
+            _enthalpy_validity_error(
+                block, thermo_record, energy_level, header_corrections_level, element_symbols)
+        )
         if enthalpy_refusal is not None:
             refusals.append(enthalpy_refusal)
             _strip_enthalpy_content(block)
@@ -7943,14 +8179,357 @@ def _detect_irc_direction(log_path: str) -> str | None:
     return None
 
 
+_W_CONFORMER_LEVEL_NOT_STATED = "conformer_level_not_stated"
+
+
+def _warn_conformer_level_not_stated(
+    warnings: list[dict[str, Any]] | None,
+    *,
+    label: Any,
+    omitted: int,
+) -> None:
+    message = (
+        f"{omitted} screened conformer(s) of {label!r} were not uploaded: ARC "
+        "screens conformers at its conformer level "
+        "(default wb97xd/def2svp, not the opt level), output.yml does not "
+        "export that level, and the project's restart.yml does not give a "
+        "usable one (no conformer_opt_level naming its program, conf_opt not "
+        "run, or a species-specific adaptive level), so a calculation for "
+        "them cannot state one. ARC should export the conformer level "
+        "(BRIDGE_ROADMAP B3)."
+    )
+    logger.warning("TCKDB %s: %s", _W_CONFORMER_LEVEL_NOT_STATED, message)
+    if warnings is not None:
+        warnings.append({
+            "code": _W_CONFORMER_LEVEL_NOT_STATED,
+            "message": message,
+            "field": "conformers",
+            "context": {"source": "tckdb_arc_self_check",
+                        "action": "screened_conformers_omitted",
+                        "omitted_count": str(omitted)},
+        })
+
+
+_W_TS_GUESS_LEVEL_NOT_STATED = "ts_guess_level_not_stated"
+
+
+_W_TS_GUESS_SOFTWARE_NOT_STATED = "ts_guess_software_not_stated"
+
+
+def _warn_ts_guess_level_not_stated(
+    warnings: list[dict[str, Any]] | None,
+    *,
+    ts_label: Any,
+    method: str,
+    reason: str | None = None,
+    software: bool = False,
+) -> None:
+    code = _W_TS_GUESS_SOFTWARE_NOT_STATED if software else _W_TS_GUESS_LEVEL_NOT_STATED
+    if reason is not None:
+        why = reason if software else f"could not build it from ARC's exported NEB level ({reason})"
+    elif method == "neb":
+        why = "ARC did not export neb_level for this run"
+    else:
+        why = (
+            f"ARC exports no level for the {method.upper()} path search "
+            "(only the ORCA NEB level, neb_level, is exported)"
+        )
+    message = (
+        f"The {method.upper()} path-search calculation of the TS guess for "
+        f"{ts_label!r} was not uploaded: {why}. TCKDB requires a level of "
+        "theory and a program on every calculation and the adapter does not "
+        "file the path search at opt_level or under a deduced program. ARC "
+        "should export the TS-guess level (BRIDGE_ROADMAP B3)."
+    )
+    logger.warning("TCKDB %s: %s", code, message)
+    if warnings is not None:
+        warnings.append({
+            "code": code,
+            "message": message,
+            "field": "transition_state.path_search.level_of_theory",
+            "context": {"source": "tckdb_arc_self_check",
+                        "action": "path_search_calculation_omitted",
+                        "method": method},
+        })
+
+
+# ARC ``adaptive_levels`` and the other levels output.yml does not record (see
+# ``tckdb_arc.adaptive``). ``TCKDBAdapter._with_adaptive_levels`` marks a copy of
+# the output document with the project's ``restart.yml`` state
+# (``_RESTART_KEY``) and, for an adaptive run, the job types the adaptive levels
+# name (``_ADAPTIVE_LEVELS_KEY``). output.yml records one level per run, so for
+# a named job type it states a level no particular species need have run at:
+# ``_resolve_level`` replays ARC's own per-species choice from ``restart.yml``
+# where that is possible, and otherwise states nothing.
+_ADAPTIVE_LEVELS_KEY = "_tckdb_adaptive_levels"
+_RESTART_KEY = "_tckdb_restart_levels"
+
+# The ARC job types (``arc/scheduler.py`` ``run_job``) behind each level kind the
+# adapter states; adaptive levels key on these exact strings.
+_JOB_TYPES_BY_KIND: Mapping[str, tuple[str, ...]] = {
+    "opt": ("opt",),
+    "freq": ("freq",),
+    "sp": ("sp",),
+    "composite": ("composite",),
+    "irc": ("irc",),
+    "scan": ("scan", "directed_scan"),
+    "conf_opt": ("conf_opt",),
+}
+
+_W_ADAPTIVE_LEVEL_NOT_ATTRIBUTABLE: Mapping[str, str] = {
+    "opt": "opt_level_adaptive_not_attributable",
+    "freq": "freq_level_adaptive_not_attributable",
+    "sp": "sp_level_adaptive_not_attributable",
+    "scan": "scan_level_adaptive_not_attributable",
+    "irc": "irc_level_adaptive_not_attributable",
+}
+_W_ENTHALPY_ADAPTIVE_LEVELS_UNVERIFIABLE = "enthalpy_adaptive_levels_unverifiable"
+
+
+def _adaptive_marker(output_doc: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    marker = output_doc.get(_ADAPTIVE_LEVELS_KEY)
+    return marker if isinstance(marker, Mapping) else None
+
+
+def _restart_levels(output_doc: Mapping[str, Any]) -> RestartInfo | None:
+    info = output_doc.get(_RESTART_KEY)
+    return info if isinstance(info, RestartInfo) else None
+
+
+def _adaptive_kind_named(output_doc: Mapping[str, Any], kind: str) -> bool:
+    """Whether the run's adaptive levels name any job type behind ``kind``."""
+    marker = _adaptive_marker(output_doc)
+    return marker is not None and any(
+        t in marker["named"] for t in _JOB_TYPES_BY_KIND.get(kind, (kind,)))
+
+
+def _n_heavy_from_record(record: Mapping[str, Any] | None) -> int | None:
+    """ARC's fallback heavy-atom count: the non-``H`` atoms of the geometry."""
+    symbols = _species_element_symbols(record) if isinstance(record, Mapping) else None
+    return None if symbols is None else sum(1 for symbol in symbols if symbol != "H")
+
+
+def _adaptive_level_status(
+    output_doc: Mapping[str, Any], record: Mapping[str, Any] | None, job_type: str,
+) -> Mapping[str, Any] | str:
+    """The level ARC ran ``job_type`` at for ``record``, from ``restart.yml``.
+
+    A level dict (same shape as output.yml levels), ``RUN_LEVEL`` (the
+    species' adaptive range does not name the job type), or ``UNDETERMINABLE``
+    (no ``restart.yml`` adaptive spec or species entry, or no heavy-atom
+    count).
+    """
+    restart = _restart_levels(output_doc)
+    if restart is None or record is None:
+        return UNDETERMINABLE
+    return restart.attribute_level(
+        record.get("label"), job_type, _n_heavy_from_record(record))
+
+
+def _note_adaptive_omission(
+    output_doc: Mapping[str, Any], kind: str, record: Mapping[str, Any] | None,
+) -> None:
+    marker = _adaptive_marker(output_doc)
+    label = record.get("label") if isinstance(record, Mapping) else None
+    if marker is not None and isinstance(label, str):
+        marker["omitted"].setdefault(kind, set()).add(label)
+
+
+def _energy_level_unattributable(
+    output_doc: Mapping[str, Any], energy_level: Mapping[str, Any] | None,
+) -> bool:
+    """Whether an adaptive run left the species' energy level (sp, or composite) unknown."""
+    return _adaptive_marker(output_doc) is not None and energy_level is None
+
+
+def _irc_level(
+    output_doc: Mapping[str, Any], ts_record: Mapping[str, Any],
+) -> tuple[Mapping[str, Any] | None, bool]:
+    """``(exact IRC level or None, IRC level unattributable)`` for a TS.
+
+    Exact when the adaptive levels name ``irc`` and ``restart.yml`` gives the
+    TS's level, else when ``restart.yml`` records ``irc_level``. ``(None,
+    False)`` means the level is the unreadable settings default (assumed to be
+    ``opt_level``); ``(None, True)`` means the adaptive levels name ``irc``
+    and the TS's level cannot be worked out.
+    """
+    if _adaptive_kind_named(output_doc, "irc"):
+        status = _adaptive_level_status(output_doc, ts_record, "irc")
+        if isinstance(status, Mapping):
+            return _with_irc_program(status), False
+        if status == UNDETERMINABLE:
+            _note_adaptive_omission(output_doc, "irc", ts_record)
+            return None, True
+    restart = _restart_levels(output_doc)
+    if restart is not None and restart.irc_level is not None:
+        return _with_irc_program(restart.irc_level), False
+    return None, False
+
+
+# ARC's ``Level.deduce_software(job_type='irc')`` (arc/level.py:413-418, called
+# by ``Scheduler.deduce_job_adapter``, arc/scheduler.py:1255) sets the software
+# to Gaussian for an IRC whatever software the level dict names or DLPNO/other
+# methods would pick: that is why a level's own ``software`` cannot be taken for
+# an IRC (there is also no ``ess_software.irc``). It is not unconditional: UMA
+# levels return early with ``ase`` (arc/level.py:386-388), and torchani / xtb /
+# gfn methods are assigned afterwards (arc/level.py:421-426). Those give no
+# stated program, so the IRC is not filed for them.
+_IRC_NOT_GAUSSIAN_METHODS = ("uma", "uma-s-1", "uma-s-1p1", "uma-s-1p2", "uma-m-1p1")
+
+
+def _with_irc_program(level: Mapping[str, Any]) -> Mapping[str, Any]:
+    """``level`` with ARC's IRC program: ``gaussian``, or none where ARC's rule gives another."""
+    method = str(level.get("method") or "").lower()
+    out = {k: v for k, v in level.items() if k != "software"}
+    if not (method in _IRC_NOT_GAUSSIAN_METHODS
+            or any(part in method for part in ("torchani", "xtb", "gfn"))):
+        out["software"] = "gaussian"
+    return out
+
+
+def _conformer_screen_level(
+    output_doc: Mapping[str, Any], species_record: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    """The level ARC's conformer screen ran at for a species, or ``None``.
+
+    ``conformer_opt_level`` from ``restart.yml``, only when ``conf_opt`` ran
+    (``job_types``) and the level names its program; not when the adaptive
+    levels name ``conf_opt`` for the species' range or the range cannot be
+    worked out.
+    """
+    restart = _restart_levels(output_doc)
+    if (restart is None or restart.conformer_opt_level is None
+            or restart.job_types.get("conf_opt") is not True
+            or not restart.conformer_opt_level.get("software")):
+        return None
+    if _adaptive_kind_named(output_doc, "conf_opt"):
+        status = _adaptive_level_status(output_doc, species_record, "conf_opt")
+        if status != RUN_LEVEL:
+            return None
+    return restart.conformer_opt_level
+
+
+_SCAN_ROTOR_KEY_RE = re.compile(r"^scan_rotor_(\d+)$")
+
+
+def _scan_job_type(
+    output_doc: Mapping[str, Any], record: Mapping[str, Any], scan_key: Any,
+) -> str | None:
+    """``'scan'`` (ESS) or ``'directed_scan'`` for an exported rotor scan.
+
+    output.yml does not say which kind ran; ``restart.yml`` records each
+    rotor's ``directed_scan_type`` (``arc/species/species.py``), and the export
+    key is ``scan_rotor_<rotor index>`` (``arc/output.py``). ``None`` when that
+    cannot be looked up: the level then cannot tell the two apart.
+    """
+    restart = _restart_levels(output_doc)
+    match = _SCAN_ROTOR_KEY_RE.match(scan_key) if isinstance(scan_key, str) else None
+    if restart is None or match is None or not isinstance(record, Mapping):
+        return None
+    return restart.scan_job_type(record.get("label"), int(match.group(1)))
+
+
+def _warn_adaptive_omissions(
+    warnings: list[dict[str, Any]] | None, marker: Mapping[str, Any],
+) -> None:
+    """One warning per job kind whose level could not be attributed (and was left out)."""
+    sources = ", ".join(marker["sources"])
+    for kind, labels in sorted(marker["omitted"].items()):
+        code = _W_ADAPTIVE_LEVEL_NOT_ATTRIBUTABLE.get(kind)
+        if code is None or not labels:
+            continue
+        message = (
+            f"ARC ran with adaptive_levels (found in {sources}), which assigns the "
+            f"{kind} level per species by heavy-atom count, but output.yml records "
+            f"one {kind} level per run, and the project's restart.yml does not "
+            f"allow the level of {', '.join(sorted(labels))} to be worked out "
+            f"(it needs adaptive_levels and a species entry there). TCKDB requires "
+            f"a level on every calculation, so their {kind} calculation(s) are "
+            "omitted rather than labelled with a level they may not have run at. "
+            "ARC should export per-species levels (BRIDGE_ROADMAP B2)."
+        )
+        logger.warning("TCKDB %s: %s", code, message)
+        if warnings is not None:
+            warnings.append({
+                "code": code,
+                "message": message,
+                "field": f"{kind}.level_of_theory",
+                "context": {"source": "tckdb_arc_self_check",
+                            "action": f"{kind}_calculation_omitted",
+                            "adaptive_levels_sources": ",".join(marker["sources"]),
+                            "labels": ",".join(sorted(labels))},
+            })
+
+
+_W_TS_IRC_EVIDENCE_WITHOUT_IRC_CALCULATION = "ts_irc_evidence_without_irc_calculation"
+
+
+def _ts_irc_validation_evidence(
+    ts_record: Mapping[str, Any],
+    *,
+    irc_calc_key: str | None,
+    ts_label: Any,
+    warnings: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Map ARC's ``ts_checks['IRC']`` verdict to TCKDB ``validation_evidence``.
+
+    ``ts_checks['IRC']`` is ``True`` (the IRC connects the declared
+    reactants and products), ``False`` (it does not) or ``None`` (not run, or
+    no conclusion; arc/output.py ``_ts_checks_to_dict``). Only a bool is
+    evidence; ``None`` or an absent ``ts_checks`` sends nothing, and the
+    verdict is never derived from ``irc_converged``, which reports that the IRC
+    jobs completed, not that the IRC validated anything.
+
+    TCKDB binds evidence to an ``irc`` calculation of this transition state
+    (``source_calculation_key``; the standalone route omits the key and binds
+    to its single irc calculation). Without one there is nothing to bind to,
+    so a verdict with no IRC calculation is reported and not sent. ``rationale``
+    is required and non-empty: it states the source of ``passed``. ARC's
+    ``ts_checks['warnings']`` are not used: they come only from the E0/e_elect
+    and normal-mode-displacement checks (``arc/checks/ts.py``,
+    ``arc/checks/nmd.py``), never from the IRC. The participant mappings are
+    not exported by ARC and are omitted.
+    """
+    checks = ts_record.get("ts_checks")
+    verdict = checks.get("IRC") if isinstance(checks, Mapping) else None
+    if not isinstance(verdict, bool):
+        return []
+    if irc_calc_key is None:
+        message = (
+            f"ARC recorded ts_checks['IRC'] = {verdict} for {ts_label!r} but the "
+            "TS has no IRC calculation in this upload, so there is no irc "
+            "calculation for validation evidence to bind to; the evidence was "
+            "not sent."
+        )
+        logger.warning("TCKDB %s: %s", _W_TS_IRC_EVIDENCE_WITHOUT_IRC_CALCULATION, message)
+        if warnings is not None:
+            warnings.append({
+                "code": _W_TS_IRC_EVIDENCE_WITHOUT_IRC_CALCULATION,
+                "message": message,
+                "field": "transition_state.validation_evidence",
+                "context": {"source": "tckdb_arc_self_check",
+                            "action": "validation_evidence_omitted",
+                            "ts_checks_irc": str(verdict).lower()},
+            })
+        return []
+    rationale = f"ARC ts_checks['IRC'] = {verdict}"
+    return [{
+        "kind": "irc",
+        "passed": verdict,
+        "rationale": rationale,
+        "source_calculation_key": irc_calc_key,
+    }]
+
+
 _W_IRC_DIRECTION_NOT_STATED = "irc_direction_not_stated"
 
-# ARC runs every IRC job at ``irc_level`` (arc/scheduler.py ``run_irc_job``),
-# default ``default_levels_of_theory['irc']`` (arc/main.py), and output.yml
-# does not export it. The adapter labels the IRC calculation with
-# ``opt_level``, which is right in ARC's default configuration (opt and irc
-# are both wb97xd/def2tzvp, arc/settings/settings.py) and wrong when a user
-# set ``opt_level`` without ``irc_level``. Kept, and reported on every IRC
+# ARC runs every IRC job at ``irc_level`` (arc/scheduler.py ``run_irc_job``).
+# restart.yml records it whenever it differs from the settings default, and
+# the adapter then uses it exactly. When it is absent the level is that
+# default, ``default_levels_of_theory['irc']`` (arc/settings/settings.py), which
+# the adapter cannot read from the project files, and the adapter *assumes* it
+# equals ``opt_level`` (true when ``opt_level`` is that same default, the
+# maintainer's adapter-0.6.0 decision). That assumption is reported on the IRC
 # calculation, until ARC exports the IRC level (BRIDGE_ROADMAP B3).
 _W_IRC_LEVEL_ASSUMED_OPT_LEVEL = "irc_level_assumed_opt_level"
 
@@ -7960,11 +8539,14 @@ def _warn_irc_level_assumed(
     level_of_theory: Mapping[str, Any],
 ) -> None:
     message = (
-        "ARC does not export irc_level, so the IRC calculation is labelled with "
-        f"opt_level ({level_of_theory.get('method')}"
-        f"{'/' + str(level_of_theory['basis']) if level_of_theory.get('basis') else ''}). "
-        "That is ARC's default (opt = irc = wb97xd/def2tzvp) and is wrong when "
-        "the run set opt_level without irc_level."
+        "ARC does not export irc_level and the project's restart.yml does not "
+        "record one, so the IRC ran at the run's settings default "
+        "(default_levels_of_theory['irc']), which the adapter cannot read. "
+        "The IRC calculation is labelled with opt_level "
+        f"({level_of_theory.get('method')}"
+        f"{'/' + str(level_of_theory['basis']) if level_of_theory.get('basis') else ''}), "
+        "assuming the two are equal; that is wrong when opt_level is not the "
+        "settings default."
     )
     logger.warning("TCKDB %s: %s", _W_IRC_LEVEL_ASSUMED_OPT_LEVEL, message)
     if warnings is not None:
@@ -8214,16 +8796,26 @@ def _build_irc_result_payload(
 def _level_keys_match(a: Mapping[str, Any] | None, b: Mapping[str, Any] | None) -> bool:
     """Conservative level-of-theory equality check.
 
-    Compares only the fields TCKDB treats as primary keys for
-    ``LevelOfTheoryRef`` (method/basis/aux_basis/cabs_basis). Differences
-    in software, dispersion, or solvation are intentionally not enough
-    to declare equality here — but they're also not enough to declare
-    inequality, since ARC frequently leaves them null on one side
+    Compares the fields TCKDB treats as primary keys for
+    ``LevelOfTheoryRef`` (method/basis/aux_basis/cabs_basis). A difference
+    in software is intentionally not enough to declare inequality,
+    since ARC frequently leaves it null on one side
     (the opt level) and populated on the other (the sp level) without
     that meaning the *energies* are at different levels.
+
+    The one exception is ``dispersion`` and ``solvation_method``: a
+    difference there (present on one side only, or different) *is* a
+    mismatch, so an SMD single point is never taken as the reference of a
+    gas-phase IRC (its only use is the IRC reference energy).
     """
     if a is None or b is None:
         return False
+    for field in ("dispersion", "solvation_method"):
+        av, bv = a.get(field), b.get(field)
+        if (av is None) != (bv is None):
+            return False
+        if av is not None and str(av).strip().lower() != str(bv).strip().lower():
+            return False
     for field in _TCKDB_LOT_REF_FIELDS:
         av = a.get(field)
         bv = b.get(field)
@@ -8717,38 +9309,45 @@ def _resolve_irc_zero_energy_reference(
     *,
     output_doc: Mapping[str, Any],
     ts_record: Mapping[str, Any],
+    irc_level: Mapping[str, Any] | None = None,
 ) -> float | None:
     """Pick the TS reference electronic energy for an IRC path.
 
-    ARC runs IRC at the opt level (see ``level_kind="opt"`` at the IRC
-    calculation construction site). The reference must therefore live at
-    that same level, or the relative energies it produces would mix two
-    levels of theory.
+    The reference must live at the IRC calculation's level, or the relative
+    energies it produces would mix two levels of theory. That level is
+    ``irc_level`` when known exactly (restart.yml), else the assumed
+    ``opt_level`` (see the IRC calculation construction site).
 
     Resolution order, conservative by design:
 
     1. ``ts_sp_result.electronic_energy_hartree`` *only if* the project
-       SP level matches the project opt level (LoT keys equal).
-    2. ``ts_record['opt_final_energy_hartree']`` — the TS opt's converged
-       SCF, which is by construction at the opt level.
-    3. ``None`` — never fabricate a reference. Downstream consumers
+       SP level matches the IRC level (LoT keys equal).
+    2. ``ts_record['opt_final_energy_hartree']`` -- the TS opt's converged
+       SCF, at the opt level -- *only if* that matches the IRC level (always,
+       when the IRC level is the assumed opt level).
+    3. ``None`` -- never fabricate a reference. Downstream consumers
        interpret a null ``zero_energy_reference_hartree`` as "relative
        energies unavailable" and skip the ``relative_energy_kj_mol``
        per-point field accordingly.
     """
-    opt_level = _resolve_level(output_doc, "opt")
+    opt_level = _resolve_level(output_doc, "opt", ts_record)
+    ref_level = irc_level if irc_level is not None else opt_level
     sp_level = output_doc.get("sp_level")
-    sp_level = sp_level if isinstance(sp_level, Mapping) else None
+    sp_level = (
+        _resolve_level(output_doc, "sp", ts_record)
+        if isinstance(sp_level, Mapping) else None
+    )
     sp_energy = ts_record.get("sp_energy_hartree")
     if sp_energy is None:
         sp_energy = ts_record.get("electronic_energy_hartree")
-    if sp_energy is not None and _level_keys_match(opt_level, sp_level):
+    if sp_energy is not None and _level_keys_match(ref_level, sp_level):
         try:
             return float(sp_energy)
         except (TypeError, ValueError):
             pass
     opt_energy = ts_record.get("opt_final_energy_hartree")
-    if opt_energy is not None:
+    if opt_energy is not None and (
+            irc_level is None or _level_keys_match(ref_level, opt_level)):
         try:
             return float(opt_energy)
         except (TypeError, ValueError):

@@ -253,6 +253,28 @@ class TestCLIDispatch(unittest.TestCase):
         self.assertIn('not found', stdout)
         self.assertEqual(adapter.reaction_calls, [])
 
+    # ---------------- 7: adaptive_levels reach the real adapter
+    def test_input_yml_is_handed_to_the_real_adapter_for_adaptive_detection(self):
+        # input.yml may live outside the project directory, so the CLI passes
+        # its parsed content to the adapter (adaptive_levels detection,
+        # BRIDGE_ROADMAP A2b).
+        from unittest import mock
+        proj, input_path = _make_project(self.tmp)
+        with open(input_path) as fh:
+            body = yaml.safe_load(fh)
+        body['adaptive_levels'] = [
+            {'atom_range': [1, 'inf'], 'levels': {'sp': 'wb97xd/def2tzvp'}}]
+        with open(input_path, 'w') as fh:
+            yaml.safe_dump(body, fh)
+        with mock.patch('tckdb_arc.adapter.TCKDBAdapter') as adapter_class, \
+                mock.patch('tckdb_arc.cli.run_upload_sweep'), \
+                redirect_stdout(io.StringIO()):
+            rc = main([input_path])
+        self.assertEqual(rc, 0)
+        kwargs = adapter_class.call_args.kwargs
+        self.assertEqual(kwargs['project_directory'], os.path.abspath(proj))
+        self.assertEqual(kwargs['input_dict']['adaptive_levels'], body['adaptive_levels'])
+
 
 if __name__ == '__main__':
     unittest.main()

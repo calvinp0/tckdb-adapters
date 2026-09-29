@@ -276,6 +276,8 @@ class TestGoldenCorpus(unittest.TestCase):
         for outcome in (reaction_outcome, ts_outcome):
             codes = [w["code"] for w in outcome.warnings]
             self.assertEqual(codes.count("irc_level_assumed_opt_level"), 1)
+            # TS0's guess is an xtb-gsm path search with no exported level.
+            self.assertEqual(codes.count("ts_guess_level_not_stated"), 1)
             self.assertEqual(
                 json.loads(outcome.sidecar_path.read_text())["warnings"], outcome.warnings)
 
@@ -291,6 +293,45 @@ class TestGoldenCorpus(unittest.TestCase):
 
         # Canonical snapshots make any wire-shape change an explicit review.
         #
+        # computed_reaction / transition_state changed (computed_species did
+        # not) for adapter 0.6.4, for one reason: TS0's chosen guess is an
+        # xtb-gsm path search, and ARC exports no level for it (only the ORCA
+        # NEB level, ``neb_level``), so the GSM ``path_search`` calculation is
+        # no longer filed. It used to be labelled with opt_level and the opt
+        # program, which is not what the path search ran at. Along with the
+        # calculation, the reaction route's ``ts_opt`` loses its
+        # ``optimized_from`` edge to it (the standalone route strips
+        # dependencies). Putting exactly that calculation back at the front of
+        # the TS's calculations (the 0.6.2 payload, kept as a fixture), and the
+        # edge on the reaction route's ts_opt, reproduces the previous
+        # snapshots checked next, so no other leaf changed.
+        self.assertEqual(
+            {
+                "computed_species": "51313aab968f6693d4feaea32087029fab8aef4135cb72f223dd2957408d48e9",
+                "computed_reaction": "de228c19393b31714c36dbb3321ee2839d883967fd3cc1a4bfb2df116ab54f90",
+                "transition_state": "9bc66ae3b6894e9776df427601f8d8377f72c94c50abc4a8042aee092d7bd679",
+            },
+            {
+                "computed_species": self._canonical_sha256(species),
+                "computed_reaction": self._canonical_sha256(reaction),
+                "transition_state": self._canonical_sha256(transition_state),
+            },
+        )
+        removed = json.loads(
+            (Path(__file__).parent / "fixtures" / "golden"
+             / "gsm_path_search_0_6_2.json").read_text())
+
+        reaction_ts = reaction["transition_state"]
+        self.assertNotIn("path_search", [c["type"] for c in reaction_ts["calculations"]])
+        self.assertNotIn("depends_on", reaction_ts["calculation"])
+        reaction = copy.deepcopy(reaction)
+        reaction["transition_state"]["calculations"].insert(0, removed["computed_reaction"])
+        reaction["transition_state"]["calculation"]["depends_on"] = [
+            {"parent_calculation_key": "ts_guess", "role": "optimized_from"}]
+        self.assertNotIn("path_search", [c["type"] for c in transition_state["additional_calculations"]])
+        transition_state = copy.deepcopy(transition_state)
+        transition_state["additional_calculations"].insert(0, removed["transition_state"])
+
         # computed_reaction / transition_state changed (computed_species
         # did not) for a reviewed reason: the fixture's TS0 freq record
         # has freq_n_imag=1, freq_imag_freq_cm1=-900.0, and no

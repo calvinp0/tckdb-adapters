@@ -24,6 +24,8 @@ and schema versions; their percentages are not current coverage measurements.
   model changes.
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
+- **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
+  them, and TS IRC evidence. See [Level attribution](#level-attribution-and-ts-irc-evidence-adapter-064).
 - Adapter: working tree including substantial pre-existing uncommitted work.
   Those changes were retained.
 
@@ -87,8 +89,8 @@ here: transport, `wavefunction_stability` and `ts_checks`.
 | Gap | Owner / next step | Roadmap |
 |---|---|---|
 | Petersson `bac_total` with no bond component: TCKDB 422s the whole upload (`bac_total_requires_components`). Current ARC drops all components when any bond lacks a parameter (`arc/output.py:1592-1596`) and the adapter forwards `components or []` | Adapter: drop the componentless correction on bonded species and TSs, with a sidecar warning. **Producer-breaking** | A1 |
-| TS-guess `path_search` and IRC calculations labelled with the opt level and opt ESS | Adapter. The TS guess is always wrong: use `neb_level` / `ess_software.neb`, and omit GSM until ARC exports its level. The IRC is wrong when `irc_level` ≠ `opt_level`: ARC defaults `irc_level` to `wb97xd/def2tzvp` (`arc/main.py:1166-1176`), so take the IRC level from its log's route line. **Wrong data** | A3, B3 |
-| Screened alternative conformers filed as opts at `opt_level` | Adapter: stop until ARC exports the conformer level. This is wrong in ARC's default configuration (conformer `wb97xd/def2svp` vs opt `wb97xd/def2tzvp`, `arc/settings/settings.py:227-229`). **Wrong data** | A4, B3 |
+| TS-guess `path_search` and IRC calculations labelled with the opt level and opt ESS | **Since 0.6.4 the TS guess is fixed** (NEB at `neb_level`; GSM omitted); the IRC uses `restart.yml`'s `irc_level` when recorded, else keeps `opt_level` with a warning. Adapter. The TS guess was always wrong: use `neb_level` / `ess_software.neb`, and omit GSM until ARC exports its level. The IRC is wrong when `irc_level` ≠ `opt_level`: ARC defaults `irc_level` to `wb97xd/def2tzvp` (`arc/main.py:1166-1176`), so take the IRC level from its log's route line. **Wrong data** | A3, B3 |
+| Screened alternative conformers filed as opts at `opt_level` | **Done in 0.6.4** (filed at `restart.yml`'s `conformer_opt_level` when stated and `conf_opt` ran; otherwise not uploaded, `conformer_level_not_stated`). Adapter: until ARC exports the conformer level. This is wrong in ARC's default configuration (conformer `wb97xd/def2svp` vs opt `wb97xd/def2tzvp`, `arc/settings/settings.py:227-229`). **Wrong data** | A4, B3 |
 | `statmech_treatment` inferred from ARC's torsion list, though Arkane ignores rotors when the freq log has no force-constant matrix (RMG-Py `arkane/statmech.py:647-667`; ARC's Gaussian freq always writes one, so the case is composite/ORCA/Q-Chem/Molpro) | Adapter: emit a rotor-bearing treatment only when parser evidence has the species' `freq_hessian`, otherwise omit (the field is optional in TCKDB); ARC: export what Arkane applied. **Wrong data (conditional)** | A5, B4 |
 | Atoms get a primary opt that never ran: normally sent with `converged: false`, since ARC never sets `job_types['opt']` for an atom, and with `converged: true` in composite runs (`arc/scheduler.py:3441`) | TCKDB: a form without an opt; adapter: skip until then. **Wrong data** | A6, C6 |
 | Current ARC rotor export has results but no scan level/software | ARC must export scan provenance. The adapter accepts an explicit `scan_level`; missing provenance is reported, not replaced with `opt_level`. See `arc/output.py::_build_rotor_scan_entry` and `arc/scheduler.py::run_scan_jobs` | B3 |
@@ -97,12 +99,12 @@ here: transport, `wavefunction_stability` and `ts_checks`.
 | Full tunneling and partition-function provenance | TCKDB `BundleKineticsIn` still lacks `tunneling_application`, `interpretation_assignments` and `network_kinetics_ref` at 0.51. The existing tunneling label is not replayable evidence | C8 |
 | Transport | **Corrected.** ARC has no working transport path to export: no `onedmin` job adapter is registered, the processor's transport step is a `# todo` (`arc/processor.py:237`), and `transport_data` is not persisted. TCKDB *does* have homes at 0.51 (`conformer_upload.transport` and `POST /uploads/transport`). So this is new ARC capability first; the adapter follows | B11 |
 | `wavefunction_stability` | **Corrected:** ARC exports it (`arc/output.py:1841-1842`, tested). The gap is the adapter's: map it to `scf_stability` on the sp/freq calculation whose reference was tested, never on the final opt | A10 |
-| `ts_checks` | **Corrected:** ARC exports the verdicts since output 1.1 (`arc/output.py:1986`, `:2779-2805`). The gaps are in the adapter and TCKDB. The adapter must map `ts_checks.IRC` (never `irc_converged`, which only means the IRC jobs finished) to `validation_evidence`. TCKDB accepts only `kind: 'irc'`, so the E0, e_elect, freq and NMD verdicts have no home. No real-ARC fixture sets `ts_checks.IRC` | A14, C7 |
+| `ts_checks` | **Corrected:** ARC exports the verdicts since output 1.1 (`arc/output.py:1986`, `:2779-2805`). The gaps are in the adapter and TCKDB. The adapter maps `ts_checks.IRC` (never `irc_converged`, which only means the IRC jobs finished) to `validation_evidence` (done in 0.6.4). TCKDB accepts only `kind: 'irc'`, so the E0, e_elect, freq and NMD verdicts have no home. No real-ARC fixture sets `ts_checks.IRC` | A14, C7 |
 | Execution environment and effective calculation settings | ARC export is incomplete, especially beyond coarse/fine optimization settings. Do not invent runtime metadata from requested input settings | B11 |
 | NEB portable evidence, alternative TS guesses, multidimensional rotor scans | Producer evidence/export work; the current portable sidecar covers Hessian/IRC/GSM, successful 1D rotors and the chosen guess | B11 |
 | Deposit rights | Requires explicit depositor information/configuration; no license or consent is inferred. Silent at upload, but a dataset release refuses records without a rights basis | D2 |
 | Whether Arkane applied atom-energy corrections | Exported by ARC output.yml 1.2 (`thermo.atom_corrections_applied` / `atom_corrections_level`, PR #1059 branch `feature_export_atom_corrections_applied`, not yet on ARC main) and consumed by the adapter. Pre-1.2 output (`db0934d5`, ARC main today) cannot say so. An `energy_corrections[]` `atom_energy` row does **not** prove the corrections were applied: it is keyed on the energy level alone, and Arkane's model chemistry can be `None` when the freq level is not found and no `freq_scale_factor` was given (`arc/statmech/arkane.py:1138-1157`). The row's absence proves nothing either. At `0913124`, such output gets only the ±2.0e4 kJ/mol magnitude guard, which misses H, H2, He and Li. **Decided (option d); committed as `84b1b05` on `fix_unverifiable_enthalpy_without_flags` (adapter 0.5.0), pending merge:** when the flag is absent, strip the enthalpy for light species by composition, taken from the species' xyz or else its `formula` (hydrogen-only species, He, He2, HeH, the Li atom), when the header `arkane_level_of_theory` does not match the energy level, and when either level sets a separate `dispersion` or `solvation_method`. Composition uses the xyz, else the record's `formula`, because ARC 1.0 writes `xyz: null` for monoatomics. The header `arkane_level_of_theory` is written by ARC `db0934d5` as a required, nullable level dict; a null header, or one without a method, is not checked. These interim rules are superseded by output.yml 1.2's switch (ARC PR #1059) for new runs. Residual risk: a stand-in with the same method and basis that differs by a year refit or by ARC's fuzzy key match. In the golden corpus only H2 loses its enthalpy. The `feature_tckdb_integration_gate` test `test_golden_species_calculations_thermo_and_hessian` asserts golden H2's `formation_298k` and NASA fit, so whichever branch merges second must update it | A2, B1, D1 |
-| Per-species energy level | ARC must export the level each species' energies were computed at. Under `adaptive_levels` every calculation is attributed to the run-level level (**wrong data**), and the adapter's comparison with `atom_corrections_level` can pass wrongly. `output.yml` does not record adaptive runs, but the adapter can detect them from the project's `input.yml` (which the CLI already reads) or `restart.yml` (ARC saves `adaptive_levels` there, `arc/main.py:439`). The interim is to refuse or strip affected calculations until ARC exports per-species levels | A2b, B2 |
+| Per-species energy level | ARC must export the level each species' energies were computed at. Under `adaptive_levels` every calculation is attributed to the run-level level (**wrong data**), and the adapter's comparison with `atom_corrections_level` can pass wrongly. `output.yml` does not record adaptive runs, but the adapter can detect them from the project's `input.yml` (which the CLI already reads) or `restart.yml` (ARC saves `adaptive_levels` there, `arc/main.py:439`). The interim (adapter 0.6.4) attributes exactly from `restart.yml` where it can and otherwise refuses or strips affected calculations, until ARC exports per-species levels | A2b, B2 |
 | Atom-energy matching ignores dispersion and solvation | ARC bug. Its Arkane key match and `data/AEC.yml` lookup ignore `dispersion` and `solvation_method`: B3LYP + GD3BJ gets plain B3LYP atom energies and SMD gets gas-phase ones, yet `atom_corrections_level` equals `sp_level`. Fix: make the match refuse, or warn, when the level has dispersion or solvation the matched key lacks. ARC `1977e53b` warns at run time. Until the match is fixed, the adapter strips enthalpy when either level sets either field (`enthalpy_atom_corrections_level_unverifiable`) | B1 |
 | TCKDB commits writes after the 201 is sent (`backend/app/api/deps.py:123-150`, T4) | TCKDB. Until fixed, a 201 does not prove persistence, so the adapter's sidecar and idempotency record can describe a deposit that does not exist | C1 |
 
@@ -224,8 +226,8 @@ provenance warnings for data output.yml already held. Status by roadmap item:
 - **Literature, known gap.** `missing_literature_provenance` remains advisory:
   ARC records no citation for its thermo, statmech or schemes.
 
-Also seen on the fixture: the screened alternative conformer's opt is labelled
-with `opt_level` and the opt banner (roadmap A4). The atom-energy scheme's
+Also seen on the fixture: the screened alternative conformer's opt was labelled
+with `opt_level` and the opt banner (roadmap A4; fixed in 0.6.4, see below). The atom-energy scheme's
 `atom_params` were not sent at 0.6.1 and are since 0.6.3 (A12 below).
 
 ## Corrections and statmech evidence (adapter 0.6.3)
@@ -311,3 +313,97 @@ Upgrading to 0.6.3 changes the payload hash (and idempotency key) of uploads
 that gain `atom_params`, lose a BAC, or lose a `statmech_treatment`. The
 golden corpus hashes are unchanged (its records neither carry a Petersson BAC
 or atom-energy table nor lose a treatment).
+
+## Level attribution and TS IRC evidence (adapter 0.6.4)
+
+Four roadmap items, read against the producer contract (`python -m
+tckdb_schemas.contract --print`): every calculation requires a
+`level_of_theory` (`CalculationWithResultsPayload`, `ComputedReactionCalculationIn`,
+`ConformerInBundle.primary_calculation`), and `TransitionStateValidationEvidenceIn`
+is `{kind: "irc", passed: bool, rationale: string (length >= 1),
+source_calculation_key?}`. Where ARC states no level, the calculation is omitted;
+no level is filled from a neighbouring job. Levels that `output.yml` does not carry
+are read from the project's **`restart.yml`** (`arc/main.py` `as_dict`, via
+`tckdb_arc/adaptive.py`) when it is there: the adaptive levels, `irc_level`,
+`conformer_opt_level`, `job_types` and each species' `adaptive_lot_n_heavy` and rotor
+scan types. `tckdb-arc-upload` also passes its parsed `input.yml`, which can only say
+which job types the adaptive levels name.
+
+- **A2b, `adaptive_levels`: exact where possible.** ARC chooses each job's level per
+  species by heavy-atom count, and output.yml records one level per run. With the adaptive
+  spec and a species entry in `restart.yml` the adapter replays ARC's rule
+  (`scheduler.determine_adaptive_level`, `arc/scheduler.py:5273-5299`): `n` is the
+  species' `adaptive_lot_n_heavy` when set (the reaction-wide rule, including the
+  `<label>_TS<i>` copies, `arc/scheduler.py:5317-5375`), else the number of non-`H` atoms
+  of its geometry; the range is `lo <= n <= hi` (or `hi == 'inf'` and `n >= lo`); the level
+  is the one whose key names the job type, exactly (whitespace or commas, no case folding),
+  else the run's regular level. Job types: `opt`, `freq`, `sp`, `composite`, `irc`, `scan`
+  (ESS rotor scans) and `directed_scan` (a rotor is directed when its `directed_scan_type`
+  in `restart.yml` is not `ess`). The attributed level is the calculation's level (the
+  program is still the observed one, `ess_software`), and the attributed `sp`/`composite`
+  level is the energy level of the enthalpy check, so an adaptive run keeps a formation
+  enthalpy when `atom_corrections_level` matches it. When the level cannot be worked out
+  (no `restart.yml`, no adaptive spec or species entry there, no atom count, an uncovered
+  range, a malformed spec, or only `input.yml`) the previous rule applies: a named `opt`
+  refuses the upload, named `sp`, `freq`, `scan`/`directed_scan` and `irc` calculations are
+  omitted with `<kind>_level_adaptive_not_attributable` (one warning per kind per upload,
+  naming the labels), and a named `sp` or `composite` strips enthalpy
+  (`enthalpy_adaptive_levels_unverifiable`; S298 and Cp are kept). With only `output.yml`
+  an adaptive run cannot be detected and reads as an ordinary one.
+- **A3, TS guess.** ARC exports `neb_level` only when `orca_neb` is in the `ts_adapters`
+  the *user* listed (`arc/output.py:180`, `main.py:670`; see BRIDGE_ROADMAP B14 for the
+  default-config bug), plus `ess_software.neb` and `ess_versions.neb`. The NEB
+  path-search calculation carries `neb_level` and the observed NEB program; it never falls
+  back to `opt_level`, and never to `neb_level.software`, which ARC deduces from the method
+  (wb97xd/def2tzvp gives gaussian, not ORCA). Without `ess_software.neb` it is omitted with
+  `ts_guess_software_not_stated`. A GSM (xtb-gsm) guess has no exported level, and a NEB
+  guess without `neb_level` has none either: the calculation and the `optimized_from` edge
+  to it are omitted and `ts_guess_level_not_stated` is reported. The golden TS0's GSM path
+  search is therefore gone from both TS routes (strip-and-restore proof in
+  `test_golden_corpus.py`).
+- **A3, IRC level.** ARC runs the IRC at `irc_level` and `restart.yml` records it whenever
+  it differs from the settings default (`arc/main.py:480-483`): that level is used exactly,
+  with the program ARC's own rule gives (`arc/level.py:413-418`, called from
+  `Scheduler.deduce_job_adapter`, `arc/scheduler.py:1255`: an IRC is deduced as
+  Gaussian whatever software the level dict names; there is no `ess_software.irc`):
+  `{name: gaussian}` with no version, since none is observed and the opt banner is not
+  borrowed. The rule is not unconditional (UMA returns early with `ase`,
+  `arc/level.py:386-388`; torchani/xtb/gfn methods are assigned after it, `:421-426`), so
+  for those the IRC is not filed (`irc_software_not_stated`). `irc_level_assumed_opt_level`
+  is not emitted; the TS reference energy for the IRC's
+  relative energies is then taken only at that level (levels match on method, basis, aux
+  and cabs basis, and now also `dispersion` and `solvation_method`, so an SMD single point
+  is never the reference of a gas-phase IRC). When the adaptive levels name `irc`,
+  the species' adaptive level wins. With no recorded `irc_level` the IRC ran at
+  `default_levels_of_theory['irc']`, which the adapter cannot read; it keeps `opt_level` and
+  reports `irc_level_assumed_opt_level`, whose text now says that. ARC's parsers expose no
+  level from an IRC log.
+- **A4, screened conformers.** ARC screens conformers at `conformer_opt_level`, default
+  `wb97xd/def2svp` (`arc/settings/settings.py`), and `write_output_yml` exports no
+  conformer level. When `restart.yml` records `conformer_opt_level` with a program,
+  `job_types['conf_opt']` is true (otherwise the geometries are force-field ones) and the
+  adaptive levels do not name `conf_opt` for the species' range, the alternative conformers
+  whose `conformer_energies[i]` is not null are filed as bare opts at that level and program
+  (no banner version is borrowed from the selected conformer's opt). A null energy means
+  that conformer's `conf_opt` never finished, so `conformers[i]` is still the force-field
+  geometry (`arc/scheduler.py:3133-3140`, exported whole by `arc/output.py:1748-1751`); a
+  missing or misaligned energies list leaves all unverified. Known gap: when no conformer
+  converged ARC re-runs all of them at a troubleshooting level
+  (`arc/scheduler.py:5050-5078`, `ess_trsh_methods` `'conf_opt: <level>'`) while
+  `restart.yml`'s `conformer_opt_level` stays unchanged; that troubleshooting lives only in
+  the job objects (kept in `restart.yml` only while running) and is recorded nowhere durable,
+  so the adapter cannot tell and the level may then be wrong. Otherwise they are omitted and each species with distinct
+  ones reports `conformer_level_not_stated` (`omitted_count`).
+- **A14, IRC validation evidence.** `ts_checks['IRC']` (`arc/output.py`
+  `_ts_checks_to_dict`) is the verdict; `irc_converged` only means the IRC jobs finished
+  and is never used. A bool becomes `validation_evidence` with `passed` = the verdict and
+  the rationale exactly `ARC ts_checks['IRC'] = <verdict>`: `ts_checks['warnings']` come
+  only from the e_elect and NMD checks (`arc/checks/ts.py:175`, `arc/checks/nmd.py:93-131`),
+  never the IRC. `None` or no `ts_checks` sends nothing, so
+  `transition_state_missing_irc_evidence` stays. The reaction bundle binds the evidence to
+  the `ts_irc` calculation; the standalone route omits the key. A verdict with no IRC
+  calculation in the upload is not sent (`ts_irc_evidence_without_irc_calculation`).
+  Participant mappings stay omitted (ARC discards them, roadmap B10).
+
+Upgrading changes the payload hash, and so the idempotency key, of every TS upload
+with a GSM guess and of species uploads whose screened-conformer or level attribution changed.
