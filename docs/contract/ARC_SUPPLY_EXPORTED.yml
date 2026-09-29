@@ -1,0 +1,3399 @@
+# repo: ARC.worktrees/feature_arc_result_export_contract
+# A2 — ARC exported supply. What ARC writes out today for a downstream database.
+# Two artefacts make up the export surface:
+#   output/output.yml          — the tool-neutral result contract (arc/output.py)
+#   output/tckdb_evidence.json — the versioned parser-evidence sidecar (arc/tckdb_evidence.py)
+#
+# ROUTING RULE (see ARC_SUPPLY_EXPORTED.md "Keying"): per-species leaves are keyed
+# under `species_upload.*`. TCKDB mirrors the same species shape at
+# `reaction_upload.species[].*`, and the identical ARC value populates it; those
+# mirror paths are NOT duplicated here. TS leaves are keyed under
+# `reaction_upload.transition_state.*` (there is no species_upload home for a TS).
+# Reaction/kinetics leaves are keyed under `reaction_upload.*`.
+# Calculation routing: opt -> conformers[].primary_calculation;
+# freq / sp / scan / irc / path_search -> conformers[].additional_calculations[]
+# (species) or transition_state.calculations[] (TS).
+#
+# `fixture_evidence` citation classes:
+#   arc/testing/tckdb_evidence/golden/*  — committed golden fixture (strongest)
+#   arc/output_schema_test.py:*          — document built by the REAL writer and
+#                                          validated against the JSON schema
+#   arc/output_test.py:*                 — unit-level assertion on the emitted value
+#   null                                 — no test exercises this export path at all
+
+# ─────────────────────────────────────────────────────────────────────────────
+# output.yml — document header and run-level provenance
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: arc_only.output_yml.schema_version
+  arc_key: "output.yml: schema_version"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: >-
+    Contract version of output.yml itself ("1.1"). TCKDB has no field for a
+    producer-side document version; it is the gate a consumer must read before
+    trusting any other path in this inventory.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/output.yml:1
+  source: arc/output.py:115
+
+- path: arc_only.output_yml.project
+  arc_key: "output.yml: project"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: "ARC project name. No TCKDB home; TCKDB has no run/project entity."
+  fixture_evidence: arc/output_test.py:1335
+  source: arc/output.py:117
+
+- path: species_upload.workflow_tool_release.name
+  arc_key: "tckdb_evidence.json: producer.name"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: >-
+    Literal "ARC". Not present in output.yml at all — only the evidence sidecar
+    names the producer. A consumer reading output.yml alone must hardcode it.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:6
+  source: arc/tckdb_evidence.py:651
+
+- path: species_upload.workflow_tool_release.version
+  arc_key: "output.yml: arc_version; tckdb_evidence.json: producer.version"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: "ARC's VERSION constant, e.g. '1.1.0'."
+  fixture_evidence: arc/testing/tckdb_evidence/golden/output.yml:2
+  source: arc/output.py:118
+
+- path: species_upload.workflow_tool_release.git_commit
+  arc_key: "output.yml: arc_git_commit; tckdb_evidence.json: producer.git_commit"
+  availability: conditional
+  condition: >-
+    Null when ARC is not running from a git checkout (get_git_commit returns
+    empty). The golden fixture carries null, so the populated form is untested.
+  fidelity: exact
+  fidelity_note: >-
+    Full 40-char HEAD hash of the ARC repo. TCKDB constrains git_commit to
+    max_length 40, so a full hash fits exactly.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/output.yml:3
+  source: arc/output.py:119
+
+- path: reaction_upload.workflow_tool_release.name
+  arc_key: "tckdb_evidence.json: producer.name"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: "Same literal 'ARC' value as the species_upload route."
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:6
+  source: arc/tckdb_evidence.py:651
+
+- path: reaction_upload.workflow_tool_release.version
+  arc_key: "output.yml: arc_version"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: null
+  fixture_evidence: arc/testing/tckdb_evidence/golden/output.yml:2
+  source: arc/output.py:118
+
+- path: reaction_upload.workflow_tool_release.git_commit
+  arc_key: "output.yml: arc_git_commit"
+  availability: conditional
+  condition: "Null outside a git checkout; the golden fixture carries null."
+  fidelity: exact
+  fidelity_note: null
+  fixture_evidence: arc/testing/tckdb_evidence/golden/output.yml:3
+  source: arc/output.py:119
+
+- path: reaction_upload.analysis_software_release.name
+  arc_key: "(implied by output.yml: arkane_git_commit / arkane_level_of_theory)"
+  availability: conditional
+  condition: >-
+    ARC never writes the string "Arkane" anywhere in output.yml. The consumer
+    must infer the analysis-software name from the presence of
+    arkane_git_commit / arkane_level_of_theory.
+  fidelity: lossy
+  fidelity_note: >-
+    The producer name for the analysis code is not exported. Inference is the
+    only route; a non-Arkane StatmechAdapter would be indistinguishable.
+  fixture_evidence: null
+  source: arc/output.py:120
+
+- path: reaction_upload.analysis_software_release.revision
+  arc_key: "output.yml: arkane_git_commit"
+  availability: conditional
+  condition: >-
+    Requires settings['RMG_PATH'] to be set and to be a git checkout; returns
+    None otherwise. Arkane lives in RMG-Py, so this is the RMG-Py HEAD hash.
+  fidelity: derived
+  fidelity_note: >-
+    ARC exports a git commit hash; TCKDB's SoftwareReleaseRef has no git_commit
+    field, so it must land in `revision` (free string). It is RMG-Py's HEAD, not
+    an Arkane release version — TCKDB's `version` stays unsupplied.
+  fixture_evidence: arc/output_test.py:169
+  source: arc/output.py:250
+
+- path: arc_only.output_yml.datetime_started
+  arc_key: "output.yml: datetime_started"
+  availability: conditional
+  condition: "Null when the caller passes no t0 (e.g. a restart-restored run)."
+  fidelity: exact
+  fidelity_note: >-
+    Local-time string '%Y-%m-%d %H:%M', minute resolution, NO timezone offset.
+    TCKDB has no run-timestamp field. Only `parameters_extracted_at` takes a
+    datetime, and that is a per-calc parser timestamp, not a run start.
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:121
+
+- path: arc_only.output_yml.datetime_completed
+  arc_key: "output.yml: datetime_completed"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: >-
+    Local-time string '%Y-%m-%d %H:%M', no timezone. No TCKDB home.
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:124
+
+- path: arc_only.output_yml.tckdb_evidence.path
+  arc_key: "output.yml: tckdb_evidence.path"
+  availability: conditional
+  condition: >-
+    Written only when build_tckdb_evidence() and the atomic write both succeed;
+    on any exception the key is omitted entirely and output.yml is still written.
+  fidelity: exact
+  fidelity_note: "Constant 'tckdb_evidence.json', relative to output/."
+  fixture_evidence: arc/output_schema_test.py:523
+  source: arc/output.py:193
+
+- path: arc_only.output_yml.tckdb_evidence.schema_name
+  arc_key: "output.yml: tckdb_evidence.schema_name"
+  availability: conditional
+  condition: "Same gate as tckdb_evidence.path."
+  fidelity: exact
+  fidelity_note: "Constant 'arc-tckdb-evidence'."
+  fixture_evidence: arc/output_schema_test.py:523
+  source: arc/output.py:194
+
+- path: arc_only.output_yml.tckdb_evidence.schema_version
+  arc_key: "output.yml: tckdb_evidence.schema_version"
+  availability: conditional
+  condition: "Same gate as tckdb_evidence.path."
+  fidelity: exact
+  fidelity_note: "Constant '1.1' (EVIDENCE_SCHEMA_VERSION)."
+  fixture_evidence: arc/output_schema_test.py:523
+  source: arc/output.py:195
+
+- path: arc_only.output_yml.tckdb_evidence.document_id
+  arc_key: "output.yml: tckdb_evidence.document_id"
+  availability: conditional
+  condition: "Same gate as tckdb_evidence.path."
+  fidelity: exact
+  fidelity_note: >-
+    uuid4().hex, the join key between output.yml and tckdb_evidence.json. The
+    same value is written into the sidecar. No TCKDB home.
+  fixture_evidence: arc/output_schema_test.py:523
+  source: arc/output.py:181
+
+# ─────────────────────────────────────────────────────────────────────────────
+# output.yml — levels of theory (the `level_dict` shape, shared by
+# composite_method / opt_level / freq_level / sp_level / neb_level /
+# arkane_level_of_theory)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: species_upload.conformers[].primary_calculation.level_of_theory.method
+  arc_key: "output.yml: opt_level.method (also freq_level/sp_level/composite_method)"
+  availability: conditional
+  condition: >-
+    Null when the caller passes no opt_level. A composite run carries the method
+    on `composite_method` and leaves opt/freq/sp null.
+  fidelity: exact
+  fidelity_note: >-
+    Free string, ARC's own casing (e.g. 'wb97xd'). TCKDB requires method
+    min_length 1, so a run with a null level cannot produce a valid calculation.
+  fixture_evidence: arc/output_schema_test.py:646
+  source: arc/output.py:128
+
+- path: species_upload.conformers[].primary_calculation.level_of_theory.basis
+  arc_key: "output.yml: opt_level.basis"
+  availability: conditional
+  condition: "Absent from the level dict when the method needs no basis (semi-empirical, composite)."
+  fidelity: exact
+  fidelity_note: null
+  fixture_evidence: arc/output_schema_test.py:648
+  source: arc/output.py:128
+
+- path: species_upload.conformers[].primary_calculation.level_of_theory.aux_basis
+  arc_key: "output.yml: opt_level.auxiliary_basis"
+  availability: rare
+  condition: "Only present when the user set an auxiliary basis on the Level."
+  fidelity: derived
+  fidelity_note: "Renamed: ARC `auxiliary_basis` -> TCKDB `aux_basis`. Same value."
+  fixture_evidence: null
+  source: arc/output.py:262
+
+- path: species_upload.conformers[].primary_calculation.level_of_theory.cabs_basis
+  arc_key: "output.yml: opt_level.cabs"
+  availability: rare
+  condition: "F12 methods only."
+  fidelity: derived
+  fidelity_note: "Renamed: ARC `cabs` -> TCKDB `cabs_basis`. Same value."
+  fixture_evidence: null
+  source: arc/output.py:262
+
+- path: species_upload.conformers[].primary_calculation.level_of_theory.dispersion
+  arc_key: "output.yml: opt_level.dispersion"
+  availability: rare
+  condition: "Only when the Level carries an explicit dispersion correction."
+  fidelity: exact
+  fidelity_note: null
+  fixture_evidence: null
+  source: arc/output.py:262
+
+- path: species_upload.conformers[].primary_calculation.level_of_theory.solvent
+  arc_key: "output.yml: opt_level.solvent"
+  availability: conditional
+  condition: "Solvated runs only."
+  fidelity: exact
+  fidelity_note: null
+  fixture_evidence: arc/output_schema_test.py:607
+  source: arc/output.py:262
+
+- path: species_upload.conformers[].primary_calculation.level_of_theory.solvent_model
+  arc_key: "output.yml: opt_level.solvation_method"
+  availability: conditional
+  condition: "Solvated runs only."
+  fidelity: derived
+  fidelity_note: "Renamed: ARC `solvation_method` -> TCKDB `solvent_model`. Same value ('smd')."
+  fixture_evidence: arc/output_schema_test.py:607
+  source: arc/output.py:262
+
+- path: species_upload.conformers[].primary_calculation.level_of_theory.keywords
+  arc_key: "output.yml: opt_level.args"
+  availability: rare
+  condition: "Only when the user supplied ESS keyword args on the Level."
+  fidelity: derived
+  fidelity_note: >-
+    ARC emits `args` as a free-form dict (or string); TCKDB `keywords` is a flat
+    string. The dict must be flattened, and the flattening is not defined by ARC
+    — two adapters can legitimately produce different `keywords` for one run,
+    which breaks TCKDB's level-of-theory dedupe.
+  fixture_evidence: null
+  source: arc/output.py:262
+
+- path: species_upload.conformers[].primary_calculation.level_of_theory.spin_treatment
+  arc_key: null
+  availability: rare
+  condition: "Never exported. ARC's Level has no spin-treatment attribute and none is written."
+  fidelity: lossy
+  fidelity_note: >-
+    No ARC supply. Restricted-vs-unrestricted can only be inferred downstream
+    from `sp_spin_diagnostic` being non-null (which itself only fires when the
+    ESS printed <S**2>).
+  fixture_evidence: null
+  source: arc/output.py:262
+
+- path: species_upload.conformers[].primary_calculation.software_release.name
+  arc_key: "output.yml: opt_level.software"
+  availability: conditional
+  condition: "Null when the level is null; ARC also emits pseudo-'software' values (gcn, torchani, mockter) that are not ESS packages."
+  fidelity: exact
+  fidelity_note: "Lowercase ARC name ('gaussian', 'orca'). TCKDB requires name min_length 1."
+  fixture_evidence: arc/output_schema_test.py:493
+  source: arc/output.py:262
+
+- path: species_upload.conformers[].primary_calculation.software_release.version
+  arc_key: "output.yml: opt_level.software_version, or ess_versions.opt"
+  availability: conditional
+  condition: >-
+    `level.software_version` is only present when the user pinned it.
+    `ess_versions.opt` is populated only for a converged species whose opt log
+    is on disk and whose ESS version line parses.
+  fidelity: derived
+  fidelity_note: >-
+    Two competing sources with different formats: `ess_versions.opt` is the raw
+    banner string ('Gaussian 16, Revision C.01' / 'ORCA 5.0.4'), which contains
+    the software NAME as well as the version. TCKDB `version` is a bare version
+    string, so the banner must be split.
+  fixture_evidence: arc/output_test.py:507
+  source: arc/output.py:566
+
+- path: arc_only.output_yml.opt_level.method_type
+  arc_key: "output.yml: opt_level.method_type"
+  availability: conditional
+  condition: "Present in the level dict whenever ARC's Level classified the method."
+  fidelity: exact
+  fidelity_note: >-
+    ARC's method classification ('dft', 'wavefunction', 'composite', …). TCKDB's
+    LevelOfTheoryRef has no such field.
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:262
+
+- path: arc_only.output_yml.opt_level.year
+  arc_key: "output.yml: opt_level.year"
+  availability: rare
+  condition: "Only when ARC's Level carries a publication year for the method."
+  fidelity: exact
+  fidelity_note: "No TCKDB home."
+  fixture_evidence: null
+  source: arc/output.py:262
+
+- path: arc_only.output_yml.opt_level.solvation_scheme_level
+  arc_key: "output.yml: opt_level.solvation_scheme_level"
+  availability: rare
+  condition: "Only for runs using a solvation scheme evaluated at a second level."
+  fidelity: lossy
+  fidelity_note: >-
+    A whole nested level_dict. TCKDB's LevelOfTheoryRef is flat and has no
+    nested-level field, so the second level of theory has no home at all and is
+    destroyed on upload.
+  fixture_evidence: arc/output_schema_test.py:646
+  source: arc/output.py:274
+
+- path: species_upload.conformers[].additional_calculations[].level_of_theory.method
+  arc_key: "output.yml: freq_level.method / sp_level.method"
+  availability: conditional
+  condition: "Null when the caller passes no freq_level/sp_level; the runtime then falls back to opt_level."
+  fidelity: exact
+  fidelity_note: >-
+    Whole-run levels, not per-calculation. output.yml carries ONE freq_level and
+    ONE sp_level for the entire run — if a species was re-run at a different
+    level, that fact is not exported. The full level_dict leaf mapping above
+    applies identically here.
+  fixture_evidence: arc/output_schema_test.py:494
+  source: arc/output.py:129
+
+- path: species_upload.conformers[].additional_calculations[].software_release.name
+  arc_key: "output.yml: freq_level.software / sp_level.software"
+  availability: conditional
+  condition: "Null when the level is null; the writer falls back to opt's software for the deck-name lookup only."
+  fidelity: exact
+  fidelity_note: null
+  fixture_evidence: arc/output_schema_test.py:495
+  source: arc/output.py:149
+
+- path: reaction_upload.transition_state.calculations[].level_of_theory.method
+  arc_key: "output.yml: neb_level.method"
+  availability: conditional
+  condition: >-
+    The `neb_level` KEY IS OMITTED ENTIRELY when neb_level is None (the only
+    top-level key in output.yml that is omitted rather than nulled). Present
+    only for runs configured with orca_neb_settings.
+  fidelity: exact
+  fidelity_note: >-
+    Full level_dict leaf mapping as above. This is the level of the NEB TS
+    search, so it belongs on the TS's path_search calculation.
+  fixture_evidence: arc/output_schema_test.py:522
+  source: arc/output.py:131
+
+- path: arc_only.output_yml.composite_method
+  arc_key: "output.yml: composite_method"
+  availability: conditional
+  condition: "Non-null only for composite runs (CBS-QB3, G4). Null in every committed fixture."
+  fidelity: exact
+  fidelity_note: >-
+    A level_dict. TCKDB has no composite-method concept distinct from
+    level_of_theory; the composite method name must be pushed into
+    `level_of_theory.method` on every calculation, which loses the distinction
+    between "this calc ran at CBS-QB3" and "the run's composite method is CBS-QB3".
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:127
+
+- path: species_upload.applied_energy_corrections[].scheme.level_of_theory.method
+  arc_key: "output.yml: arkane_level_of_theory.method"
+  availability: conditional
+  condition: >-
+    Recorded only when Arkane's composite level differs from sp_level; null
+    otherwise (arc/output.py docstring, line 107).
+  fidelity: exact
+  fidelity_note: >-
+    The level Arkane's correction parameters were looked up at. Full level_dict
+    leaf mapping applies.
+  fixture_evidence: arc/output_test.py:1402
+  source: arc/output.py:133
+
+- path: species_upload.statmech.freq_scale_factor.value
+  arc_key: "output.yml: freq_scale_factor"
+  availability: conditional
+  condition: "Null when the run applied no frequency scaling."
+  fidelity: exact
+  fidelity_note: >-
+    Dimensionless factor. TCKDB requires value > 0. NOTE: the factor is applied
+    to statmech.e0_kj_mol but NOT to statmech.harmonic_frequencies_cm1 — see
+    that row.
+  fixture_evidence: arc/output_schema_test.py:498
+  source: arc/output.py:134
+
+- path: species_upload.statmech.freq_scale_factor.scale_kind
+  arc_key: null
+  availability: rare
+  condition: "Never exported. ARC emits a bare number with no scale-kind label."
+  fidelity: lossy
+  fidelity_note: >-
+    TCKDB distinguishes fundamental / zpe / enthalpy / entropy / heat_capacity
+    scale factors. ARC's single number is (by ARC convention) a fundamental
+    factor, but the export does not say so; the consumer must assume.
+  fixture_evidence: null
+  source: arc/output.py:134
+
+- path: species_upload.statmech.freq_scale_factor.source_literature
+  arc_key: "output.yml: freq_scale_factor_source"
+  availability: conditional
+  condition: >-
+    Null when the user explicitly supplied the scale factor, and null when the
+    freq level is not in ARC's data/freq_scale_factors.yml.
+  fidelity: lossy
+  fidelity_note: >-
+    ARC exports a single free-text citation string. TCKDB's LiteratureUploadRequest
+    is a structured record (authors, title, journal, year, DOI). Parsing ARC's
+    prose back into fields is not lossless and ARC does not export the DOI
+    separately.
+  fixture_evidence: arc/output_test.py:115
+  source: arc/output.py:135
+
+- path: species_upload.statmech.freq_scale_factor.software.name
+  arc_key: null
+  availability: rare
+  condition: "Never exported alongside the scale factor."
+  fidelity: lossy
+  fidelity_note: >-
+    The ESS the scale factor applies to must be inferred from freq_level.software.
+  fixture_evidence: null
+  source: arc/output.py:134
+
+- path: species_upload.applied_energy_corrections[].scheme.kind
+  arc_key: "output.yml: bac_type"
+  availability: conditional
+  condition: "'p', 'm', or null. Null when no BAC was requested."
+  fidelity: derived
+  fidelity_note: >-
+    ARC's one-letter code maps to TCKDB's enum: 'p' -> bac_petersson,
+    'm' -> bac_melius. The atom-energy correction's scheme kind (atom_energy) is
+    not encoded in bac_type at all; it is implied by
+    energy_corrections[].correction_type.
+  fixture_evidence: arc/output_schema_test.py:499
+  source: arc/output.py:139
+
+- path: species_upload.applied_energy_corrections[].scheme.atom_params[].element
+  arc_key: "output.yml: atom_energy_corrections (keys)"
+  availability: conditional
+  condition: >-
+    Requires a matched Arkane AEC key AND a successful subprocess call into the
+    RMG conda environment (arc/scripts/get_qm_corrections.py). Null on any failure.
+  fidelity: exact
+  fidelity_note: "Element symbol, e.g. 'C'."
+  fixture_evidence: arc/output_schema_test.py:710
+  source: arc/output.py:141
+
+- path: species_upload.applied_energy_corrections[].scheme.atom_params[].value
+  arc_key: "output.yml: atom_energy_corrections (values)"
+  availability: conditional
+  condition: "Same gate as atom_params[].element."
+  fidelity: lossy
+  fidelity_note: >-
+    UNIT: hartree. CRITICAL SEMANTIC TRAP — these are NOT per-atom corrections.
+    They are Arkane's bare atomic electronic energies, SUBTRACTED as a reference
+    (arc/output.py:891-899 says so explicitly and names the failure: reconstructing
+    the correction as sum(count*value) is wrong in both sign and ~1e5 kJ/mol in
+    magnitude). TCKDB's SchemeAtomParamPayload carries no `applied_as` flag, so
+    the sign convention is destroyed at the scheme level. The `applied_as` fact
+    survives only on energy_corrections[].reference_atom_energies.
+  fixture_evidence: arc/output_schema_test.py:710
+  source: arc/output.py:141
+
+- path: species_upload.applied_energy_corrections[].scheme.bond_params[].bond_key
+  arc_key: "output.yml: bond_additivity_corrections (keys, Petersson)"
+  availability: conditional
+  condition: "bac_type == 'p' AND a matched Arkane BAC key AND the RMG subprocess succeeded."
+  fidelity: exact
+  fidelity_note: "Bond key string, e.g. 'C-H'."
+  fixture_evidence: arc/output_test.py:1472
+  source: arc/output.py:142
+
+- path: species_upload.applied_energy_corrections[].scheme.bond_params[].value
+  arc_key: "output.yml: bond_additivity_corrections (values, Petersson)"
+  availability: conditional
+  condition: "bac_type == 'p'; same gate as bond_key."
+  fidelity: derived
+  fidelity_note: >-
+    UNIT MISMATCH RISK: kcal/mol, ARC's own docs record that an earlier revision
+    of arc/docs/output_yml_schema.md wrongly said kJ/mol (docs/output_yml_schema.md:258).
+    TCKDB's SchemeBondParamPayload.value carries no unit; the unit lives on
+    EnergyCorrectionSchemeRef.units, which must be set to `kcal_mol`.
+  fixture_evidence: arc/output_test.py:1472
+  source: arc/output.py:142
+
+- path: species_upload.applied_energy_corrections[].scheme.component_params[].component_kind
+  arc_key: "output.yml: bond_additivity_corrections (Melius nesting level 1)"
+  availability: conditional
+  condition: "bac_type == 'm' only."
+  fidelity: derived
+  fidelity_note: >-
+    ARC emits Arkane's nested Melius structure verbatim:
+    {atom_corr:{el:v}, bond_corr_length:{el:v}, bond_corr_neighbor:{el:v},
+    mol_corr:float}. TCKDB flattens this to a list of
+    (component_kind, key, value) triples. `mol_corr` is a bare float in ARC and
+    must be given a synthetic `key` to fit TCKDB's shape.
+  fixture_evidence: arc/output_schema_test.py:702
+  source: arc/output.py:142
+
+- path: species_upload.applied_energy_corrections[].scheme.component_params[].value
+  arc_key: "output.yml: bond_additivity_corrections (Melius leaf values)"
+  availability: conditional
+  condition: "bac_type == 'm' only."
+  fidelity: derived
+  fidelity_note: "kcal/mol; same unit-carrying problem as bond_params[].value."
+  fixture_evidence: arc/output_schema_test.py:702
+  source: arc/output.py:142
+
+- path: species_upload.applied_energy_corrections[].scheme.units
+  arc_key: null
+  availability: rare
+  condition: >-
+    Never exported at the scheme level. ARC states the unit per correction record
+    (energy_corrections[].total.unit) but the run-level parameter tables
+    atom_energy_corrections / bond_additivity_corrections carry no unit key.
+  fidelity: lossy
+  fidelity_note: >-
+    The consumer must hardcode hartree for the AEC table and kcal/mol for the BAC
+    table. This is the single most dangerous unit gap in the header block.
+  fixture_evidence: null
+  source: arc/output.py:141
+
+# ─────────────────────────────────────────────────────────────────────────────
+# output.yml — per-species identity
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: arc_only.output_yml.species.label
+  arc_key: "output.yml: species[].label"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: >-
+    ARC's run-unique species label. TCKDB's `ConformerInBundle.label` and
+    `BundleSpeciesIn.key` are bundle-local keys, not chemical identity, so the
+    label is a key source but is not itself an identity field. Kept as arc_only
+    because it joins nothing in TCKDB's identity model.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/output.yml:5
+  source: arc/output.py:1006
+
+- path: arc_only.output_yml.species.original_label
+  arc_key: "output.yml: species[].original_label"
+  availability: conditional
+  condition: "Non-null only when ARC renamed the species during the run (duplicate-label resolution)."
+  fidelity: exact
+  fidelity_note: "Provenance of the rename. No TCKDB home."
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:1007
+
+- path: species_upload.species_entry.smiles
+  arc_key: "output.yml: species[].smiles"
+  availability: conditional
+  condition: >-
+    Non-null only for a non-TS species with an RMG Molecule (spc.mol). Always
+    null for a TS. Also null when to_smiles() raises (swallowed by _safe).
+  fidelity: exact
+  fidelity_note: >-
+    RMG-generated SMILES from a deep copy of the molecule. TCKDB requires
+    smiles min_length 1, so a species whose mol is absent cannot be uploaded.
+  fixture_evidence: arc/output_test.py:789
+  source: arc/output.py:1021
+
+- path: species_upload.species_entry.charge
+  arc_key: "output.yml: species[].charge"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: "Net formal charge, integer."
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:1008
+
+- path: species_upload.species_entry.multiplicity
+  arc_key: "output.yml: species[].multiplicity"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: "Spin multiplicity, integer >= 1. TCKDB enforces ge=1."
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:1009
+
+- path: species_upload.species_entry.unmapped_smiles
+  arc_key: "output.yml: species[].smiles"
+  availability: conditional
+  condition: "Same gate as species_entry.smiles."
+  fidelity: exact
+  fidelity_note: >-
+    ARC exports one SMILES; TCKDB splits identity SMILES from display SMILES.
+    The same ARC string serves both.
+  fixture_evidence: arc/output_test.py:789
+  source: arc/output.py:1021
+
+- path: species_upload.species_entry.species_entry_kind
+  arc_key: "output.yml: species[].is_ts"
+  availability: always
+  condition: null
+  fidelity: derived
+  fidelity_note: >-
+    ARC's boolean `is_ts` maps to TCKDB's StationaryPointKind enum
+    (False -> minimum, True -> the TS branch of the reaction workflow). ARC
+    exports no finer stationary-point classification.
+  fixture_evidence: arc/output_schema_test.py:529
+  source: arc/output.py:1010
+
+- path: species_upload.species_entry.stereo_kind
+  arc_key: null
+  availability: rare
+  condition: "Never exported. ARC's SMILES may carry stereo but no stereo classification is written."
+  fidelity: lossy
+  fidelity_note: "No ARC supply; TCKDB defaults to `unspecified`."
+  fixture_evidence: null
+  source: arc/output.py:1021
+
+- path: species_upload.species_entry.electronic_state_kind
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: "No ARC supply; TCKDB defaults to `ground`. ARC does model excited states but does not export the distinction."
+  fixture_evidence: null
+  source: arc/output.py:1004
+
+- path: arc_only.output_yml.species.inchi
+  arc_key: "output.yml: species[].inchi"
+  availability: conditional
+  condition: "Non-TS with a molecule; null for TSs and on any RMG failure."
+  fidelity: exact
+  fidelity_note: >-
+    TCKDB's identity model is SMILES-first; InChI has no upload field. Useful as
+    an independent identity cross-check but currently discarded.
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:1022
+
+- path: arc_only.output_yml.species.inchi_key
+  arc_key: "output.yml: species[].inchi_key"
+  availability: conditional
+  condition: "Non-TS with a molecule; null for TSs."
+  fidelity: exact
+  fidelity_note: "No TCKDB upload field."
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:1023
+
+- path: arc_only.output_yml.species.formula
+  arc_key: "output.yml: species[].formula"
+  availability: conditional
+  condition: "Requires spc.mol; populated for TSs too (the only identity field a TS gets)."
+  fidelity: exact
+  fidelity_note: >-
+    RMG formula string. No TCKDB upload field — TCKDB derives composition from
+    the geometry/SMILES.
+  fixture_evidence: arc/output_test.py:789
+  source: arc/output.py:1018
+
+- path: arc_only.output_yml.species.converged
+  arc_key: "output.yml: species[].converged"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: >-
+    ARC's whole-species convergence verdict, distinct from
+    `opt_converged` (the opt job type). No TCKDB field: TCKDB has
+    `opt_result.converged` per calculation but no species-level verdict, and no
+    concept of uploading a failed species.
+  fixture_evidence: arc/output_test.py:1051
+  source: arc/output.py:1010
+
+# ─────────────────────────────────────────────────────────────────────────────
+# output.yml — geometries
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: species_upload.conformers[].geometry.xyz_text
+  arc_key: "output.yml: species[].xyz"
+  availability: conditional
+  condition: >-
+    Null when the species has neither final_xyz nor initial_xyz. A converged
+    monoatomic species gets a synthesised (0,0,0) one-atom geometry rather than
+    null.
+  fidelity: lossy
+  fidelity_note: >-
+    Format: ARC atom-line text (symbol + 3 coords per line), Angstrom, NO atom
+    count and NO comment line — unlike the canonical XYZ the evidence sidecar
+    emits. ISOTOPES ARE DESTROYED: xyz_to_str is called without
+    isotope_format, so the `isotopes` tuple on ARC's xyz dict is dropped from
+    every exported geometry in output.yml.
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:1041
+
+- path: species_upload.conformers[].geometry.isotopes
+  arc_key: null
+  availability: rare
+  condition: >-
+    Never exported by output.yml. ARC carries isotopes on every xyz dict but
+    xyz_to_str is always called without isotope_format.
+  fidelity: lossy
+  fidelity_note: >-
+    Isotopic substitution is silently and irrecoverably lost on every geometry
+    in output.yml. A deuterated species uploads as its natural-abundance
+    isotopologue. (The evidence sidecar's _superposed_displacement DOES read
+    isotopes internally — arc/tckdb_evidence.py:446 — so the data exists at
+    write time and is simply not serialised.)
+  fixture_evidence: null
+  source: arc/species/converter.py:138
+
+- path: species_upload.conformers[].primary_calculation.input_geometries[].xyz_text
+  arc_key: "output.yml: species[].opt_input_xyz"
+  availability: conditional
+  condition: >-
+    Null for a species with no initial_xyz. Semantics shift with the workflow:
+    when a coarse opt ran and parsed, this is the coarse opt's OUTPUT geometry;
+    otherwise it is the species' initial_xyz.
+  fidelity: lossy
+  fidelity_note: >-
+    Same isotope loss and same header-less atom-line format as `xyz`. The
+    workflow-dependent meaning is not self-describing: a consumer must read
+    `coarse_opt_log` to know which of the two things this geometry is.
+  fixture_evidence: arc/output_schema_test.py:641
+  source: arc/output.py:1118
+
+- path: species_upload.conformers[].primary_calculation.output_geometries[].geometry.xyz_text
+  arc_key: "output.yml: species[].xyz"
+  availability: conditional
+  condition: "Same gate as conformers[].geometry.xyz_text."
+  fidelity: lossy
+  fidelity_note: >-
+    The fine opt's final geometry, taken from spc.final_xyz rather than re-parsed
+    from the log (arc/output.py:1092-1094 says the re-parse is deliberately
+    discarded). Isotopes lost.
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:1041
+
+- path: species_upload.conformers[].primary_calculation.output_geometries[].role
+  arc_key: "(implied by the field name opt_input_xyz / coarse_opt_output_xyz)"
+  availability: always
+  condition: null
+  fidelity: derived
+  fidelity_note: >-
+    ARC encodes the geometry role in the KEY NAME, not as a value. The consumer
+    must map opt_input_xyz -> initial, xyz -> final,
+    coarse_opt_output_xyz -> final (of the coarse calc).
+  fixture_evidence: arc/output_schema_test.py:642
+  source: arc/output.py:1116
+
+- path: arc_only.output_yml.species.coarse_opt_input_xyz
+  arc_key: "output.yml: species[].coarse_opt_input_xyz"
+  availability: conditional
+  condition: >-
+    Non-null ONLY when a coarse opt ran AND its final geometry parsed. Explicitly
+    nulled (not omitted) otherwise — 'honest-empty beats fake provenance'.
+  fidelity: lossy
+  fidelity_note: >-
+    Maps to the coarse calculation's input_geometries[], but ARC exports no
+    separate calculation record for the coarse stage beyond coarse_opt_*
+    fields, so the TCKDB route depends on the adapter synthesising a second
+    calculation. Isotopes lost.
+  fixture_evidence: arc/output_schema_test.py:641
+  source: arc/output.py:1116
+
+- path: arc_only.output_yml.species.coarse_opt_output_xyz
+  arc_key: "output.yml: species[].coarse_opt_output_xyz"
+  availability: conditional
+  condition: "Same gate as coarse_opt_input_xyz."
+  fidelity: lossy
+  fidelity_note: >-
+    Parsed from the coarse opt log via parse_geometry. Same rounding as the log,
+    which may differ from the fine opt's input in the last digits. Isotopes lost.
+  fixture_evidence: arc/output_schema_test.py:642
+  source: arc/output.py:1117
+
+- path: species_upload.conformers[].geometry.xyz_text
+  arc_key: "output.yml: species[].conformers[]"
+  availability: conditional
+  condition: >-
+    KEY OMITTED (not nulled) when ARC has no screened conformers. Present only
+    when spc.conformers is non-empty after the conformer screen.
+  fidelity: lossy
+  fidelity_note: >-
+    A list of geometries at ONE conformer level. This is the second route into
+    the same TCKDB path as species[].xyz: ARC exports both the selected
+    geometry (`xyz`) and the full screened set (`conformers[]`) with no marker
+    saying which screened conformer is the selected one. Isotopes lost.
+  fixture_evidence: arc/output_schema_test.py:511
+  source: arc/output.py:1053
+
+- path: arc_only.output_yml.species.conformer_energies
+  arc_key: "output.yml: species[].conformer_energies"
+  availability: conditional
+  condition: >-
+    Emitted only alongside `conformers` (the schema requires them together —
+    output_schema_test.py:842 asserts conformers-without-energies is rejected).
+  fidelity: lossy
+  fidelity_note: >-
+    UNIT: kJ/mol, RELATIVE to the lowest conformer (so the minimum is exactly
+    0.0). TCKDB has no per-conformer relative energy field — CalculationScanPoint
+    has relative_energy_kj_mol but a conformer is not a scan point, and
+    sp_result.electronic_energy_hartree is ABSOLUTE hartree. The absolute
+    conformer energies are not exported, so the relative curve cannot be
+    converted; the information has no TCKDB home.
+  fixture_evidence: arc/output_schema_test.py:512
+  source: arc/output.py:1056
+
+# ─────────────────────────────────────────────────────────────────────────────
+# output.yml — per-species calculation results
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: species_upload.conformers[].additional_calculations[].sp_result.electronic_energy_hartree
+  arc_key: "output.yml: species[].sp_energy_hartree"
+  availability: conditional
+  condition: "Requires converged is True AND spc.e_elect is not None; null otherwise."
+  fidelity: derived
+  fidelity_note: >-
+    UNIT CONVERSION INSIDE ARC: spc.e_elect is kJ/mol internally and is divided
+    by E_h_kJmol on export, so the exported number is hartree and matches TCKDB
+    exactly. Verified by arc/output_test.py:1168.
+  fixture_evidence: arc/output_test.py:1168
+  source: arc/output.py:1067
+
+- path: species_upload.conformers[].additional_calculations[].freq_result.zpe_hartree
+  arc_key: "output.yml: species[].zpe_hartree"
+  availability: conditional
+  condition: >-
+    Null for a monoatomic species (explicitly null, not absent), null for a
+    non-converged species, and null when the freq log is missing or
+    parse_zpe_correction fails.
+  fidelity: derived
+  fidelity_note: >-
+    Round-trip conversion: parse_zpe_correction returns kJ/mol, ARC divides by
+    E_h_kJmol to get hartree. Matches TCKDB's unit exactly. This is the RAW ESS
+    ZPE — the frequency scale factor is NOT applied to it.
+  fixture_evidence: arc/output_schema_test.py:579
+  source: arc/output.py:1071
+
+- path: species_upload.conformers[].primary_calculation.opt_result.converged
+  arc_key: "output.yml: species[].opt_converged"
+  availability: conditional
+  condition: "Null when the species did not converge overall; otherwise output_dict['job_types']['opt']."
+  fidelity: exact
+  fidelity_note: "Boolean, per-job-type verdict."
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:1074
+
+- path: species_upload.conformers[].primary_calculation.opt_result.n_steps
+  arc_key: "output.yml: species[].opt_n_steps"
+  availability: conditional
+  condition: "Requires a converged species with a parseable opt log on disk; null on any parse failure."
+  fidelity: exact
+  fidelity_note: "Integer step count from parse_opt_steps. TCKDB enforces ge=0."
+  fixture_evidence: arc/output_test.py:422
+  source: arc/output.py:1096
+
+- path: species_upload.conformers[].primary_calculation.opt_result.final_energy_hartree
+  arc_key: "output.yml: species[].opt_final_energy_hartree"
+  availability: conditional
+  condition: "Requires a converged species with a parseable opt log on disk."
+  fidelity: derived
+  fidelity_note: "parse_e_elect returns kJ/mol; ARC divides by E_h_kJmol. Exported unit is hartree."
+  fixture_evidence: arc/output_test.py:394
+  source: arc/output.py:1096
+
+- path: arc_only.output_yml.species.coarse_opt_n_steps
+  arc_key: "output.yml: species[].coarse_opt_n_steps"
+  availability: conditional
+  condition: "Only when paths['geo_coarse'] is set and the species converged."
+  fidelity: exact
+  fidelity_note: >-
+    Belongs on a coarse-stage calculation record TCKDB would need to be given
+    explicitly; ARC exports no separate calculation for the coarse stage, only
+    these four coarse_opt_* fields hanging off the species.
+  fixture_evidence: arc/output_schema_test.py:640
+  source: arc/output.py:1084
+
+- path: arc_only.output_yml.species.coarse_opt_final_energy_hartree
+  arc_key: "output.yml: species[].coarse_opt_final_energy_hartree"
+  availability: conditional
+  condition: "Same gate as coarse_opt_n_steps."
+  fidelity: derived
+  fidelity_note: "kJ/mol -> hartree conversion inside _parse_opt_log, same as opt_final_energy_hartree."
+  fixture_evidence: arc/output_schema_test.py:640
+  source: arc/output.py:1084
+
+- path: species_upload.conformers[].additional_calculations[].freq_result.n_imag
+  arc_key: "output.yml: species[].freq_n_imag"
+  availability: conditional
+  condition: "Null for monoatomic and non-converged species; null when no frequency data exists at all."
+  fidelity: exact
+  fidelity_note: "Count of negative frequencies. 0 is a real value; None means 'no freq data'."
+  fixture_evidence: arc/output_schema_test.py:531
+  source: arc/output.py:1134
+
+- path: species_upload.conformers[].additional_calculations[].freq_result.imag_freq_cm1
+  arc_key: "output.yml: species[].imag_freq_cm1"
+  availability: conditional
+  condition: "Null for monoatomic/non-converged, and null when there are no imaginary modes."
+  fidelity: exact
+  fidelity_note: >-
+    UNIT cm^-1, SIGN NEGATIVE (imaginary modes carry their minus sign). This is
+    the MOST NEGATIVE mode, min() of the list. A stable species that converged
+    with a spurious imaginary mode reports it rather than hiding it.
+  fixture_evidence: arc/output_test.py:1174
+  source: arc/output.py:1135
+
+- path: species_upload.conformers[].additional_calculations[].freq_result.modes[].frequency_cm1
+  arc_key: "output.yml: species[].imaginary_frequencies_cm1 + statmech.harmonic_frequencies_cm1"
+  availability: conditional
+  condition: >-
+    The imaginary list is null for monoatomic/non-converged species and null
+    when there are none. The harmonic list requires a non-monoatomic converged
+    species with spc.freqs populated.
+  fidelity: lossy
+  fidelity_note: >-
+    TCKDB wants ONE ordered mode table; ARC exports TWO disjoint lists that
+    cannot be re-merged in the correct order. `imaginary_frequencies_cm1` holds
+    every negative mode sorted most-negative-first; `harmonic_frequencies_cm1`
+    holds the ESS-order list WITH ALL NEGATIVE MODES REMOVED for a TS
+    (arc/output.py:1395-1397). Neither carries a mode index, so
+    modes[].mode_index (TCKDB, 1-based, required ge=1) must be invented, and the
+    original ESS mode ordering of the imaginary modes is unrecoverable.
+  fixture_evidence: arc/output_schema_test.py:532
+  source: arc/output.py:1136
+
+- path: species_upload.conformers[].additional_calculations[].freq_result.modes[].is_imaginary
+  arc_key: "(implied by which of the two frequency lists the value came from)"
+  availability: conditional
+  condition: "Derivable whenever either frequency list is present."
+  fidelity: derived
+  fidelity_note: >-
+    ARC does not emit a per-mode flag. is_imaginary = (frequency_cm1 < 0),
+    which is safe because ARC exports imaginary modes with a negative sign.
+  fixture_evidence: arc/output_test.py:1174
+  source: arc/output.py:1136
+
+- path: species_upload.conformers[].additional_calculations[].freq_result.modes[].reduced_mass_amu
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: "No ARC supply for reduced mass, force constant, IR intensity, Raman activity, or symmetry label."
+  fixture_evidence: null
+  source: arc/output.py:1136
+
+- path: species_upload.conformers[].additional_calculations[].freq_result.reaction_coordinate_mode_index
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC knows which mode is the reaction coordinate (it is the most negative,
+    imag_freq_cm1) but exports no mode INDEX, so the 1-based pointer TCKDB wants
+    cannot be supplied.
+  fixture_evidence: null
+  source: arc/output.py:1135
+
+- path: species_upload.conformers[].additional_calculations[].spin_diagnostic.s_squared
+  arc_key: "output.yml: species[].sp_spin_diagnostic.s_squared"
+  availability: conditional
+  condition: >-
+    Whole block is null (key present, value null) for restricted/closed-shell
+    calcs and for non-converged species. Requires the ESS to have printed
+    <S**2>; parsed from the sp log, falling back to freq then opt.
+  fidelity: exact
+  fidelity_note: "Dimensionless <S^2>. TCKDB enforces ge=0."
+  fixture_evidence: arc/output_schema_test.py:521
+  source: arc/output.py:414
+
+- path: species_upload.conformers[].additional_calculations[].spin_diagnostic.s_squared_expected
+  arc_key: "output.yml: sp_spin_diagnostic.s_squared_expected"
+  availability: conditional
+  condition: >-
+    KEY OMITTED (not nulled) when neither ARC's multiplicity nor the log yields
+    a value. The schema rejects an explicit null here (output_schema_test.py:837).
+  fidelity: derived
+  fidelity_note: >-
+    Authoritatively RECOMPUTED from ARC's own multiplicity via
+    s_squared_expected_from_multiplicity, overriding whatever the ESS log
+    reported. So this is ARC's value, not the ESS's — a divergence between them
+    is silently resolved in ARC's favour and the ESS's claim is discarded.
+  fixture_evidence: arc/output_test.py:448
+  source: arc/output.py:419
+
+- path: species_upload.conformers[].additional_calculations[].spin_diagnostic.s_squared_annihilated
+  arc_key: "output.yml: sp_spin_diagnostic.s_squared_annihilated"
+  availability: conditional
+  condition: "KEY OMITTED when the ESS printed no annihilated value (ORCA does not)."
+  fidelity: exact
+  fidelity_note: null
+  fixture_evidence: arc/output_test.py:471
+  source: arc/output.py:422
+
+- path: species_upload.conformers[].additional_calculations[].wavefunction_diagnostic.t1_diagnostic
+  arc_key: null
+  availability: rare
+  condition: "Never exported. ARC parses no T1/D1 diagnostic into output.yml."
+  fidelity: lossy
+  fidelity_note: "No ARC supply for the whole WavefunctionDiagnosticPayload."
+  fixture_evidence: null
+  source: arc/output.py:1149
+
+# ─────────────────────────────────────────────────────────────────────────────
+# output.yml — file paths and ESS provenance
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: species_upload.conformers[].primary_calculation.artifacts[].filename
+  arc_key: "output.yml: species[].opt_log"
+  availability: conditional
+  condition: "Null when paths['geo'] is unset."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC exports a run-relative PATH; TCKDB's ArtifactIn requires
+    content_base64 (the file contents) plus a bare filename. The path is a
+    pointer into the ARC run directory that the database never sees, so the
+    adapter must read the file off disk. If the run directory is gone, the
+    export is unusable.
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:1139
+
+- path: species_upload.conformers[].additional_calculations[].artifacts[].filename
+  arc_key: "output.yml: species[].freq_log, species[].sp_log"
+  availability: conditional
+  condition: "Null when the corresponding paths[] slot is unset."
+  fidelity: lossy
+  fidelity_note: "Same path-vs-content problem as opt_log."
+  fixture_evidence: arc/testing/tckdb_evidence/golden/output.yml:6
+  source: arc/output.py:1140
+
+- path: arc_only.output_yml.species.opt_input
+  arc_key: "output.yml: species[].opt_input"
+  availability: conditional
+  condition: >-
+    Requires the ESS input deck to be a sibling of the log, named per
+    settings['input_filenames'][software], AND still on disk. Null for archived
+    runs that kept the log and discarded the deck, and null for pseudo-ESS
+    software (gcn, torchani, mockter) with no entry in the filename map.
+  fidelity: lossy
+  fidelity_note: >-
+    Route is ArtifactIn(kind=input), so again a path where TCKDB wants content.
+    Recorded as arc_only because the path itself has no TCKDB field.
+  fixture_evidence: arc/output_schema_test.py:473
+  source: arc/output.py:1160
+
+- path: arc_only.output_yml.species.freq_input
+  arc_key: "output.yml: species[].freq_input"
+  availability: conditional
+  condition: "Same gate as opt_input, using freq_level.software (falling back to opt's)."
+  fidelity: lossy
+  fidelity_note: "Same as opt_input."
+  fixture_evidence: null
+  source: arc/output.py:1163
+
+- path: arc_only.output_yml.species.sp_input
+  arc_key: "output.yml: species[].sp_input"
+  availability: conditional
+  condition: "Same gate as opt_input, using sp_level.software (falling back to opt's)."
+  fidelity: lossy
+  fidelity_note: "Same as opt_input."
+  fixture_evidence: null
+  source: arc/output.py:1166
+
+- path: arc_only.output_yml.species.ess_versions
+  arc_key: "output.yml: species[].ess_versions"
+  availability: conditional
+  condition: >-
+    Null for a non-converged species and null when no log parses. Keys present
+    only for the job types whose log was on disk and parsed: sp, opt, freq, neb.
+  fidelity: lossy
+  fidelity_note: >-
+    A per-species {job_type: banner_string} map. TCKDB models software version
+    per CALCULATION (software_release.version), not per species, and expects a
+    version string, not a banner containing the vendor name. Recorded as
+    arc_only for the map itself; the individual values feed
+    software_release.version (see that row).
+  fixture_evidence: arc/output_test.py:513
+  source: arc/output.py:1220
+
+# ─────────────────────────────────────────────────────────────────────────────
+# output.yml — held-fixed constraints
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: species_upload.conformers[].primary_calculation.constraints[].constraint_kind
+  arc_key: "output.yml: species[].opt_constraints[].coordinate_type"
+  availability: conditional
+  condition: >-
+    Empty list unless the software is gaussian or orca AND a deck or log with a
+    constraint block is on disk and parses. Never raises; degrades to [].
+  fidelity: derived
+  fidelity_note: >-
+    Vocabulary mismatch: ARC emits {cartesian, distance, angle, dihedral};
+    TCKDB's ConstraintKind is {cartesian_atom, bond, angle, dihedral, improper}.
+    'cartesian' -> 'cartesian_atom' and 'distance' -> 'bond' must be renamed.
+    ARC has no 'improper'.
+  fixture_evidence: arc/output_schema_test.py:520
+  source: arc/output.py:1174
+
+- path: species_upload.conformers[].primary_calculation.constraints[].atom1_index
+  arc_key: "output.yml: species[].opt_constraints[].atom_indices + .index_base"
+  availability: conditional
+  condition: "Same gate as constraint_kind."
+  fidelity: derived
+  fidelity_note: >-
+    INDEX-BASE HAZARD — THE HIGHEST-RISK ROW IN THIS INVENTORY. ARC's constraint
+    index base is SOFTWARE-DEPENDENT and ARC says so in the record: the Gaussian
+    parser emits index_base 1 (arc/parser/adapters/gaussian.py:1524) and the
+    ORCA parser emits index_base 0 (arc/parser/adapters/orca.py:747). TCKDB's
+    CalculationConstraintPayload has NO index_base field and hard-requires
+    atom1_index >= 1. An ORCA-sourced constraint therefore needs +1 on every
+    index, and an unconverted ORCA constraint on atom 0 is REJECTED by
+    validation while a constraint on atoms 1..N is silently accepted pointing at
+    the wrong atoms.
+  fixture_evidence: arc/output_schema_test.py:520
+  source: arc/output.py:1174
+
+- path: species_upload.conformers[].primary_calculation.constraints[].target_value
+  arc_key: "output.yml: species[].opt_constraints[].target_value"
+  availability: conditional
+  condition: "Null when the deck froze the coordinate without stating a value (Gaussian 'F' action)."
+  fidelity: lossy
+  fidelity_note: >-
+    NO UNIT IS EXPORTED. The value is in the ESS deck's native unit — Angstrom
+    for a distance, degrees for an angle/dihedral — and neither ARC nor TCKDB
+    records which. A consumer must infer the unit from coordinate_type.
+  fixture_evidence: arc/output_schema_test.py:520
+  source: arc/output.py:1174
+
+- path: species_upload.conformers[].primary_calculation.constraints[].constraint_index
+  arc_key: "(implied by list position in opt_constraints[])"
+  availability: conditional
+  condition: "Derivable whenever constraints are present."
+  fidelity: derived
+  fidelity_note: >-
+    ARC emits an unnumbered list; TCKDB requires a 1-based constraint_index.
+    The adapter must number from 1, i.e. enumerate(..., start=1).
+  fixture_evidence: arc/output_schema_test.py:520
+  source: arc/output.py:1174
+
+- path: species_upload.conformers[].additional_calculations[].constraints[].constraint_kind
+  arc_key: "output.yml: species[].freq_constraints[], species[].sp_constraints[]"
+  availability: conditional
+  condition: "Same gate as opt_constraints, per job type."
+  fidelity: derived
+  fidelity_note: >-
+    Identical rename and index-base hazard as the primary_calculation route.
+    Note ARC parses constraints for sp and freq jobs too, which in practice are
+    almost always empty.
+  fixture_evidence: null
+  source: arc/output.py:1178
+
+- path: arc_only.output_yml.species.opt_final_settings.optimization_stage
+  arc_key: "output.yml: species[].opt_final_settings.optimization_stage"
+  availability: conditional
+  condition: >-
+    Non-null ONLY when a coarse opt ran and its geometry parsed; the whole dict
+    is null for single-stage opts. Value is the literal 'fine'.
+  fidelity: exact
+  fidelity_note: >-
+    ARC's two-stage-opt convention marker. TCKDB has parameters_json /
+    parameters[] as a free-form home, but no first-class stage concept, so this
+    is arc_only demand: it is the only per-calc execution-control fact ARC can
+    currently prove.
+  fixture_evidence: arc/output_schema_test.py:638
+  source: arc/output.py:1207
+
+- path: arc_only.output_yml.species.coarse_opt_final_settings.optimization_stage
+  arc_key: "output.yml: species[].coarse_opt_final_settings.optimization_stage"
+  availability: conditional
+  condition: "Same gate; value is the literal 'coarse'."
+  fidelity: exact
+  fidelity_note: "Same as opt_final_settings."
+  fixture_evidence: arc/output_schema_test.py:639
+  source: arc/output.py:1208
+
+- path: species_upload.conformers[].additional_calculations[].parameters_json
+  arc_key: "output.yml: species[].freq_final_settings, species[].sp_final_settings"
+  availability: always
+  condition: null
+  fidelity: lossy
+  fidelity_note: >-
+    ALWAYS NULL BY CONSTRUCTION. The schema pins these to type `null`
+    (output_yml_schema.json $defs/common_species_fields) and
+    output_schema_test.py:827 asserts a populated freq_final_settings is
+    REJECTED. ARC deliberately exports no execution-control parameters for freq
+    or sp: grid, scf_convergence, max_cycles, symmetry and guess are all
+    computed and used but never written out.
+  fixture_evidence: arc/output_schema_test.py:827
+  source: arc/output.py:1212
+
+# ─────────────────────────────────────────────────────────────────────────────
+# output.yml — thermochemistry
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: species_upload.thermo.h298_kj_mol
+  arc_key: "output.yml: species[].thermo.h298_kj_mol"
+  availability: conditional
+  condition: >-
+    The whole `thermo` block is null unless the species is a non-TS, converged,
+    has spc.thermo, AND spc.thermo.H298 is not None — i.e. Arkane's thermo step
+    completed. Always null for a TS (the schema pins ts_record.thermo to null).
+  fidelity: exact
+  fidelity_note: "UNIT kJ/mol on both sides. Same name, same unit."
+  fixture_evidence: arc/output_schema_test.py:517
+  source: arc/output.py:1344
+
+- path: species_upload.thermo.s298_j_mol_k
+  arc_key: "output.yml: species[].thermo.s298_j_mol_k"
+  availability: conditional
+  condition: "Same gate as h298_kj_mol; may itself be null within a present thermo block."
+  fidelity: exact
+  fidelity_note: "UNIT J/(mol*K) on both sides."
+  fixture_evidence: arc/output_schema_test.py:516
+  source: arc/output.py:1345
+
+- path: species_upload.thermo.tmin_k
+  arc_key: "output.yml: species[].thermo.tmin_k"
+  availability: conditional
+  condition: "Same gate; nullable within the block."
+  fidelity: exact
+  fidelity_note: >-
+    ARC unwraps RMG's (value, units) tuple and keeps only the value, assuming K.
+    The unit tuple is discarded without checking it was 'K'.
+  fixture_evidence: arc/output_test.py:217
+  source: arc/output.py:1346
+
+- path: species_upload.thermo.tmax_k
+  arc_key: "output.yml: species[].thermo.tmax_k"
+  availability: conditional
+  condition: "Same gate; nullable within the block."
+  fidelity: exact
+  fidelity_note: "Same tuple-unwrapping caveat as tmin_k."
+  fixture_evidence: arc/output_test.py:217
+  source: arc/output.py:1347
+
+- path: species_upload.thermo.points[].temperature_k
+  arc_key: "output.yml: species[].thermo.thermo_points[].temperature_k"
+  availability: conditional
+  condition: >-
+    Two shapes. Preferred: the full 5-key point list from
+    arc/scripts/save_arkane_thermo.py, evaluated at a fixed 9-temperature grid
+    (300, 400, 500, 600, 800, 1000, 1500, 2000, 2400 K) filtered to the
+    polynomial's valid range. Fallback: a Cp-ONLY list rebuilt from RMG's
+    legacy Tdata/Cpdata. Null when neither is available.
+  fidelity: exact
+  fidelity_note: "UNIT K. TCKDB enforces gt=0."
+  fixture_evidence: arc/output_schema_test.py:516
+  source: arc/output.py:1359
+
+- path: species_upload.thermo.points[].cp_j_mol_k
+  arc_key: "output.yml: species[].thermo.thermo_points[].cp_j_mol_k"
+  availability: conditional
+  condition: "Present in both point shapes."
+  fidelity: exact
+  fidelity_note: "UNIT J/(mol*K), RMG's native SI. Same name and unit as TCKDB."
+  fixture_evidence: arc/output_schema_test.py:516
+  source: arc/output.py:1363
+
+- path: species_upload.thermo.points[].h_kj_mol
+  arc_key: "output.yml: species[].thermo.thermo_points[].h_kj_mol"
+  availability: conditional
+  condition: >-
+    Present ONLY in the save_arkane_thermo shape. OMITTED entirely in the
+    legacy Tdata/Cpdata fallback, which carries temperature and Cp only.
+  fidelity: derived
+  fidelity_note: >-
+    UNIT: RMG returns J/mol; save_arkane_thermo divides by 1000 to kJ/mol
+    (arc/scripts/save_arkane_thermo.py:69). Matches TCKDB's kJ/mol exactly.
+  fixture_evidence: arc/output_schema_test.py:516
+  source: arc/scripts/save_arkane_thermo.py:77
+
+- path: species_upload.thermo.points[].s_j_mol_k
+  arc_key: "output.yml: species[].thermo.thermo_points[].s_j_mol_k"
+  availability: conditional
+  condition: "Present only in the save_arkane_thermo shape; omitted in the legacy fallback."
+  fidelity: exact
+  fidelity_note: "UNIT J/(mol*K), RMG native SI, no conversion."
+  fixture_evidence: arc/output_schema_test.py:516
+  source: arc/scripts/save_arkane_thermo.py:78
+
+- path: species_upload.thermo.points[].g_kj_mol
+  arc_key: "output.yml: species[].thermo.thermo_points[].g_kj_mol"
+  availability: conditional
+  condition: "Present only in the save_arkane_thermo shape; omitted in the legacy fallback."
+  fidelity: derived
+  fidelity_note: "UNIT: J/mol -> kJ/mol (divide by 1000), same as h_kj_mol."
+  fixture_evidence: arc/output_schema_test.py:516
+  source: arc/scripts/save_arkane_thermo.py:79
+
+- path: species_upload.thermo.nasa.t_low
+  arc_key: "output.yml: species[].thermo.nasa_low.tmin_k"
+  availability: conditional
+  condition: >-
+    Requires an Arkane NASA object with at least two polynomials; null for
+    non-NASA thermo (e.g. Wilhoit) and for the legacy fallback path.
+  fidelity: exact
+  fidelity_note: "UNIT K, from RMG's value_si."
+  fixture_evidence: arc/output_schema_test.py:517
+  source: arc/scripts/save_arkane_thermo.py:30
+
+- path: species_upload.thermo.nasa.t_mid
+  arc_key: "output.yml: species[].thermo.nasa_low.tmax_k (== nasa_high.tmin_k)"
+  availability: conditional
+  condition: "Same gate as t_low."
+  fidelity: derived
+  fidelity_note: >-
+    SHAPE MISMATCH. ARC exports two independent {tmin_k, tmax_k} pairs; TCKDB
+    wants three bounds t_low/t_mid/t_high. The mid bound is nasa_low.tmax_k,
+    which ARC does not guarantee equals nasa_high.tmin_k — if the two polynomials
+    were fitted with a gap, collapsing to three bounds silently loses it.
+  fixture_evidence: arc/output_schema_test.py:517
+  source: arc/scripts/save_arkane_thermo.py:30
+
+- path: species_upload.thermo.nasa.t_high
+  arc_key: "output.yml: species[].thermo.nasa_high.tmax_k"
+  availability: conditional
+  condition: "Same gate as t_low."
+  fidelity: exact
+  fidelity_note: "UNIT K."
+  fixture_evidence: arc/output_schema_test.py:517
+  source: arc/scripts/save_arkane_thermo.py:32
+
+- path: species_upload.thermo.nasa.a1
+  arc_key: "output.yml: species[].thermo.nasa_low.coeffs"
+  availability: conditional
+  condition: "Same gate as t_low."
+  fidelity: derived
+  fidelity_note: >-
+    SHAPE MISMATCH. ARC exports `coeffs` as an ORDERED LIST OF 7 FLOATS; TCKDB
+    wants seven named scalars a1..a7 (low) and b1..b7 (high). The mapping is
+    positional — coeffs[0] -> a1 … coeffs[6] -> a7 — and depends entirely on
+    RMG's NASAPolynomial.coeffs ordering, which ARC does not label. There is no
+    validation on either side that would catch a reversed or rotated list.
+    ARC exports no explicit coefficient count either; a 9-coefficient NASA-9
+    polynomial would silently overflow the a1..a7 slots.
+  fixture_evidence: arc/output_schema_test.py:517
+  source: arc/scripts/save_arkane_thermo.py:31
+
+- path: species_upload.thermo.nasa.b1
+  arc_key: "output.yml: species[].thermo.nasa_high.coeffs"
+  availability: conditional
+  condition: "Same gate as t_low."
+  fidelity: derived
+  fidelity_note: "Same positional list -> named-scalar mapping as a1..a7, for the high-T polynomial."
+  fixture_evidence: arc/output_schema_test.py:517
+  source: arc/scripts/save_arkane_thermo.py:33
+
+- path: species_upload.thermo.scientific_origin
+  arc_key: null
+  availability: rare
+  condition: "Never exported; TCKDB defaults to `computed`, which happens to be right for every ARC run."
+  fidelity: derived
+  fidelity_note: "Constant, not supplied."
+  fixture_evidence: null
+  source: arc/output.py:1343
+
+- path: species_upload.thermo.source_calculations[].calculation_key
+  arc_key: null
+  availability: rare
+  condition: >-
+    Never exported. ARC does not link the thermo record back to the specific
+    opt/freq/sp calculations Arkane consumed.
+  fidelity: lossy
+  fidelity_note: >-
+    The thermo->calculation provenance edge has no ARC supply; an adapter can
+    only guess that "all this species' calculations" fed the thermo.
+  fixture_evidence: null
+  source: arc/output.py:1286
+
+# ─────────────────────────────────────────────────────────────────────────────
+# output.yml — statistical mechanics
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: arc_only.output_yml.species.statmech.e0_kj_mol
+  arc_key: "output.yml: species[].statmech.e0_kj_mol"
+  availability: conditional
+  condition: >-
+    The whole statmech block is null for a monoatomic or non-converged species.
+    e0 itself is null when Arkane never populated spc.e0.
+  fidelity: lossy
+  fidelity_note: >-
+    UNIT kJ/mol. TCKDB's StatmechInBundle has NO ground-state-energy field at
+    all — energies live on calculations (sp_result.electronic_energy_hartree,
+    hartree) and on thermo. E0 is the ZPE- and correction-inclusive ground-state
+    energy, which is neither of those, so it has no home. Note ARC HAS applied
+    the frequency scale factor to this number but NOT to
+    harmonic_frequencies_cm1, so recomputing E0 from the exported frequencies
+    will not reproduce it (docs/output_yml_schema.md:489).
+  fixture_evidence: arc/output_schema_test.py:515
+  source: arc/output.py:1400
+
+- path: species_upload.species_entry.multiplicity
+  arc_key: "output.yml: species[].statmech.spin_multiplicity"
+  availability: conditional
+  condition: "Null when the statmech block is null."
+  fidelity: exact
+  fidelity_note: >-
+    Duplicate of species[].multiplicity from the same attribute; TCKDB's
+    StatmechInBundle has no multiplicity field, so it can only join the species
+    entry. Redundant but consistent.
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:1401
+
+- path: species_upload.statmech.optical_isomers
+  arc_key: "output.yml: species[].statmech.optical_isomers"
+  availability: conditional
+  condition: "Null when the statmech block is null; may be null within the block."
+  fidelity: exact
+  fidelity_note: "Integer count. TCKDB enforces ge=1; ARC's schema permits null."
+  fixture_evidence: arc/output_test.py:696
+  source: arc/output.py:1402
+
+- path: species_upload.statmech.is_linear
+  arc_key: "output.yml: species[].statmech.is_linear"
+  availability: conditional
+  condition: "Null when the statmech block is null."
+  fidelity: exact
+  fidelity_note: >-
+    Read from the CACHED private attribute spc._is_linear specifically to avoid
+    triggering a geometry re-read, so it reflects whatever ARC last computed.
+  fixture_evidence: arc/output_test.py:283
+  source: arc/output.py:1403
+
+- path: species_upload.statmech.external_symmetry
+  arc_key: "output.yml: species[].statmech.external_symmetry"
+  availability: conditional
+  condition: "Null when the statmech block is null."
+  fidelity: exact
+  fidelity_note: "Integer symmetry number. TCKDB enforces ge=1."
+  fixture_evidence: arc/output_test.py:696
+  source: arc/output.py:1404
+
+- path: species_upload.statmech.point_group
+  arc_key: "output.yml: species[].statmech.point_group"
+  availability: conditional
+  condition: >-
+    Requires a successful subprocess call to arc/scripts/get_point_groups.py in
+    the RMG conda environment (the `symmetry` binary). Null for every species
+    on any whole-batch failure — the writer degrades to {} rather than crashing.
+  fidelity: exact
+  fidelity_note: "Schoenflies string, e.g. 'C2v'."
+  fixture_evidence: arc/output_test.py:1219
+  source: arc/output.py:1405
+
+- path: species_upload.statmech.rigid_rotor_kind
+  arc_key: "output.yml: species[].statmech.rigid_rotor_kind"
+  availability: conditional
+  condition: "Null when the statmech block is null."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC emits only two of TCKDB's five values: 'linear' or 'asymmetric_top'.
+    The 'atom' branch exists in _statmech_to_dict (arc/output.py:1388) but is
+    UNREACHABLE — the caller only builds statmech for non-monoatomic species —
+    and the JSON schema actively rejects it (output_schema_test.py:822).
+    'spherical_top' and 'symmetric_top' are never emitted: every non-linear
+    polyatomic is labelled asymmetric_top regardless of its actual rotor class,
+    so methane and benzene are both misreported.
+  fixture_evidence: arc/output_schema_test.py:822
+  source: arc/output.py:1406
+
+- path: species_upload.statmech.statmech_treatment
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC emits no rrho/rrho_1d/rrho_nd classification. TCKDB validates that a
+    rotor-aware treatment lists its torsions, so an adapter must derive the
+    treatment from whether torsions[] is non-empty rather than read it.
+  fixture_evidence: null
+  source: arc/output.py:1399
+
+- path: species_upload.statmech.uses_projected_frequencies
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: "No ARC supply."
+  fixture_evidence: null
+  source: arc/output.py:1399
+
+- path: species_upload.statmech.rotational_constant_a_cm1
+  arc_key: null
+  availability: rare
+  condition: "Never exported; ARC writes no rotational constants into output.yml."
+  fidelity: lossy
+  fidelity_note: "No ARC supply for A/B/C rotational constants."
+  fixture_evidence: null
+  source: arc/output.py:1399
+
+- path: species_upload.statmech.source_calculations[].calculation_key
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: >-
+    The statmech->calculation provenance edge has no ARC supply, the same gap as
+    thermo.source_calculations.
+  fixture_evidence: null
+  source: arc/output.py:1399
+
+- path: species_upload.statmech.torsions[].symmetry_number
+  arc_key: "output.yml: species[].statmech.torsions[].symmetry_number"
+  availability: conditional
+  condition: >-
+    One entry per rotor in spc.rotors_dict whose 'success' is exactly True;
+    unsuccessful rotors are skipped entirely. Defaults to 1 when the rotor dict
+    carries no symmetry.
+  fidelity: exact
+  fidelity_note: "Integer. TCKDB enforces ge=1."
+  fixture_evidence: arc/output_schema_test.py:515
+  source: arc/output.py:1446
+
+- path: species_upload.statmech.torsions[].treatment_kind
+  arc_key: "output.yml: species[].statmech.torsions[].treatment"
+  availability: conditional
+  condition: "Same gate as symmetry_number."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC collapses the rotor type to two values by a substring test:
+    'free_rotor' if 'Free' appears in str(rotor['type']), else 'hindered_rotor'.
+    TCKDB also has 'rigid_top' and 'hindered_rotor_dos', which ARC can never
+    emit; any ARC rotor type that is neither Free nor a classic hindered rotor
+    is silently reported as hindered_rotor.
+  fixture_evidence: arc/output_test.py:343
+  source: arc/output.py:1447
+
+- path: species_upload.statmech.torsions[].dimension
+  arc_key: "output.yml: species[].statmech.torsions[].dimension"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: exact
+  fidelity_note: "Integer >= 1. ND rotors are exported as torsions even though only 1D rotors get scan records."
+  fixture_evidence: arc/output_schema_test.py:624
+  source: arc/output.py:1448
+
+- path: species_upload.statmech.torsions[].coordinates[].atom1_index
+  arc_key: "output.yml: species[].statmech.torsions[].atom_indices"
+  availability: conditional
+  condition: "Same gate. Null when the rotor dict carries no 'scan'."
+  fidelity: derived
+  fidelity_note: >-
+    INDEX BASE: 1-based on both sides — ARC's rotors_dict['scan'] is
+    1-indexed (asserted at arc/output.py:1437 and enforced upstream), and TCKDB
+    requires atom1..atom4_index >= 1. NO CONVERSION NEEDED, but ALSO NO
+    index_base FIELD IS EXPORTED on the torsion (unlike rotor_scans, which does
+    carry one), so a consumer has to trust the convention.
+    SHAPE: ARC emits ONE flat list [a,b,c,d] for a 1D rotor and a LIST OF LISTS
+    [[a,b,c,d],[b,c,d,e]] for an ND rotor; TCKDB wants
+    coordinates[] rows of four named scalars with a 1-based coordinate_index.
+  fixture_evidence: arc/output_schema_test.py:626
+  source: arc/output.py:1449
+
+- path: arc_only.output_yml.species.statmech.torsions.pivot_atoms
+  arc_key: "output.yml: species[].statmech.torsions[].pivot_atoms"
+  availability: conditional
+  condition: "Same gate as atom_indices; null when the rotor dict carries no 'pivots'."
+  fidelity: lossy
+  fidelity_note: >-
+    The 2-atom rotation axis, 1-indexed. TCKDB's torsion model records only the
+    4-atom dihedral quartet and has NO pivot field, so the explicit rotation
+    axis is discarded. It is derivable from the quartet's middle two atoms for a
+    1D rotor, but ARC's pivots are not required to be the quartet's middle pair.
+  fixture_evidence: arc/output_schema_test.py:627
+  source: arc/output.py:1450
+
+- path: arc_only.output_yml.species.statmech.torsions.barrier_kj_mol
+  arc_key: "output.yml: species[].statmech.torsions[].barrier_kj_mol"
+  availability: conditional
+  condition: >-
+    Null for any ND rotor (dimension > 1) by construction, and null when the
+    scan log is missing or parse_1d_scan_energies fails.
+  fidelity: lossy
+  fidelity_note: >-
+    UNIT kJ/mol, computed as max(V) - min(V) (the parser already zeroes the
+    minimum, so it is max(energies)). TCKDB's StatmechTorsionInBundle has NO
+    barrier field — the barrier is expected to be re-derived from the uploaded
+    scan points. That is possible only for the rotors that also produced a
+    rotor_scans record, so a rotor whose scan log vanished exports a barrier
+    with nowhere to put it.
+  fixture_evidence: arc/output_test.py:370
+  source: arc/output.py:1451
+
+- path: species_upload.statmech.torsions[].source_scan_calculation_key
+  arc_key: "output.yml: species[].statmech.torsions[].source_scan_key"
+  availability: conditional
+  condition: >-
+    Non-null only when _build_rotor_scans actually emitted a record under the key
+    'scan_rotor_<i>'. Deliberately null rather than dangling when it did not.
+  fidelity: exact
+  fidelity_note: >-
+    Bundle-local key string. ARC's 'scan_rotor_<i>' is already exactly the shape
+    TCKDB wants for a bundle-local calculation key, provided the adapter names
+    the scan calculation with the same string.
+  fixture_evidence: arc/output_schema_test.py:628
+  source: arc/output.py:1453
+
+- path: species_upload.statmech.torsions[].torsion_index
+  arc_key: "(implied by list position, or by the integer in source_scan_key)"
+  availability: conditional
+  condition: "Derivable whenever torsions are present."
+  fidelity: derived
+  fidelity_note: >-
+    ARC emits no torsion index. TCKDB requires a 1-based torsion_index. ARC's
+    own rotor keys (rotors_dict indices, visible inside 'scan_rotor_<i>') are
+    0-BASED, so using them directly would violate ge=1 for rotor 0.
+  fixture_evidence: arc/output_schema_test.py:632
+  source: arc/output.py:1445
+
+- path: species_upload.statmech.torsions[].top_description
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: "ARC does not describe which atoms constitute the rotating top."
+  fixture_evidence: null
+  source: arc/output.py:1445
+
+# ─────────────────────────────────────────────────────────────────────────────
+# output.yml — rotor scans (parsed scan calculations)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: arc_only.output_yml.species.rotor_scans.key
+  arc_key: "output.yml: species[].rotor_scans[].key"
+  availability: conditional
+  condition: >-
+    One record per successful 1D rotor whose scan log is on disk AND parses into
+    angles + relative energies of equal length AND whose 'scan' is a valid
+    1-based quartet of four distinct atoms. Empty list for monoatomic or
+    non-converged species.
+  fidelity: exact
+  fidelity_note: >-
+    'scan_rotor_<rotors_dict index>'. Feeds TCKDB's bundle-local calculation
+    key; recorded as arc_only because it is a naming convention, not a data
+    field.
+  fixture_evidence: arc/output_schema_test.py:632
+  source: arc/output.py:1569
+
+- path: species_upload.conformers[].additional_calculations[].artifacts[].filename
+  arc_key: "output.yml: species[].rotor_scans[].source_log"
+  availability: conditional
+  condition: "Same gate as rotor_scans[].key."
+  fidelity: lossy
+  fidelity_note: "Run-relative path, not file content; same artifact problem as the other log paths."
+  fixture_evidence: arc/output_schema_test.py:513
+  source: arc/output.py:1570
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.dimension
+  arc_key: "output.yml: species[].rotor_scans[].result.dimension"
+  availability: conditional
+  condition: "Same gate. Pinned to the constant 1 — ND scans are explicitly deferred."
+  fidelity: exact
+  fidelity_note: "TCKDB permits dimension >= 1; ARC supplies only 1."
+  fixture_evidence: arc/output_schema_test.py:634
+  source: arc/output.py:1889
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.is_relaxed
+  arc_key: "output.yml: species[].rotor_scans[].result.relaxed"
+  availability: conditional
+  condition: >-
+    True for an ESS-native scan or any '*_opt' directed scan, False for a
+    '*_sp' rigid scan, NULL for an unrecognised directed_scan_type.
+  fidelity: derived
+  fidelity_note: "Renamed: ARC `relaxed` -> TCKDB `is_relaxed`. Same tri-state semantics."
+  fixture_evidence: arc/output_schema_test.py:634
+  source: arc/output.py:1890
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.zero_energy_reference_hartree
+  arc_key: "output.yml: species[].rotor_scans[].result.zero_energy_reference_hartree"
+  availability: conditional
+  condition: >-
+    KEY OMITTED (not nulled) when the parser reports none — it is the minimum of
+    absolute_energies_hartree, so it requires the absolute-energy parse to have
+    succeeded.
+  fidelity: exact
+  fidelity_note: "UNIT hartree on both sides."
+  fixture_evidence: arc/output_schema_test.py:514
+  source: arc/output.py:1896
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.coordinates[].coordinate_kind
+  arc_key: "output.yml: species[].rotor_scans[].result.coordinate.coordinate_type"
+  availability: conditional
+  condition: "Same gate as rotor_scans[].key. Pinned to the constant 'dihedral'."
+  fidelity: exact
+  fidelity_note: >-
+    'dihedral' is in TCKDB's permitted pattern (bond|angle|dihedral|improper).
+    ARC only ever scans dihedrals through this path.
+  fixture_evidence: arc/output_schema_test.py:812
+  source: arc/output.py:1801
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.coordinates[].atom1_index
+  arc_key: "output.yml: species[].rotor_scans[].result.coordinate.atom_indices + .index_base"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: exact
+  fidelity_note: >-
+    INDEX BASE 1 ON BOTH SIDES, and ARC states it explicitly: it emits a literal
+    `index_base: 1` alongside the quartet, validated by the JSON schema as a
+    const and asserted by output_schema_test.py:787 (a 0-based scan index is
+    rejected). The builder additionally refuses to emit the record at all unless
+    every index is an int >= 1 and all four are distinct
+    (arc/output.py:1795-1798). This is the ONE atom-index path in the whole
+    export where the base is self-describing and enforced.
+  fixture_evidence: arc/output_schema_test.py:787
+  source: arc/output.py:1802
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.coordinates[].value_unit
+  arc_key: "output.yml: species[].rotor_scans[].result.coordinate.unit"
+  availability: conditional
+  condition: "Same gate. Pinned to the constant 'degree'."
+  fidelity: exact
+  fidelity_note: >-
+    'degree' matches TCKDB's CoordinateUnit enum exactly. Rejection of any other
+    value is tested (output_schema_test.py:817).
+  fixture_evidence: arc/output_schema_test.py:817
+  source: arc/output.py:1804
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.coordinates[].symmetry_number
+  arc_key: "output.yml: species[].rotor_scans[].result.coordinate.symmetry_number"
+  availability: conditional
+  condition: "KEY OMITTED when the rotor's symmetry is not an int >= 1."
+  fidelity: exact
+  fidelity_note: "TCKDB enforces ge=1; ARC omits rather than emitting an invalid value."
+  fixture_evidence: arc/output_schema_test.py:514
+  source: arc/output.py:1808
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.coordinates[].step_size
+  arc_key: "output.yml: species[].rotor_scans[].result.coordinate.requested_step_size"
+  availability: conditional
+  condition: >-
+    GAUSSIAN ONLY. parse_scan_args reads the ModRedundant header Gaussian echoes
+    back; ORCA and every other ESS raise NotImplementedError and the field is
+    OMITTED rather than guessed.
+  fidelity: exact
+  fidelity_note: >-
+    UNIT degrees, the REQUESTED step, not one inferred from completed-point
+    spacing. Renamed requested_step_size -> step_size.
+  fixture_evidence: null
+  source: arc/output.py:1833
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.coordinates[].start_value
+  arc_key: "output.yml: species[].rotor_scans[].result.coordinate.requested_start"
+  availability: conditional
+  condition: >-
+    Requires the Gaussian step size AND a computable dihedral at the scan quartet
+    from the species geometry (or the first parsed scan geometry). Omitted on
+    colinear atoms (NaN) or any dihedral failure.
+  fidelity: exact
+  fidelity_note: >-
+    UNIT degrees, range 0-360 from calculate_dihedral_angle with index=1
+    (1-based atoms).
+  fixture_evidence: null
+  source: arc/output.py:1870
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.coordinates[].end_value
+  arc_key: "output.yml: species[].rotor_scans[].result.coordinate.requested_end"
+  availability: conditional
+  condition: "Same gate as requested_start."
+  fidelity: exact
+  fidelity_note: >-
+    UNIT degrees. Computed as start + step_size * steps and DELIBERATELY NOT
+    WRAPPED into [-180, 180]: a full rotation lands at start + 360, which is the
+    scientifically meaningful continuation. A consumer that normalises the angle
+    destroys that. Can exceed 360.
+  fixture_evidence: null
+  source: arc/output.py:1871
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.coordinates[].step_count
+  arc_key: "output.yml: species[].rotor_scans[].result.coordinate (not exported directly)"
+  availability: rare
+  condition: >-
+    NEVER EXPORTED. `requested_steps` is parsed and used internally to compute
+    requested_end but is not written into the record.
+  fidelity: lossy
+  fidelity_note: >-
+    The requested step COUNT is discarded. It is recoverable as
+    round((requested_end - requested_start) / requested_step_size), but only
+    when all three of those optional Gaussian-only fields are present.
+    `sample_count` is the COMPLETED point count and is not the same thing — for
+    a Gaussian-truncated scan they differ, which is precisely the case
+    arc/output.py:1848-1853 warns about.
+  fixture_evidence: null
+  source: arc/output.py:1824
+
+- path: arc_only.output_yml.species.rotor_scans.result.coordinate.sample_count
+  arc_key: "output.yml: species[].rotor_scans[].result.coordinate.sample_count"
+  availability: conditional
+  condition: "Same gate as rotor_scans[].key."
+  fidelity: exact
+  fidelity_note: >-
+    len(angles) — the COMPLETED point count. TCKDB has no scan-coordinate
+    sample-count field (step_count means the requested grid), so this is
+    redundant with len(points[]) and has no direct home.
+  fixture_evidence: arc/output_schema_test.py:514
+  source: arc/output.py:1805
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.points[].point_index
+  arc_key: "output.yml: species[].rotor_scans[].result.samples[].source_index"
+  availability: conditional
+  condition: "Same gate as rotor_scans[].key."
+  fidelity: derived
+  fidelity_note: >-
+    INDEX-BASE MISMATCH. ARC emits source_index from enumerate(), so it is
+    0-BASED (arc/output.py:1876). TCKDB's CalculationScanPointPayload.point_index
+    is Field(ge=1), i.e. 1-BASED. Every scan point needs +1. An unconverted
+    upload is REJECTED at point 0 (the lowest-energy reference point) — which
+    means the failure is loud rather than silent, but only for the first point;
+    a producer that drops point 0 would pass validation with every remaining
+    point off by one.
+  fixture_evidence: arc/output_schema_test.py:514
+  source: arc/output.py:1878
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.points[].coordinate_values[].coordinate_value
+  arc_key: "output.yml: species[].rotor_scans[].result.samples[].angle_degrees"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: exact
+  fidelity_note: >-
+    UNIT degrees, matching the coordinate's declared `unit: degree`. TCKDB's
+    coordinate_value carries its own optional value_unit which must be set to
+    `degree` to preserve the fact.
+  fixture_evidence: arc/output_schema_test.py:514
+  source: arc/output.py:1879
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.points[].relative_energy_kj_mol
+  arc_key: "output.yml: species[].rotor_scans[].result.samples[].relative_energy_kj_mol"
+  availability: conditional
+  condition: "Same gate — this is one of the two fields whose absence kills the whole record."
+  fidelity: exact
+  fidelity_note: >-
+    UNIT kJ/mol on both sides, identical field name. Zeroed at the scan minimum
+    by parse_1d_scan_energies.
+  fixture_evidence: arc/output_schema_test.py:514
+  source: arc/output.py:1880
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.points[].electronic_energy_hartree
+  arc_key: "output.yml: species[].rotor_scans[].result.samples[].electronic_energy_hartree"
+  availability: conditional
+  condition: >-
+    KEY OMITTED on every sample when the absolute-energy parse failed or its
+    length disagreed with the relative list — dropped wholesale rather than
+    misaligned.
+  fidelity: exact
+  fidelity_note: "UNIT hartree on both sides."
+  fixture_evidence: arc/output_schema_test.py:514
+  source: arc/output.py:1883
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.points[].geometry.xyz_text
+  arc_key: "output.yml: species[].rotor_scans[].result.samples[].geometry_xyz"
+  availability: conditional
+  condition: >-
+    KEY OMITTED on every sample unless the parsed geometry list aligns 1:1 with
+    the energy list AND every point serialises to non-empty text. Partial
+    coverage is refused wholesale.
+  fidelity: lossy
+  fidelity_note: >-
+    ARC atom-line text, no count header, ISOTOPES DROPPED (xyz_to_str without
+    isotope_format), same as every other output.yml geometry.
+  fixture_evidence: arc/output_schema_test.py:514
+  source: arc/output.py:1885
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.constraints[].constraint_kind
+  arc_key: "output.yml: species[].rotor_scans[].constraints[]"
+  availability: conditional
+  condition: >-
+    KEY OMITTED when no held-fixed constraints were found. Dispatch is on the
+    rotor's `scan_software` hint, falling back to the GAUSSIAN parser when that
+    hint is missing or empty — so a rotor dict from an older restart file is
+    parsed as Gaussian regardless of what actually ran.
+  fidelity: derived
+  fidelity_note: >-
+    Same coordinate_type -> ConstraintKind rename and the same software-dependent
+    index_base hazard as opt_constraints. The ACTIVE scan coordinate is
+    deliberately excluded here; it lives in scan_result.coordinates[].
+  fixture_evidence: arc/output_schema_test.py:513
+  source: arc/output.py:1575
+
+# ─────────────────────────────────────────────────────────────────────────────
+# output.yml — applied energy corrections (per species)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: species_upload.applied_energy_corrections[].application_role
+  arc_key: "output.yml: species[].energy_corrections[].correction_type"
+  availability: conditional
+  condition: >-
+    Requires a matched Arkane AEC key AND a successful per-species subprocess
+    call to arc/scripts/get_species_corrections.py in the RMG environment. The
+    list is empty on any failure. The bond_additivity record additionally
+    requires bac_type in ('p','m') and a non-null bac value.
+  fidelity: derived
+  fidelity_note: >-
+    ARC's 'atom_energy' -> TCKDB `aec_total`; 'bond_additivity' -> `bac_total`.
+    ARC emits no ZPE, thermal-correction, SOC or composite-delta corrections, so
+    the other eight TCKDB application roles have no ARC supply.
+  fixture_evidence: arc/output_test.py:1470
+  source: arc/output.py:876
+
+- path: species_upload.applied_energy_corrections[].scheme.name
+  arc_key: "output.yml: species[].energy_corrections[].model"
+  availability: conditional
+  condition: "Same gate as application_role."
+  fidelity: derived
+  fidelity_note: >-
+    ARC values are 'arkane_atom_energy', 'petersson', 'melius'. TCKDB's
+    scheme.name is a free string and scheme.kind is the enum; the ARC model
+    string must be split across the two.
+  fixture_evidence: arc/output_schema_test.py:518
+  source: arc/output.py:877
+
+- path: species_upload.applied_energy_corrections[].value
+  arc_key: "output.yml: species[].energy_corrections[].total.value"
+  availability: conditional
+  condition: "Same gate; the record is omitted entirely when the helper reported no value."
+  fidelity: exact
+  fidelity_note: "The applied total, signed as Arkane applied it."
+  fixture_evidence: arc/output_test.py:1633
+  source: arc/output.py:881
+
+- path: species_upload.applied_energy_corrections[].value_unit
+  arc_key: "output.yml: species[].energy_corrections[].total.unit"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: exact
+  fidelity_note: >-
+    Closed vocabulary tied to correction_type: 'hartree' for atom_energy,
+    'kcal_mol' for bond_additivity. Both are in TCKDB's EnergyUnit enum verbatim.
+    This is the one place ARC states the correction unit as DATA rather than
+    convention.
+  fixture_evidence: arc/output_test.py:1664
+  source: arc/output.py:882
+
+- path: species_upload.applied_energy_corrections[].components[].component_kind
+  arc_key: "output.yml: species[].energy_corrections[].components[].component_kind"
+  availability: conditional
+  condition: >-
+    Empty list for Melius BAC (no clean per-bond decomposition) and DROPPED
+    WHOLESALE for a Petersson BAC when any single bond is missing a parameter —
+    a partial decomposition would not sum to the total.
+  fidelity: exact
+  fidelity_note: "ARC emits 'atom' / 'bond'; both are in TCKDB's AppliedCorrectionComponentKind enum."
+  fixture_evidence: arc/output_test.py:1643
+  source: arc/output.py:884
+
+- path: species_upload.applied_energy_corrections[].components[].key
+  arc_key: "output.yml: species[].energy_corrections[].components[].key"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: exact
+  fidelity_note: "Element symbol for atom components, bond string ('C-H') for bond components."
+  fixture_evidence: arc/output_test.py:1643
+  source: arc/output.py:884
+
+- path: species_upload.applied_energy_corrections[].components[].multiplicity
+  arc_key: "output.yml: species[].energy_corrections[].components[].multiplicity"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: exact
+  fidelity_note: >-
+    Count of that atom/bond in the species. TCKDB enforces ge=1. NOTE the name
+    collision with spin multiplicity — same word, unrelated meaning.
+  fixture_evidence: arc/output_test.py:1643
+  source: arc/output.py:884
+
+- path: species_upload.applied_energy_corrections[].components[].parameter_value
+  arc_key: "output.yml: species[].energy_corrections[].components[].parameter_value"
+  availability: conditional
+  condition: "Same gate. May be null in ARC; a null forces the whole component list to be dropped for a PBAC."
+  fidelity: exact
+  fidelity_note: >-
+    Per-unit parameter, in components[].parameter_unit. TCKDB's field is NOT
+    nullable (float, required), so ARC's null is not representable — but ARC
+    already drops the list in that case for BACs.
+  fixture_evidence: arc/output_test.py:1680
+  source: arc/output.py:884
+
+- path: species_upload.applied_energy_corrections[].components[].contribution_value
+  arc_key: "output.yml: species[].energy_corrections[].components[].contribution_value"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: exact
+  fidelity_note: >-
+    THE authoritative per-atom/per-bond quantity: these sum to `total.value`
+    (asserted at arc/output_test.py:1643). For the AEC this additionally carries
+    the atom_hf - atom_thermal term absent from reference_atom_energies.
+  fixture_evidence: arc/output_test.py:1643
+  source: arc/output.py:884
+
+- path: arc_only.output_yml.species.energy_corrections.components.parameter_unit
+  arc_key: "output.yml: species[].energy_corrections[].components[].parameter_unit"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC states the unit PER COMPONENT ('hartree' for atom, 'kcal_mol' for bond).
+    TCKDB's AppliedCorrectionComponentPayload has NO unit field — the unit is
+    carried only on the parent (value_unit) and on the scheme. Since a single
+    correction's components share the parent's unit in practice, nothing is lost
+    today, but the per-component statement is discarded.
+  fixture_evidence: arc/output_test.py:1643
+  source: arc/output.py:884
+
+- path: arc_only.output_yml.species.energy_corrections.matched_arkane_key
+  arc_key: "output.yml: species[].energy_corrections[].matched_arkane_key"
+  availability: conditional
+  condition: >-
+    Null when no atom-energy key matched. EVERY record reports the AEC key,
+    including the bond_additivity record — the BAC key is deliberately not
+    reported per-record.
+  fidelity: lossy
+  fidelity_note: >-
+    The exact Arkane database key string the parameters came from — the single
+    most important provenance fact about a correction, and TCKDB has no field
+    for it. EnergyCorrectionSchemeRef has name/version/level_of_theory but no
+    slot for a foreign database key. Losing it makes the correction
+    unreproducible.
+  fixture_evidence: arc/output_test.py:1470
+  source: arc/output.py:879
+
+- path: arc_only.output_yml.species.energy_corrections.reference_atom_energies
+  arc_key: "output.yml: species[].energy_corrections[].reference_atom_energies"
+  availability: conditional
+  condition: >-
+    AEC records only, and only when the run-level aec table is non-empty. KEY
+    OMITTED otherwise.
+  fidelity: lossy
+  fidelity_note: >-
+    {unit: 'hartree', applied_as: 'subtracted', values: {element: float}}. The
+    `applied_as: subtracted` flag is the sign-convention statement, and TCKDB has
+    nowhere to put it — SchemeAtomParamPayload is just (element, value). This is
+    the exact misreading arc/output.py:889-895 was written to prevent, and it is
+    reintroduced by the upload.
+  fixture_evidence: arc/output_schema_test.py:710
+  source: arc/output.py:895
+
+- path: arc_only.output_yml.species.energy_corrections.parameter_table
+  arc_key: "output.yml: species[].energy_corrections[].parameter_table"
+  availability: conditional
+  condition: >-
+    Petersson BAC ONLY, and only when bac_key == aec_key AND the table is a flat
+    numeric mapping. KEY OMITTED for Melius (asserted at
+    output_schema_test.py:717) and for a key mismatch.
+  fidelity: lossy
+  fidelity_note: >-
+    {unit: 'kcal_mol', values: {bond: float}} — the per-bond parameters ARC
+    ACTUALLY USED, as opposed to the run-level table. Routes to
+    scheme.bond_params[], which loses the statement that this table is the one
+    tied to this species' record.
+  fixture_evidence: arc/output_test.py:1472
+  source: arc/output.py:924
+
+# ─────────────────────────────────────────────────────────────────────────────
+# output.yml — transition states (reaction workflow only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: reaction_upload.transition_state.geometry.xyz_text
+  arc_key: "output.yml: transition_states[].xyz"
+  availability: conditional
+  condition: "Null when the TS has neither final_xyz nor initial_xyz."
+  fidelity: lossy
+  fidelity_note: >-
+    Same header-less atom-line format and same isotope loss as the species
+    geometries. TCKDB's GeometryIn additionally requires a bundle-local `key`,
+    which ARC does not supply.
+  fixture_evidence: arc/output_schema_test.py:528
+  source: arc/output.py:1041
+
+- path: reaction_upload.transition_state.charge
+  arc_key: "output.yml: transition_states[].charge"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: null
+  fixture_evidence: arc/output_schema_test.py:528
+  source: arc/output.py:1008
+
+- path: reaction_upload.transition_state.multiplicity
+  arc_key: "output.yml: transition_states[].multiplicity"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: "TCKDB enforces ge=1."
+  fixture_evidence: arc/output_schema_test.py:528
+  source: arc/output.py:1009
+
+- path: reaction_upload.transition_state.unmapped_smiles
+  arc_key: "output.yml: transition_states[].smiles"
+  availability: rare
+  condition: >-
+    ALWAYS NULL. The writer hard-codes smiles/inchi/inchi_key to None for every
+    TS (arc/output.py:1015-1017); only `formula` is populated.
+  fidelity: lossy
+  fidelity_note: "No ARC supply for a TS SMILES, even when ARC could derive one."
+  fixture_evidence: arc/output_test.py:789
+  source: arc/output.py:1015
+
+- path: reaction_upload.transition_state.label
+  arc_key: "output.yml: transition_states[].label"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: "ARC's TS label, e.g. 'TS0'."
+  fixture_evidence: arc/testing/tckdb_evidence/golden/output.yml:8
+  source: arc/output.py:1006
+
+- path: arc_only.output_yml.transition_states.rxn_label
+  arc_key: "output.yml: transition_states[].rxn_label"
+  availability: conditional
+  condition: "Null when the TS is not attached to a reaction."
+  fidelity: exact
+  fidelity_note: >-
+    ARC's reaction label string ('CH4 + OH <=> CH3 + H2O'). It is the join key
+    from a TS record back to a reactions[] entry, but TCKDB models that
+    relationship structurally (transition_state lives inside the reaction
+    bundle) so the label itself has no field.
+  fixture_evidence: arc/output_schema_test.py:528
+  source: arc/output.py:1282
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.method
+  arc_key: "output.yml: transition_states[].chosen_ts_method"
+  availability: conditional
+  condition: >-
+    Null when the TS has no chosen_ts_method (e.g. a user-supplied TS geometry).
+    Values are ARC method strings ('xtb_gsm', 'orca_neb', 'gcn', 'autotst', …),
+    NOT normalised — arc/output_test.py:864 shows 'xTB-GSM' with mixed case
+    reaching output.yml verbatim.
+  fidelity: derived
+  fidelity_note: >-
+    ARC's vocabulary is wider than TCKDB's PathSearchMethod enum
+    {neb, gsm, growing_string, freezing_string, other}. 'xtb_gsm'/'xTB-GSM' ->
+    'gsm', 'orca_neb' -> 'neb', and everything else ('gcn', 'autotst',
+    'heuristics', 'kinbot', 'rits', 'goflow') must collapse to 'other', which
+    destroys the distinction between six chemically different TS-search
+    algorithms. Case and separator normalisation is the consumer's job.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/output.yml:9
+  source: arc/output.py:1223
+
+- path: arc_only.output_yml.transition_states.successful_ts_methods
+  arc_key: "output.yml: transition_states[].successful_ts_methods"
+  availability: conditional
+  condition: "Null (not empty list) when spc.successful_methods is empty or unset."
+  fidelity: lossy
+  fidelity_note: >-
+    The full list of TS-search methods that produced a viable guess. TCKDB
+    records only the ONE path_search that produced the uploaded TS, so the fact
+    that four methods agreed — a strong confidence signal — has no home.
+  fixture_evidence: arc/output_schema_test.py:505
+  source: arc/output.py:1224
+
+- path: arc_only.output_yml.transition_states.ts_guesses.index
+  arc_key: "output.yml: transition_states[].ts_guesses[].index"
+  availability: conditional
+  condition: >-
+    ts_guesses is an EMPTY LIST when no chosen guess could be resolved. When
+    populated it holds EXACTLY ONE entry — the chosen guess — never the
+    rejected ones.
+  fidelity: lossy
+  fidelity_note: >-
+    ARC's TSGuess index. INDEX BASE: 0-based (arc/output_schema_test.py:194 sets
+    guess.index = 0 for the sole guess). Only stable attribution fields are
+    exposed; TSGuess.as_dict()'s absolute paths, timestamps, geometries and
+    diagnostic state are deliberately withheld. No TCKDB field.
+  fixture_evidence: arc/output_test.py:918
+  source: arc/output.py:1252
+
+- path: arc_only.output_yml.transition_states.ts_guesses.chosen
+  arc_key: "output.yml: transition_states[].ts_guesses[].chosen"
+  availability: conditional
+  condition: "Pinned to the constant True — only the chosen guess is ever emitted."
+  fidelity: lossy
+  fidelity_note: >-
+    A field that can never be false carries no information, and the rejected
+    guesses it would discriminate against are not exported at all.
+  fixture_evidence: arc/output_test.py:919
+  source: arc/output.py:1253
+
+- path: arc_only.output_yml.transition_states.ts_guesses.method
+  arc_key: "output.yml: transition_states[].ts_guesses[].method"
+  availability: conditional
+  condition: "Null when the guess carries no method string."
+  fidelity: exact
+  fidelity_note: >-
+    NORMALISED here (unlike chosen_ts_method): stripped and lowercased at
+    arc/output.py:1238. So the same method can appear as 'xTB-GSM' in
+    chosen_ts_method and 'xtb-gsm' in ts_guesses[].method within one document.
+  fixture_evidence: arc/output_test.py:920
+  source: arc/output.py:1254
+
+- path: arc_only.output_yml.transition_states.ts_guesses.method_sources
+  arc_key: "output.yml: transition_states[].ts_guesses[].method_sources"
+  availability: conditional
+  condition: "Present whenever a chosen guess resolved; may be a list of one."
+  fidelity: exact
+  fidelity_note: >-
+    Deduplicated, stripped, lowercased list, with the guess's own method inserted
+    at position 0 when missing. Records the provenance of a MERGED guess (one
+    geometry agreed on by several search methods). No TCKDB field.
+  fixture_evidence: arc/output_test.py:921
+  source: arc/output.py:1255
+
+- path: reaction_upload.transition_state.calculations[].artifacts[].filename
+  arc_key: "output.yml: transition_states[].neb_log, transition_states[].gsm_log"
+  availability: conditional
+  condition: >-
+    Populated from the scheduler's paths['neb']/paths['gsm'] slot, with TWO
+    method-aware fallbacks for restart-restored runs that bypassed the
+    TS-selection write sites: the chosen guess's own log_path, then the chosen
+    guess's method_source_paths. Null when none of the three resolves.
+  fidelity: lossy
+  fidelity_note: "Run-relative path, not content; same artifact problem as every other log."
+  fixture_evidence: arc/testing/tckdb_evidence/golden/output.yml:16
+  source: arc/output.py:1226
+
+- path: reaction_upload.transition_state.calculations[].irc_result.points[].geometry.xyz_text
+  arc_key: "output.yml: transition_states[].irc_logs[] (paths only)"
+  availability: conditional
+  condition: >-
+    output.yml carries the IRC LOG PATHS only — never the trajectory. The
+    trajectory itself is exported exclusively in tckdb_evidence.json (see the
+    evidence rows). Empty list when no IRC ran.
+  fidelity: lossy
+  fidelity_note: >-
+    output.yml alone gives a consumer nothing about the IRC beyond a filename
+    and a converged flag. The parsed path is a strictly-sidecar fact.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/output.yml:11
+  source: arc/output.py:1273
+
+- path: reaction_upload.transition_state.calculations[].irc_result.direction
+  arc_key: "output.yml: transition_states[].irc_log_directions[]"
+  availability: conditional
+  condition: >-
+    Padded with None to the length of irc_logs and truncated to it, so a
+    direction can legitimately be null while its log is present. Empty list when
+    no IRC ran.
+  fidelity: derived
+  fidelity_note: >-
+    ARC emits one direction PER LOG ('forward'/'reverse'/null); TCKDB wants one
+    `direction` for the whole irc_result plus per-point directions, and its enum
+    adds 'both'. A two-log ARC run maps to direction='both' with has_forward and
+    has_reverse both true — a derivation ARC does not perform.
+  fixture_evidence: arc/output_schema_test.py:535
+  source: arc/output.py:1275
+
+- path: reaction_upload.transition_state.validation_evidence[].passed
+  arc_key: "output.yml: transition_states[].irc_converged"
+  availability: conditional
+  condition: >-
+    NULL (not False) when irc_requested is False for the run — i.e. 'not asked'
+    is distinguished from 'asked and failed'. Otherwise the job_types['irc']
+    verdict, defaulting to False.
+  fidelity: derived
+  fidelity_note: >-
+    ARC's boolean is a JOB-CONVERGENCE verdict; TCKDB's
+    TransitionStateValidationEvidenceIn.passed is a CHEMICAL verdict ('did the
+    IRC connect the declared reactants and products'). They are not the same
+    claim, and ARC exports no reactant/product participant mapping to support
+    the chemical one. TCKDB also requires a non-empty `rationale`, which ARC
+    does not supply.
+  fixture_evidence: arc/output_test.py:1094
+  source: arc/output.py:1281
+
+- path: reaction_upload.transition_state.validation_evidence[].reactant_participant_mapping
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: "No ARC supply; the IRC endpoint identification is not written out."
+  fixture_evidence: null
+  source: arc/output.py:1281
+
+# ─────────────────────────────────────────────────────────────────────────────
+# output.yml — reactions and kinetics
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: arc_only.output_yml.reactions.label
+  arc_key: "output.yml: reactions[].label"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: >-
+    'CH4 + OH <=> CH3 + H2O'. TCKDB identifies a reaction by its participant
+    keys, not a label string; there is no reaction-label field.
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1934
+
+- path: reaction_upload.reactant_keys
+  arc_key: "output.yml: reactions[].reactant_labels"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: >-
+    List of ARC species labels. These are exactly the labels used in
+    species[].label, so the key space joins cleanly, provided the adapter uses
+    ARC labels as TCKDB bundle-local species keys. TCKDB requires min_length 1.
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1935
+
+- path: reaction_upload.product_keys
+  arc_key: "output.yml: reactions[].product_labels"
+  availability: always
+  condition: null
+  fidelity: exact
+  fidelity_note: "Same as reactant_keys."
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1936
+
+- path: reaction_upload.reaction_family
+  arc_key: "output.yml: reactions[].family"
+  availability: conditional
+  condition: "Null when RMG could not classify the reaction, or when no RMG database is loaded."
+  fidelity: exact
+  fidelity_note: "RMG family name, e.g. 'H_Abstraction'. Free string on both sides."
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1937
+
+- path: arc_only.output_yml.reactions.multiplicity
+  arc_key: "output.yml: reactions[].multiplicity"
+  availability: conditional
+  condition: "Null when ARC did not determine the reaction multiplicity."
+  fidelity: lossy
+  fidelity_note: >-
+    The multiplicity of the reacting system as a whole. TCKDB carries
+    multiplicity on species entries and on the TS, but has no reaction-level
+    multiplicity field, so this claim is discarded.
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1938
+
+- path: arc_only.output_yml.reactions.ts_label
+  arc_key: "output.yml: reactions[].ts_label"
+  availability: conditional
+  condition: "Null for a reaction with no located TS."
+  fidelity: exact
+  fidelity_note: >-
+    The join key from a reaction to a transition_states[] record. TCKDB models
+    the relationship structurally, so the label has no field.
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1939
+
+- path: reaction_upload.kinetics[].a
+  arc_key: "output.yml: reactions[].kinetics.A"
+  availability: conditional
+  condition: >-
+    The whole `kinetics` block is null unless rxn.kinetics is populated — i.e.
+    Arkane's rate fit completed, OR the user supplied kinetics, OR they were
+    restored from a restart file. ARC does not distinguish these three origins.
+  fidelity: exact
+  fidelity_note: "The value half of RMG's (value, units) tuple; the unit is exported separately."
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1911
+
+- path: reaction_upload.kinetics[].a_units
+  arc_key: "output.yml: reactions[].kinetics.A_units"
+  availability: conditional
+  condition: "Null when A was a bare number rather than a (value, units) tuple."
+  fidelity: derived
+  fidelity_note: >-
+    ARC exports RMG's raw unit string, e.g. 'cm^3/(mol*s)'. TCKDB's
+    ArrheniusAUnits is a closed ENUM; the raw string must be matched against it
+    and there is no guarantee RMG's spelling is a member. A unit ARC emits that
+    the enum lacks is a hard upload rejection.
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1912
+
+- path: reaction_upload.kinetics[].n
+  arc_key: "output.yml: reactions[].kinetics.n"
+  availability: conditional
+  condition: "Same gate as `a`."
+  fidelity: exact
+  fidelity_note: "Dimensionless temperature exponent."
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1913
+
+- path: reaction_upload.kinetics[].reported_ea
+  arc_key: "output.yml: reactions[].kinetics.Ea"
+  availability: conditional
+  condition: "Same gate as `a`."
+  fidelity: exact
+  fidelity_note: "Value half of the tuple; unit exported separately as Ea_units."
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1914
+
+- path: reaction_upload.kinetics[].reported_ea_units
+  arc_key: "output.yml: reactions[].kinetics.Ea_units"
+  availability: conditional
+  condition: "Null when Ea was a bare number."
+  fidelity: derived
+  fidelity_note: >-
+    RMG unit string ('kJ/mol') against TCKDB's ActivationEnergyUnits enum. Same
+    closed-enum risk as a_units.
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1915
+
+- path: reaction_upload.kinetics[].tmin_k
+  arc_key: "output.yml: reactions[].kinetics.Tmin_k"
+  availability: conditional
+  condition: "Same gate as `a`."
+  fidelity: exact
+  fidelity_note: >-
+    UNIT K. ARC unwraps RMG's tuple and keeps the value, assuming K without
+    checking. TCKDB enforces gt=0.
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1916
+
+- path: reaction_upload.kinetics[].tmax_k
+  arc_key: "output.yml: reactions[].kinetics.Tmax_k"
+  availability: conditional
+  condition: "Same gate as `a`."
+  fidelity: exact
+  fidelity_note: "UNIT K, same tuple-unwrapping caveat."
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1917
+
+- path: reaction_upload.kinetics[].a_uncertainty
+  arc_key: "output.yml: reactions[].kinetics.dA"
+  availability: conditional
+  condition: "Null when Arkane reported no uncertainty."
+  fidelity: derived
+  fidelity_note: >-
+    ARC exports Arkane's raw dA with NO uncertainty-kind label. TCKDB pairs
+    a_uncertainty with a REQUIRED-in-spirit a_uncertainty_kind
+    (KineticsUncertaintyKind), which ARC does not supply — so a multiplicative
+    factor and an additive sigma are indistinguishable on arrival.
+  fixture_evidence: arc/output_test.py:736
+  source: arc/output.py:1918
+
+- path: reaction_upload.kinetics[].a_uncertainty_kind
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: "See a_uncertainty. The interpretation of dA/dn/dEa is not exported."
+  fixture_evidence: null
+  source: arc/output.py:1918
+
+- path: reaction_upload.kinetics[].n_uncertainty
+  arc_key: "output.yml: reactions[].kinetics.dn"
+  availability: conditional
+  condition: "Null when Arkane reported no uncertainty."
+  fidelity: exact
+  fidelity_note: "Dimensionless."
+  fixture_evidence: arc/output_test.py:736
+  source: arc/output.py:1919
+
+- path: reaction_upload.kinetics[].d_reported_ea
+  arc_key: "output.yml: reactions[].kinetics.dEa"
+  availability: conditional
+  condition: "Null when Arkane reported no uncertainty."
+  fidelity: exact
+  fidelity_note: >-
+    Unit stated separately in kinetics.dEa_units, which ARC exports as a raw
+    string with no TCKDB field of its own — TCKDB assumes d_reported_ea shares
+    reported_ea_units. If Arkane ever reported the two in different units the
+    mismatch would be silent.
+  fixture_evidence: arc/output_test.py:736
+  source: arc/output.py:1920
+
+- path: arc_only.output_yml.reactions.kinetics.dEa_units
+  arc_key: "output.yml: reactions[].kinetics.dEa_units"
+  availability: conditional
+  condition: "Null when Arkane reported no uncertainty units."
+  fidelity: lossy
+  fidelity_note: >-
+    No TCKDB field. The uncertainty's unit is discarded and silently assumed to
+    equal reported_ea_units.
+  fixture_evidence: arc/output_test.py:736
+  source: arc/output.py:1921
+
+- path: arc_only.output_yml.reactions.kinetics.n_data_points
+  arc_key: "output.yml: reactions[].kinetics.n_data_points"
+  availability: conditional
+  condition: "Null unless Arkane recorded the fit's data-point count."
+  fidelity: lossy
+  fidelity_note: >-
+    How many rate points the Arrhenius fit was built from — a direct quality
+    signal for the fit. TCKDB's BundleKineticsIn has no such field.
+  fixture_evidence: arc/output_test.py:736
+  source: arc/output.py:1922
+
+- path: reaction_upload.kinetics[].tunneling_model
+  arc_key: "output.yml: reactions[].kinetics.tunneling"
+  availability: conditional
+  condition: >-
+    Stamped ONLY by the Arkane run that fitted these A/n/Ea. Kinetics from any
+    other source — user-supplied, restart-restored, or a future non-Arkane
+    StatmechAdapter — carry null rather than defaulting from the template
+    constant, deliberately (arc/output.py:1923-1929).
+  fidelity: derived
+  fidelity_note: >-
+    ARC emits Arkane's model name ('Eckart'); TCKDB's TunnelingModel is a closed
+    enum. Case and spelling must be matched. A null here means 'unknown', NOT
+    'no tunneling'.
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1930
+
+- path: reaction_upload.kinetics[].note
+  arc_key: "output.yml: reactions[].long_kinetic_description"
+  availability: conditional
+  condition: >-
+    KEY OMITTED entirely when the reaction carries no long description
+    (falsy check, so an empty string is also omitted).
+  fidelity: exact
+  fidelity_note: "Free text, e.g. 'Fitted by Arkane over 300-3000 K.'"
+  fixture_evidence: arc/output_schema_test.py:205
+  source: arc/output.py:1944
+
+- path: reaction_upload.kinetics[].model_kind
+  arc_key: null
+  availability: rare
+  condition: "Never exported; implied by the presence of A/n/Ea."
+  fidelity: derived
+  fidelity_note: >-
+    ARC only ever exports a modified-Arrhenius triple, which is TCKDB's default,
+    so the constant is safe today. It would silently mislabel any future
+    non-Arrhenius fit.
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1910
+
+- path: reaction_upload.kinetics[].degeneracy
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC computes reaction degeneracy internally but writes neither the value nor
+    the convention (is it already folded into A?). TCKDB has both fields and
+    both are unsupplied, so a consumer cannot tell whether A is
+    degeneracy-inclusive.
+  fixture_evidence: null
+  source: arc/output.py:1910
+
+- path: reaction_upload.kinetics[].source_calculations[].calculation_key
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: "The kinetics->calculation provenance edge has no ARC supply."
+  fixture_evidence: null
+  source: arc/output.py:1910
+
+- path: reaction_upload.kinetics[].reactant_keys
+  arc_key: "output.yml: reactions[].reactant_labels"
+  availability: always
+  condition: null
+  fidelity: derived
+  fidelity_note: >-
+    TCKDB scopes each kinetics fit to its own reactant/product key lists (to
+    allow forward and reverse fits in one bundle). ARC exports one kinetics
+    block per reaction with no direction marker, so the reaction's lists must be
+    copied down and the fit assumed to be the forward direction.
+  fixture_evidence: arc/output_schema_test.py:524
+  source: arc/output.py:1935
+
+- path: reaction_upload.reversible
+  arc_key: null
+  availability: rare
+  condition: "Never exported; TCKDB defaults to True."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC's reaction label uses '<=>' vs '=>' to signal reversibility, but the
+    label is exported as an opaque string and `reversible` is not a field.
+  fixture_evidence: null
+  source: arc/output.py:1933
+
+- path: reaction_upload.atom_map
+  arc_key: null
+  availability: rare
+  condition: >-
+    NEVER EXPORTED. output.yml has no atom-map field of any kind; the JSON
+    schema has no slot for one.
+  fidelity: lossy
+  fidelity_note: >-
+    ARC computes reactant->TS->product atom maps internally (arc/mapping/) — see
+    A3 — but the export contract does not carry them. TCKDB will not derive one
+    (ADR 0011), so every ARC-sourced reaction uploads with a
+    'reaction_atom_map_absent' warning. This is the single largest structural
+    hole in the reaction export.
+  fixture_evidence: null
+  source: arc/output.py:1933
+
+- path: reaction_upload.literature
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC has no literature provenance in output.yml except the frequency-scale-
+    factor citation string.
+  fixture_evidence: null
+  source: arc/output.py:112
+
+- path: reaction_upload.software_release.name
+  arc_key: "output.yml: sp_level.software / opt_level.software / species[].ess_versions"
+  availability: conditional
+  condition: >-
+    Requires at least one level with a software attribute, or a parseable ESS
+    banner on a converged species.
+  fidelity: derived
+  fidelity_note: >-
+    ARC exports software PER LEVEL and PER SPECIES; TCKDB's bundle-level
+    software_release is one value for the whole reaction. A run that used
+    Gaussian for opt and ORCA for sp cannot be represented at the bundle level
+    without picking one — the per-calculation software_release is the faithful
+    route.
+  fixture_evidence: arc/output_schema_test.py:495
+  source: arc/output.py:149
+
+# ─────────────────────────────────────────────────────────────────────────────
+# tckdb_evidence.json — document envelope
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: arc_only.tckdb_evidence.schema_name
+  arc_key: "tckdb_evidence.json: schema_name"
+  availability: conditional
+  condition: >-
+    The sidecar as a whole is written only when build_tckdb_evidence() succeeds;
+    any exception is caught, logged as a warning, and output.yml is written
+    without a tckdb_evidence descriptor.
+  fidelity: exact
+  fidelity_note: "Constant 'arc-tckdb-evidence'."
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:1140
+  source: arc/tckdb_evidence.py:645
+
+- path: arc_only.tckdb_evidence.schema_version
+  arc_key: "tckdb_evidence.json: schema_version"
+  availability: conditional
+  condition: "Same gate as schema_name."
+  fidelity: exact
+  fidelity_note: "Constant '1.1'. Must be read before any evidence path below is trusted."
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:1141
+  source: arc/tckdb_evidence.py:646
+
+- path: arc_only.tckdb_evidence.document_id
+  arc_key: "tckdb_evidence.json: document_id"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: exact
+  fidelity_note: >-
+    The uuid4 hex that ties this sidecar to the output.yml written in the same
+    run. A consumer MUST check it matches output.yml's
+    tckdb_evidence.document_id before pairing the two files.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:2
+  source: arc/tckdb_evidence.py:647
+
+- path: arc_only.tckdb_evidence.output_schema_version
+  arc_key: "tckdb_evidence.json: output_schema_version"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: exact
+  fidelity_note: >-
+    The output.yml contract version this sidecar is bound to. Defined once in
+    arc/tckdb_evidence.py:35 precisely so it cannot drift from output.yml's own
+    schema_version.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:3
+  source: arc/tckdb_evidence.py:648
+
+- path: arc_only.tckdb_evidence.records.record_kind
+  arc_key: "tckdb_evidence.json: records[].record_kind"
+  availability: conditional
+  condition: >-
+    A record is emitted ONLY when at least one evidence kind was attempted
+    (len(record) > 2 at arc/tckdb_evidence.py:642). A species with no freq_log
+    and a TS with no IRC and no GSM produce NO record at all — absence from
+    `records` means 'nothing was attempted', not 'nothing was found'.
+  fidelity: exact
+  fidelity_note: "'species' or 'transition_state'."
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:73
+  source: arc/tckdb_evidence.py:613
+
+- path: arc_only.tckdb_evidence.records.label
+  arc_key: "tckdb_evidence.json: records[].label"
+  availability: conditional
+  condition: "Same gate as record_kind."
+  fidelity: exact
+  fidelity_note: >-
+    The ARC species/TS label, verbatim from output.yml. This is the ONLY join
+    key between the sidecar and output.yml's species[] / transition_states[]
+    entries.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:72
+  source: arc/tckdb_evidence.py:613
+
+- path: arc_only.tckdb_evidence.records.status
+  arc_key: "tckdb_evidence.json: records[].{freq_hessian,irc,gsm}.status"
+  availability: conditional
+  condition: "Present on every attempted evidence kind; 'available' or 'unavailable'."
+  fidelity: exact
+  fidelity_note: >-
+    TCKDB has no envelope concept — a payload is either present or absent. The
+    distinction between 'not attempted' (key absent) and 'attempted and failed
+    for reason X' is destroyed on upload.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:12
+  source: arc/tckdb_evidence.py:131
+
+- path: arc_only.tckdb_evidence.records.reason
+  arc_key: "tckdb_evidence.json: records[].{freq_hessian,irc,gsm}.reason"
+  availability: conditional
+  condition: >-
+    Present only on an `unavailable` envelope. Closed vocabulary:
+    missing_source, unsupported_source, empty_result, parse_failed,
+    hessian_frame_unavailable. NOT PRESENT IN THE GOLDEN FIXTURE AT ALL —
+    the golden asserts every envelope is `available`
+    (arc/tckdb_evidence_test.py:758).
+  fidelity: lossy
+  fidelity_note: >-
+    A structured failure reason with no TCKDB home. `note` on the relevant
+    payload is the only free-text landing spot, and only if the payload itself
+    is created — which it is not, since the data is unavailable.
+  fixture_evidence: arc/tckdb_evidence_test.py:194
+  source: arc/tckdb_evidence.py:131
+
+- path: arc_only.tckdb_evidence.records.source_paths
+  arc_key: "tckdb_evidence.json: records[].{freq_hessian,irc,gsm}.source_paths"
+  availability: conditional
+  condition: "KEY OMITTED when no paths are known (e.g. `missing_source` with no path at all)."
+  fidelity: lossy
+  fidelity_note: "The paths that were attempted and failed. No TCKDB home."
+  fixture_evidence: arc/tckdb_evidence_test.py:194
+  source: arc/tckdb_evidence.py:133
+
+# ─────────────────────────────────────────────────────────────────────────────
+# tckdb_evidence.json — Cartesian Hessian
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: species_upload.conformers[].additional_calculations[].hessian.lower_triangle_hartree_bohr2
+  arc_key: "tckdb_evidence.json: records[].freq_hessian.value.lower_triangle"
+  availability: conditional
+  condition: >-
+    Requires (a) a freq_log in output.yml, (b) the file on disk, (c) the ESS to
+    be gaussian or ORCA (anything else -> unsupported_source), (d) a
+    non-monoatomic species, and (e) len(triangle) == 3N(3N+1)/2 exactly, else
+    parse_failed.
+  fidelity: exact
+  fidelity_note: >-
+    UNIT hartree/bohr^2 on both sides, and ARC states it as data
+    (`units: hartree_per_bohr_squared`). PACKING lower triangle, row-major,
+    INCLUDING the diagonal — also stated as data
+    (`packing: lower_triangle_row_major_including_diagonal`). TCKDB's field name
+    encodes the same unit but NOT the packing; the packing statement is lost and
+    must be assumed.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:17
+  source: arc/tckdb_evidence.py:207
+
+- path: species_upload.conformers[].additional_calculations[].hessian.geometry.xyz_text
+  arc_key: "tckdb_evidence.json: records[].freq_hessian.value.geometry_xyz_text"
+  availability: conditional
+  condition: >-
+    Requires the ESS adapter to expose parse_cartesian_hessian_geometry; the
+    whole envelope degrades to `hessian_frame_unavailable` if it cannot recover
+    the frame-matched geometry.
+  fidelity: exact
+  fidelity_note: >-
+    CANONICAL XYZ (atom count, comment line, atom lines) — DIFFERENT FORMAT from
+    every geometry in output.yml, which is header-less. Critically, this is the
+    geometry in the HESSIAN'S OWN frame, not the species record's exported
+    geometry: Gaussian prints force constants in the input orientation while ARC
+    exports the standard orientation, a pure rotation apart, and pairing the two
+    silently reconstructs a different spectrum (invented low-frequency modes,
+    errors of hundreds of wavenumbers, undetectable by any size or finiteness
+    check). This is why HESSIAN_PARSER_VERSION was bumped to arc-hessian-2;
+    arc-hessian-1 records are NOT frame-consistent.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:16
+  source: arc/tckdb_evidence.py:199
+
+- path: arc_only.tckdb_evidence.records.freq_hessian.value.frame
+  arc_key: "tckdb_evidence.json: records[].freq_hessian.value.frame"
+  availability: conditional
+  condition: "Same gate as geometry_xyz_text. Golden value: 'orca_hess_atoms'."
+  fidelity: lossy
+  fidelity_note: >-
+    Names the Cartesian frame that the Hessian and its geometry SHARE. TCKDB's
+    HessianPayload has geometry + matrix + source + parser_version but NO frame
+    field, so the one fact that makes the pair safe to combine is discarded. A
+    consumer that later re-pairs the matrix with a different geometry has no
+    way to detect the error.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:15
+  source: arc/tckdb_evidence.py:200
+
+- path: species_upload.conformers[].additional_calculations[].hessian.source
+  arc_key: "tckdb_evidence.json: records[].freq_hessian.value.source"
+  availability: conditional
+  condition: "Same gate as lower_triangle."
+  fidelity: exact
+  fidelity_note: >-
+    'parsed_hess' for ORCA (read from the .hess file), 'parsed_log' otherwise.
+    Both are members of TCKDB's HessianSource enum verbatim.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:67
+  source: arc/tckdb_evidence.py:205
+
+- path: species_upload.conformers[].additional_calculations[].hessian.parser_version
+  arc_key: "tckdb_evidence.json: records[].freq_hessian.value.parser_version"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: exact
+  fidelity_note: >-
+    'arc-hessian-2'. TCKDB stores it as an opaque string, which is the right
+    shape — a consumer must refuse to trust 'arc-hessian-1' frames.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:66
+  source: arc/tckdb_evidence.py:206
+
+- path: arc_only.tckdb_evidence.records.freq_hessian.value.atom_count
+  arc_key: "tckdb_evidence.json: records[].freq_hessian.value.atom_count"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: lossy
+  fidelity_note: >-
+    Redundant consistency check (derivable from the geometry). No TCKDB field;
+    TCKDB re-derives N from the geometry and validates the triangle length
+    itself.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:14
+  source: arc/tckdb_evidence.py:201
+
+- path: arc_only.tckdb_evidence.records.freq_hessian.value.matrix_dimension
+  arc_key: "tckdb_evidence.json: records[].freq_hessian.value.matrix_dimension"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: lossy
+  fidelity_note: "3N. Redundant consistency check; no TCKDB field."
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:64
+  source: arc/tckdb_evidence.py:202
+
+- path: arc_only.tckdb_evidence.records.freq_hessian.value.source_log
+  arc_key: "tckdb_evidence.json: records[].freq_hessian.value.source_log"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: lossy
+  fidelity_note: >-
+    Run-relative path, echoing output.yml's freq_log. No TCKDB field on
+    HessianPayload; the artifact route needs content, not a path.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:68
+  source: arc/tckdb_evidence.py:198
+
+# ─────────────────────────────────────────────────────────────────────────────
+# tckdb_evidence.json — IRC trajectories
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: reaction_upload.transition_state.calculations[].irc_result.points[].point_index
+  arc_key: "tckdb_evidence.json: records[].irc.value.trajectories[].points[].source_point_index"
+  availability: conditional
+  condition: >-
+    TS records only, and only when output.yml carried irc_logs. Requires at
+    least one log on disk that yields points; logs missing on disk go to
+    omitted_source_paths instead of dropping silently.
+  fidelity: derived
+  fidelity_note: >-
+    INDEX-BASE AND UNIQUENESS HAZARD. ARC emits Gaussian's own per-branch
+    `Point Number`, which starts at 1 (point 0 is the TS seed and has no
+    structure block, so it is never emitted) — the golden's first forward point
+    is source_point_index 1, and the reverse branch ALSO starts at 1
+    (tckdb_evidence.json:231 and the reverse trajectory). TCKDB's
+    IRCPointPayload.point_index is documented ZERO-BASED (ge=0) and its
+    IRCResultPayload.validate_points RAISES on duplicate point_index across the
+    whole result. So merging ARC's two trajectories into one TCKDB irc_result
+    is a HARD VALIDATION FAILURE unless the adapter renumbers — and a naive
+    renumbering loses the per-branch source step number. The fallback
+    geometry-only path uses enumerate(), i.e. 0-based, so the base is not even
+    consistent between ARC's two IRC code paths.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:231
+  source: arc/tckdb_evidence.py:264
+
+- path: reaction_upload.transition_state.calculations[].irc_result.points[].direction
+  arc_key: "tckdb_evidence.json: records[].irc.value.trajectories[].points[].direction"
+  availability: conditional
+  condition: >-
+    Per-point direction from Gaussian's 'Point Number N in FORWARD/REVERSE path
+    direction' announcement, falling back to the trajectory's declared
+    direction, then to null. An unlabelled branch is preferred to a guessed one.
+  fidelity: exact
+  fidelity_note: >-
+    'forward'/'reverse'/null. TCKDB's IRCDirection enum contains both verbatim
+    (plus 'both', which ARC never emits per point).
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:225
+  source: arc/tckdb_evidence.py:265
+
+- path: reaction_upload.transition_state.calculations[].irc_result.points[].geometry.xyz_text
+  arc_key: "tckdb_evidence.json: records[].irc.value.trajectories[].points[].geometry_xyz_text"
+  availability: conditional
+  condition: >-
+    Required — a point with no geometry raises and the whole log is moved to
+    omitted_source_paths.
+  fidelity: exact
+  fidelity_note: >-
+    CANONICAL XYZ with an EMPTY comment line (_canonical_xyz(xyz, "")), so the
+    second line is blank. Angstrom. No isotopes (the parsed IRC geometry carries
+    none). Format differs from output.yml's header-less geometries.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:227
+  source: arc/tckdb_evidence.py:266
+
+- path: reaction_upload.transition_state.calculations[].irc_result.points[].electronic_energy_hartree
+  arc_key: "tckdb_evidence.json: ...irc...points[].electronic_energy_hartree"
+  availability: conditional
+  condition: >-
+    KEY OMITTED when the log had no preceding 'SCF Done' line for that point.
+    Absent entirely on the geometry-only fallback path.
+  fidelity: exact
+  fidelity_note: "UNIT hartree, identical field name on both sides."
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:226
+  source: arc/tckdb_evidence.py:269
+
+- path: reaction_upload.transition_state.calculations[].irc_result.points[].reaction_coordinate
+  arc_key: "tckdb_evidence.json: ...irc...points[].reaction_coordinate_sqrt_amu_bohr"
+  availability: conditional
+  condition: "KEY OMITTED when the log printed no 'NET REACTION COORDINATE UP TO THIS POINT'."
+  fidelity: lossy
+  fidelity_note: >-
+    UNIT sqrt(amu)*bohr — Gaussian's mass-weighted convention — and ARC states it
+    IN THE FIELD NAME. TCKDB's `reaction_coordinate` carries NO unit in its name
+    or its description, so the unit statement is destroyed on upload. This is
+    the same field a GSM path coordinate would land in, and the two are NOT
+    commensurable (see the GSM cumulative-displacement row).
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:229
+  source: arc/tckdb_evidence.py:271
+
+- path: reaction_upload.transition_state.calculations[].irc_result.points[].max_gradient
+  arc_key: "tckdb_evidence.json: ...irc...points[].max_gradient_hartree_per_bohr"
+  availability: conditional
+  condition: "KEY OMITTED when the log had no preceding 'Cartesian Forces' line."
+  fidelity: lossy
+  fidelity_note: >-
+    UNIT hartree/bohr, stated by ARC in the field name. TCKDB's `max_gradient`
+    carries no unit anywhere, so the unit statement is lost. Value itself is
+    unchanged.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:228
+  source: arc/tckdb_evidence.py:272
+
+- path: reaction_upload.transition_state.calculations[].irc_result.points[].rms_gradient
+  arc_key: "tckdb_evidence.json: ...irc...points[].rms_gradient_hartree_per_bohr"
+  availability: conditional
+  condition: "Same gate as max_gradient."
+  fidelity: lossy
+  fidelity_note: "UNIT hartree/bohr stated in the ARC name, unrepresentable in TCKDB's."
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:230
+  source: arc/tckdb_evidence.py:273
+
+- path: reaction_upload.transition_state.calculations[].irc_result.points[].relative_energy_kj_mol
+  arc_key: null
+  availability: rare
+  condition: "Never exported for IRC points."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC exports absolute energies only. TCKDB's relative energy needs a
+    zero_energy_reference_hartree, which ARC also does not export for IRC — the
+    parser docstring notes the TS seed point is not emitted, so the natural
+    reference is absent too.
+  fixture_evidence: null
+  source: arc/tckdb_evidence.py:268
+
+- path: reaction_upload.transition_state.calculations[].irc_result.points[].is_ts
+  arc_key: null
+  availability: rare
+  condition: >-
+    Never exported. Gaussian's 'Point Number: 0' TS seed has no CURRENT
+    STRUCTURE block and is deliberately not emitted.
+  fidelity: lossy
+  fidelity_note: >-
+    No point is ever flagged as the TS, so TCKDB's ts_point_index cannot be
+    supplied either.
+  fixture_evidence: null
+  source: arc/tckdb_evidence.py:257
+
+- path: reaction_upload.transition_state.calculations[].irc_result.has_forward
+  arc_key: "tckdb_evidence.json: records[].irc.value.trajectories[].declared_direction"
+  availability: conditional
+  condition: "Derivable whenever at least one trajectory is present."
+  fidelity: derived
+  fidelity_note: >-
+    ARC emits a per-trajectory declared_direction (from output.yml's
+    irc_log_directions, falling back to the log FILENAME containing 'irc_f' /
+    'forward'). has_forward / has_reverse must be derived by scanning the
+    trajectories; TCKDB validates them against the per-point directions.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:222
+  source: arc/tckdb_evidence.py:291
+
+- path: arc_only.tckdb_evidence.records.irc.value.parser_version
+  arc_key: "tckdb_evidence.json: records[].irc.value.parser_version"
+  availability: conditional
+  condition: "Present on every available IRC envelope."
+  fidelity: lossy
+  fidelity_note: >-
+    'arc-irc-path-1'. TCKDB's IRCResultPayload has NO parser_version field
+    (unlike HessianPayload, which does), so the IRC parse provenance is
+    discarded.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:219
+  source: arc/tckdb_evidence.py:299
+
+- path: arc_only.tckdb_evidence.records.irc.value.trajectories.source_log
+  arc_key: "tckdb_evidence.json: records[].irc.value.trajectories[].source_log"
+  availability: conditional
+  condition: "Present on every trajectory."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC groups IRC points BY LOG (one trajectory per branch); TCKDB flattens
+    them into one point list. The per-branch grouping and its source file are
+    lost.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:1131
+  source: arc/tckdb_evidence.py:291
+
+- path: arc_only.tckdb_evidence.records.irc.value.omitted_source_paths
+  arc_key: "tckdb_evidence.json: records[].irc.value.omitted_source_paths"
+  availability: conditional
+  condition: >-
+    KEY OMITTED when every IRC log parsed. NOT PRESENT IN THE GOLDEN FIXTURE —
+    covered only by unit tests with stubbed parsers.
+  fidelity: lossy
+  fidelity_note: >-
+    The partial-failure record: which IRC logs were named but could not be read.
+    No TCKDB home; a consumer cannot tell a two-branch IRC that lost a branch
+    from a genuinely one-branch run.
+  fixture_evidence: arc/tckdb_evidence_test.py:462
+  source: arc/tckdb_evidence.py:301
+
+# ─────────────────────────────────────────────────────────────────────────────
+# tckdb_evidence.json — GSM path search
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.method
+  arc_key: "tckdb_evidence.json: records[].gsm.value.method"
+  availability: conditional
+  condition: >-
+    GSM evidence is built ONLY for a transition_state record whose resolved
+    path-search method is 'gsm' AND which carries a gsm_log. NEB runs produce no
+    evidence record at all — _build_gsm has no NEB counterpart, so orca_neb is
+    resolved by _path_search_method and then never used.
+  fidelity: exact
+  fidelity_note: >-
+    Pinned to the literal 'gsm', which is a member of TCKDB's PathSearchMethod
+    enum verbatim.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:79
+  source: arc/tckdb_evidence.py:595
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.points[].point_index
+  arc_key: "tckdb_evidence.json: records[].gsm.value.points[].source_point_index"
+  availability: conditional
+  condition: "Same gate as path_search_result.method."
+  fidelity: exact
+  fidelity_note: >-
+    INDEX BASE 0 on both sides — ARC uses enumerate() over the stringfile frames
+    and TCKDB's PathSearchPointPayload.point_index is ge=0, documented
+    zero-based. NO CONVERSION. Note this is the OPPOSITE of the IRC record's
+    base within the same file.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:109
+  source: arc/tckdb_evidence.py:582
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.points[].geometry.xyz_text
+  arc_key: "tckdb_evidence.json: records[].gsm.value.points[].geometry_xyz_text"
+  availability: conditional
+  condition: "Same gate."
+  fidelity: exact
+  fidelity_note: >-
+    CANONICAL XYZ with the comment line set to 'gsm_point_<index>'. Angstrom.
+    No isotopes.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:108
+  source: arc/tckdb_evidence.py:584
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.points[].relative_energy_kj_mol
+  arc_key: "tckdb_evidence.json: records[].gsm.value.points[].stringfile_relative_energy_kcal_mol"
+  availability: conditional
+  condition: >-
+    KEY OMITTED when parse_gsm_stringfile_energies returned None (the comment
+    lines carry no leading float at all) or the list is shorter than the frames.
+  fidelity: lossy
+  fidelity_note: >-
+    UNIT MISMATCH: ARC emits KCAL/MOL, TCKDB's field is KJ/MOL. Conversion is
+    x 4.184. WORSE: this value is IDENTICALLY ZERO on every real xTB/GSM run —
+    the ORCA-format writer emits 0.000000 into every comment line — and the
+    golden fixture confirms it ({0.0} for all 15 points,
+    arc/tckdb_evidence_test.py:652). So the field is present, unit-mismatched,
+    and scientifically empty; uploading it as a relative energy would assert a
+    flat energy profile. The real energies arrive via the ograd attachment
+    instead.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:110
+  source: arc/tckdb_evidence.py:589
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.points[].path_coordinate
+  arc_key: "tckdb_evidence.json: ...gsm...points[].cumulative_com_superposed_displacement_angstrom"
+  availability: conditional
+  condition: >-
+    KEY OMITTED when there are fewer than two frames or any kabsch call fails.
+    Zero at the first frame by construction.
+  fidelity: lossy
+  fidelity_note: >-
+    UNIT Angstrom, stated in the ARC field name; TCKDB's `path_coordinate` has
+    NO unit and no definition, so both are lost. The quantity is the running sum
+    of the Frobenius norm of the coordinate difference after each consecutive
+    pair is translated to its CENTRE OF MASS and optimally rotated — i.e.
+    sqrt(N_atoms) times the RMSD, unweighted, but with a mass-dependent
+    superposition frame, so it MOVES UNDER ISOTOPIC SUBSTITUTION and is an upper
+    bound on the freely superposed displacement (6% high on the golden's final
+    point). It shares NEITHER units, sign convention, NOR origin with the IRC
+    record's reaction_coordinate_sqrt_amu_bohr, yet both land in adjacent TCKDB
+    fields with no unit. The rename from `path_coordinate_angstrom` in
+    arc-gsm-stringfile-2 exists precisely to stop that conflation.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:107
+  source: arc/tckdb_evidence.py:587
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.points[].electronic_energy_hartree
+  arc_key: "tckdb_evidence.json: ...gsm...points[].electronic_energy_hartree (attached)"
+  availability: conditional
+  condition: >-
+    Attached to a point ONLY when an archived ograd gradient file's geometry
+    superposes onto exactly one frame within 1e-3 Angstrom AND that frame is
+    claimed by no other invocation. In the golden, 3 of 15 points are attached
+    (arc/tckdb_evidence_test.py:778); the other 12 carry no energy at all.
+  fidelity: exact
+  fidelity_note: >-
+    UNIT hartree, from the xTB `energy` file (or an `xtbout` log fallback).
+    Identified BY GEOMETRY CONTENT, not by invocation id — id arithmetic is
+    provably wrong here: GSM's `slot` is runend(1) plus the ICoord array index,
+    `cp -p` overwrites, and on a real 15-frame run slot 0000.01 holds the LAST
+    frame. Reading the id as a frame index puts the run's final energy on its
+    first point. A consumer must not read arc-gsm-stringfile-1 per-point
+    energies as belonging to their point.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:114
+  source: arc/tckdb_evidence.py:494
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.points[].max_gradient
+  arc_key: "tckdb_evidence.json: ...gsm...points[].max_gradient_hartree_per_bohr (attached)"
+  availability: conditional
+  condition: >-
+    Same attachment gate, plus a readable Turbomole `gradient` file. Golden:
+    invocation 0000.04 archived no gradient file and therefore reaches no point.
+  fidelity: lossy
+  fidelity_note: >-
+    UNIT hartree/bohr in the ARC name, unrepresentable in TCKDB's `max_gradient`.
+    Value is max|component| over all 3N components of the FINAL cycle block
+    (xTB appends cycles rather than truncating).
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:118
+  source: arc/tckdb_evidence.py:496
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.points[].rms_gradient
+  arc_key: "tckdb_evidence.json: ...gsm...points[].rms_gradient_hartree_per_bohr (attached)"
+  availability: conditional
+  condition: "Same attachment gate."
+  fidelity: lossy
+  fidelity_note: >-
+    UNIT hartree/bohr, lost in TCKDB's name. Normalised over ALL 3N components
+    (sqrt(sum(x^2)/3N)), not over N atoms — omitting the /N inflates every RMS
+    by sqrt(N), which arc/tckdb_evidence_test.py:654 exists to pin.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:119
+  source: arc/tckdb_evidence.py:497
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.selected_ts_point_index
+  arc_key: "tckdb_evidence.json: records[].gsm.value.selected_source_point_index"
+  availability: conditional
+  condition: "Present on every available GSM envelope."
+  fidelity: derived
+  fidelity_note: >-
+    INDEX BASE 0 on both sides. But it is NOT the highest-energy point: ARC
+    computes int((len(frames)-1)/2)+1, i.e. a fixed POSITIONAL choice one past
+    the midpoint (8 of 15 in the golden). TCKDB's field means 'the point selected
+    as the TS guess', which ARC's positional heuristic only approximates.
+    Renamed selected_source_point_index -> selected_ts_point_index.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:212
+  source: arc/tckdb_evidence.py:596
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.points[].is_ts_guess
+  arc_key: "(derivable from selected_source_point_index)"
+  availability: conditional
+  condition: "Derivable whenever a GSM envelope is available."
+  fidelity: derived
+  fidelity_note: >-
+    ARC marks the selection ONCE at the result level, not per point. The
+    per-point boolean must be set by comparing each point_index to
+    selected_source_point_index.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:212
+  source: arc/tckdb_evidence.py:596
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.n_points
+  arc_key: "(derivable from len(gsm.value.points))"
+  availability: conditional
+  condition: "Derivable whenever a GSM envelope is available."
+  fidelity: derived
+  fidelity_note: "ARC exports no explicit point count for GSM; len(points) is the only source."
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:105
+  source: arc/tckdb_evidence.py:597
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.converged
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC emits no GSM convergence verdict. Neither is is_double_ended,
+    climbing_image_index, source_endpoint_count, nor
+    zero_energy_reference_hartree.
+  fixture_evidence: null
+  source: arc/tckdb_evidence.py:592
+
+- path: arc_only.tckdb_evidence.records.gsm.value.parser_version
+  arc_key: "tckdb_evidence.json: records[].gsm.value.parser_version"
+  availability: conditional
+  condition: "Present on every available GSM envelope."
+  fidelity: lossy
+  fidelity_note: >-
+    'arc-gsm-stringfile-3'. TCKDB's PathSearchResultPayload has NO parser_version
+    field, so the version gate — which is load-bearing, since versions 1 and 2
+    are documented as incompatible in exactly the ways above — is discarded on
+    upload. This is the most consequential provenance loss in the sidecar.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:104
+  source: arc/tckdb_evidence.py:594
+
+- path: arc_only.tckdb_evidence.records.gsm.value.source_stringfile
+  arc_key: "tckdb_evidence.json: records[].gsm.value.source_stringfile"
+  availability: conditional
+  condition: "Present on every available GSM envelope."
+  fidelity: lossy
+  fidelity_note: "Run-relative path echoing output.yml's gsm_log. No TCKDB field."
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:213
+  source: arc/tckdb_evidence.py:593
+
+- path: arc_only.tckdb_evidence.records.gsm.value.ograd_invocations
+  arc_key: "tckdb_evidence.json: records[].gsm.value.ograd_invocations[]"
+  availability: conditional
+  condition: >-
+    KEY OMITTED when the gsm_node_outputs directory is absent or held no
+    readable energies. Golden has four invocations for fifteen frames.
+  fidelity: lossy
+  fidelity_note: >-
+    The raw archive of every GSM ograd invocation
+    ({invocation_id, electronic_energy_hartree, max_gradient_hartree_per_bohr,
+    rms_gradient_hartree_per_bohr}), ordered by numeric (run, slot). TCKDB has no
+    place for invocation-level records — only the three that matched a frame by
+    geometry survive as point fields, and the rest (here, 0000.04) are dropped
+    entirely along with the evidence that a match was attempted.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:80
+  source: arc/tckdb_evidence.py:600
+
+- path: arc_only.tckdb_evidence.records.gsm.value.points.geometry_matched_ograd_invocation_id
+  arc_key: "tckdb_evidence.json: ...gsm...points[].geometry_matched_ograd_invocation_id"
+  availability: conditional
+  condition: "Present only on an attached point (3 of 15 in the golden)."
+  fidelity: lossy
+  fidelity_note: >-
+    Which archived invocation supplied this point's energy. Without it a consumer
+    cannot tell an attached energy from an unattached point except by absence.
+    No TCKDB field.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:116
+  source: arc/tckdb_evidence.py:491
+
+- path: arc_only.tckdb_evidence.records.gsm.value.points.geometry_match_displacement_angstrom
+  arc_key: "tckdb_evidence.json: ...gsm...points[].geometry_match_displacement_angstrom"
+  availability: conditional
+  condition: "Present only on an attached point."
+  fidelity: lossy
+  fidelity_note: >-
+    UNIT Angstrom. The measured superposition residual that justified the
+    attachment (~1e-5 in the golden, against a 1e-3 tolerance and a ~0.3
+    nearest non-match). It is the confidence measure for the attached energy and
+    has no TCKDB home, so an attached energy arrives with no way to audit how it
+    was attached.
+  fixture_evidence: arc/testing/tckdb_evidence/golden/tckdb_evidence.json:115
+  source: arc/tckdb_evidence.py:492
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.points[].max_force
+  arc_key: null
+  availability: rare
+  condition: "Never exported."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC exports gradients, not forces. TCKDB models both; the force fields have
+    no ARC supply and must NOT be filled from the gradient fields (opposite sign
+    convention).
+  fixture_evidence: null
+  source: arc/tckdb_evidence.py:496
+
+- path: reaction_upload.transition_state.calculations[].path_search_result.points[].is_climbing_image
+  arc_key: null
+  availability: rare
+  condition: "Never exported; GSM has no climbing image and NEB evidence is not built at all."
+  fidelity: lossy
+  fidelity_note: "No ARC supply."
+  fixture_evidence: null
+  source: arc/tckdb_evidence.py:580
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Structural fields TCKDB requires that the export supplies through NO field
+# ─────────────────────────────────────────────────────────────────────────────
+
+- path: species_upload.conformers[].key
+  arc_key: "(no ARC field; must be synthesised, conventionally from species[].label)"
+  availability: rare
+  condition: "Never exported."
+  fidelity: derived
+  fidelity_note: >-
+    TCKDB requires a unique bundle-local conformer key (min_length 1) and
+    validates uniqueness. ARC exports a `conformers[]` list with no keys at all,
+    so an adapter uploading N screened conformers must invent N keys, and the
+    invented keys are not stable across ARC runs.
+  fixture_evidence: null
+  source: arc/output.py:1053
+
+- path: species_upload.conformers[].primary_calculation.key
+  arc_key: "(no ARC field; only rotor_scans[].key is exported)"
+  availability: rare
+  condition: >-
+    Never exported for opt/freq/sp. The ONLY calculation key ARC emits is
+    rotor_scans[].key ('scan_rotor_<i>').
+  fidelity: derived
+  fidelity_note: >-
+    Every TCKDB calculation needs a unique bundle-local key, and torsions
+    reference scan calculations BY key. ARC supplies the scan keys and nothing
+    else, so opt/freq/sp keys must be invented — and any dependency edge
+    (depends_on) between them invented with them.
+  fixture_evidence: arc/output_schema_test.py:632
+  source: arc/output.py:1569
+
+- path: species_upload.conformers[].primary_calculation.type
+  arc_key: "(implied by the output.yml field-name prefix opt_/freq_/sp_)"
+  availability: always
+  condition: null
+  fidelity: derived
+  fidelity_note: >-
+    ARC's record is FLAT: opt_log/opt_n_steps/freq_log/sp_log rather than a list
+    of typed calculations. The CalculationType must be reconstructed from the
+    key prefix. output_test.py:1153 pins the flatness as intentional contract.
+  fixture_evidence: arc/output_test.py:1153
+  source: arc/output.py:1139
+
+- path: species_upload.conformers[].primary_calculation.depends_on[].role
+  arc_key: "(partially implied by coarse_opt_log presence and by opt_input_xyz semantics)"
+  availability: rare
+  condition: "Never exported as data."
+  fidelity: lossy
+  fidelity_note: >-
+    ARC's geometry lineage (initial -> coarse_opt -> opt -> freq/sp) is encoded
+    only in field names and in the workflow-dependent meaning of opt_input_xyz.
+    TCKDB's CalculationDependencyRole vocabulary (optimized_from, freq_on,
+    single_point_on, arkane_source, irc_start, scan_parent) has no ARC field.
+  fixture_evidence: null
+  source: arc/output.py:1102
+
+- path: species_upload.conformers[].primary_calculation.execution_environment
+  arc_key: null
+  availability: rare
+  condition: >-
+    Never exported, deliberately. arc/output.py:1186-1188 lists server, queue,
+    runtime and ess_trsh as 'explicitly out of scope for the database', and
+    arc/tckdb_evidence_test.py:590 asserts no server/job_id/credential string
+    reaches the sidecar.
+  fidelity: lossy
+  fidelity_note: >-
+    The whole ExecutionEnvironmentManifestPayload (runtime, modules, container,
+    conda, executable hashes) has no ARC supply and is an explicit non-goal of
+    the current contract.
+  fixture_evidence: arc/tckdb_evidence_test.py:590
+  source: arc/output.py:1186
+
+- path: species_upload.conformers[].primary_calculation.parameters[].raw_key
+  arc_key: null
+  availability: rare
+  condition: >-
+    Never exported. The per-calc execution-control settings ARC does compute
+    (grid, scf_convergence, opt_convergence, max_*_cycles, symmetry, guess) are
+    described in arc/output.py:1199-1205 as omitted rather than fabricated;
+    freq_final_settings and sp_final_settings are pinned to null.
+  fidelity: lossy
+  fidelity_note: >-
+    TCKDB's whole CalculationParameterObservation surface is unsupplied. The one
+    exception is optimization_stage, which is exported but has no TCKDB home.
+  fixture_evidence: arc/output_schema_test.py:827
+  source: arc/output.py:1212
+
+- path: species_upload.conformers[].primary_calculation.quality
+  arc_key: null
+  availability: rare
+  condition: "Never exported; TCKDB defaults to `raw`, which is correct for every ARC run."
+  fidelity: derived
+  fidelity_note: "Constant, not supplied."
+  fixture_evidence: null
+  source: arc/output.py:1004

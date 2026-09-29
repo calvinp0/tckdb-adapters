@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-"""Unit tests for arc.tckdb.payload_writer."""
+"""Unit tests for tckdb_arc.payload_writer."""
 
 import json
 import shutil

@@ -27,14 +27,18 @@ The three-package ecosystem:
 The dependency direction is acyclic: `tckdb_arc → {tckdb-client, tckdb-schemas, arc(optional)}`.
 Nothing in the shared layer ever points back at a producing tool.
 
+See the [current ARC integration audit](docs/contract/CURRENT_ARC_INTEGRATION.md)
+for verified mappings, validation results, and remaining producer/server gaps.
+
 ## The shared layer (pinned)
 
-Both shared packages are pinned to git tags on `calvinp0/tckdbv2`:
+The tested contract is `tckdb-client` 0.93.x with `tckdb-schemas` 0.51.x.
+CI pins both to the same tested TCKDB source revision:
 
 ```bash
 pip install \
-  "tckdb-client @ git+https://github.com/calvinp0/tckdbv2.git@tckdb-client-v0.27.1#subdirectory=clients/python" \
-  "tckdb-schemas @ git+https://github.com/calvinp0/tckdbv2.git@tckdb-schemas-v0.8.0#subdirectory=schemas/python/tckdb-schemas"
+  "tckdb-client @ git+https://github.com/calvinp0/tckdbv2.git@adceeff5c0470c37483d16c4d6b46a005c076dfe#subdirectory=clients/python" \
+  "tckdb-schemas @ git+https://github.com/calvinp0/tckdbv2.git@adceeff5c0470c37483d16c4d6b46a005c076dfe#subdirectory=schemas/python/tckdb-schemas"
 ```
 
 For local development against a `TCKDB_v2` checkout, install from the local path
@@ -52,19 +56,21 @@ pip install -e ".[test]"        # + the shared packages above
 pytest                          # base (no-ARC) suite
 ```
 
-`tckdb-arc` depends on `tckdb-client` at runtime and `tckdb-schemas` in tests.
+`tckdb-arc` bounds both shared packages at runtime so fresh installs use
+the contract exercised by the tests.
 The CLI entry point is `tckdb-arc-upload`.
 
 ### The optional `[arc]` extra
 
-Three payload paths (freq-Hessian, IRC trajectory, GSM string-file) reparse ESS
-logs via ARC's `arc.parser`. **ARC is not pip-installable as `arc`** — it is a
+Three payload paths (freq-Hessian, IRC trajectory, GSM string-file) can reparse
+ESS logs via ARC's `arc.parser` when portable evidence is absent. **ARC is not pip-installable as `arc`** — it is a
 conda/PYTHONPATH install — so the `[arc]` extra is a *documented marker*, not a
 pip-resolvable dependency. When ARC is not importable those three sub-payloads
 degrade gracefully (they are omitted, not errored) via
 `tckdb_arc._arc_optional`. The arc-gated tests run only where ARC is already on
 the path (they `pytest.importorskip("arc")` otherwise).
 
-The forward-looking primary path for those three payloads is an ARC-emitted
-`tckdb_evidence` sidecar (a later phase); until it lands, base installs omit
-them and `[arc]`-on-PYTHONPATH installs reparse.
+The primary path is ARC's `parser_evidence` descriptor and matching
+`parser_evidence.json` beside `output.yml`. The legacy `tckdb_evidence`
+descriptor/file remains supported. Valid sidecars supply all three evidence
+types without installing ARC or retaining raw calculation logs.

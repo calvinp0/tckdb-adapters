@@ -25,16 +25,18 @@ Three guarantees:
 import base64
 import hashlib
 import json
+import math
 import os
 import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from tckdb_client import TCKDBClient
 from tckdb_client.errors import TCKDBError
+from tckdb_schemas.enthalpy_reference import enthalpy_reference_error
 
 from tckdb_arc._logging import get_logger
 from tckdb_arc.config import (
@@ -77,7 +79,7 @@ def _serialize_calc_constraints(source) -> list[dict]:
     ``source`` is whatever ``arc/output.py`` attached to the record (a
     list of parser dicts) or what the caller passed explicitly. Empty /
     None / unrecognised input produces ``[]``. Wraps
-    ``arc.tckdb.constraints.serialize_constraints`` so per-calc parse
+    ``tckdb_arc.constraints.serialize_constraints`` so per-calc parse
     failures never bubble up into payload generation.
     """
     if not source:
@@ -135,8 +137,25 @@ def _neutral_scan_result_to_tckdb(result: Mapping[str, Any]) -> dict[str, Any] |
     atoms = coordinate.get("atom_indices")
     if not isinstance(atoms, list) or not atoms:
         return None
+    # index_base defaults to 1 when the key is absent (matches ARC's own
+    # rotor-scan writer, which always emits index_base=1 for the only
+    # coordinate kind it produces — a dihedral scan; ARC's schema pins
+    # it to `const: 1`). Unlike the constraints[] route (C-1), a missing
+    # key here is safe on every reachable path. But an out-of-range
+    # *explicit* value must not be applied blindly (PHASE_C_PLAN.md C-2)
+    # — guard it the same way constraints.py does, rather than only
+    # bounding via the len<=4 check below.
     try:
         index_base = int(coordinate.get("index_base", 1))
+    except (TypeError, ValueError):
+        return None
+    if index_base not in (0, 1):
+        logger.warning(
+            "TCKDB scan coordinate: unsupported index_base=%r; omitting "
+            "scan result.", index_base,
+        )
+        return None
+    try:
         one_based = [int(atom) - index_base + 1 for atom in atoms]
     except (TypeError, ValueError):
         return None
@@ -165,7 +184,20 @@ def _neutral_scan_result_to_tckdb(result: Mapping[str, Any]) -> dict[str, Any] |
     for source_key, target_key in optional_map.items():
         if coordinate.get(source_key) is not None:
             coord_out[target_key] = coordinate[source_key]
-    if coordinate.get("requested_step_size") is not None:
+    # ``resolution_degrees`` is a degree-specific echo of the generic
+    # ``step_size`` above (TCKDB's CoordinateUnit is only {angstrom,
+    # degree} — a bond/cartesian scan's step is in Angstrom, not
+    # degrees). Only stamp it when the coordinate's own unit says
+    # degree; otherwise a distance-kind scan's Angstrom step would land
+    # in a field named degrees (PHASE_C_PLAN.md C-5). Unreachable from
+    # real ARC output today — ARC's rotor-scan writer only ever emits
+    # dihedral/degree scans, and its schema pins both as consts — but
+    # this function also serves hand-written/third-party output.yml,
+    # which evidence.py does not validate against that schema.
+    if (
+        coordinate.get("requested_step_size") is not None
+        and str(coordinate.get("unit") or "").strip().lower() == "degree"
+    ):
         coord_out["resolution_degrees"] = coordinate["requested_step_size"]
 
     points: list[dict[str, Any]] = []
@@ -223,7 +255,27 @@ def _correction_records_from_record(record: Mapping[str, Any]) -> list[dict[str,
             scheme_kind = "bac_petersson" if model == "petersson" else "bac_melius"
         else:
             continue
-        unit = str(total.get("unit") or ("hartree" if correction_type == "atom_energy" else "kcal_mol"))
+        # Unit is read, never guessed (PHASE_C_PLAN.md C-6). ARC's
+        # producer (arc/scripts/get_species_corrections.py) always
+        # hardcodes 'hartree' for atom-energy and 'kcal_mol' for both
+        # bond-additivity models, so real ARC output never reaches the
+        # missing-unit branch below — but ARC's own docs have stated the
+        # wrong unit for this table before, and a hand-written/
+        # third-party output.yml isn't schema-validated (evidence.py
+        # only checks schema_version). ``value_unit`` is a *required*
+        # field on TCKDB's AppliedEnergyCorrectionUploadPayload, so
+        # there is no valid way to emit this record without one: omit
+        # the whole correction rather than assert a unit ARC didn't
+        # report.
+        raw_unit = total.get("unit")
+        if not raw_unit:
+            logger.warning(
+                "TCKDB energy correction: %s correction has no reported "
+                "unit; omitting rather than guessing hartree/kcal_mol.",
+                correction_type,
+            )
+            continue
+        unit = str(raw_unit)
         scheme: dict[str, Any] = {
             "kind": scheme_kind,
             "name": scheme_kind,
@@ -650,6 +702,7 @@ class UploadOutcome:
     response: Any = None
     primary_calculation: dict[str, Any] | None = None
     additional_calculations: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -924,10 +977,12 @@ class TCKDBAdapter:
         conformer_label = extra_label or f"conf{conformer_index}"
         project_label = self._config.project_label or output_doc.get("project")
 
+        build_warnings: list[dict[str, Any]] = []
         payload = self._build_computed_species_payload(
             output_doc=output_doc,
             species_record=species_record,
             conformer_key=conformer_label,
+            warnings=build_warnings,
         )
 
         idempotency_inputs = IdempotencyInputs.from_payload(
@@ -947,6 +1002,7 @@ class TCKDBAdapter:
             payload_kind=COMPUTED_SPECIES_KIND,
             base_url=self._config.base_url,
             subdir=PayloadWriter.COMPUTED_SPECIES_SUBDIR,
+            warnings=build_warnings,
         )
         logger.info(
             "TCKDB computed-species payload written: %s (key=%s)",
@@ -965,13 +1021,15 @@ class TCKDBAdapter:
         output_doc: Mapping[str, Any],
         species_record: Mapping[str, Any],
         conformer_key: str,
+        warnings: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Compose one ComputedSpeciesUploadRequest dict.
 
         Reuses the existing per-calc and species-entry shapers; the only
         bundle-specific surface is the conformer wrapper, dependency
         edges (declared by local calc keys), inline artifacts, and the
-        optional thermo block.
+        optional thermo block. Producer-side omissions (a thermo block the
+        producer self-check refuses) are appended to ``warnings``.
         """
         included_keys, conformer_block = self._build_conformer_block(
             output_doc=output_doc,
@@ -1010,7 +1068,16 @@ class TCKDBAdapter:
 
         thermo_block = _build_thermo_block(
             species_record.get("thermo"),
-            included_calc_keys=included_keys,
+            # Computed-species has a single, unscoped calc namespace, so
+            # each included role's own literal ("opt"/"freq"/"sp") is
+            # also its bundle-local key — an identity map.
+            calc_keys_by_role={key: key for key in included_keys},
+            # This bundle's root is ComputedSpeciesUploadRequest, whose
+            # thermo field is ``ThermoInBundle`` — the shape that accepts
+            # ``source_calculations``.
+            target_model="ThermoInBundle",
+            warnings=warnings,
+            energy_level=_thermo_energy_level(output_doc),
         )
         if thermo_block is not None:
             bundle["thermo"] = thermo_block
@@ -1040,6 +1107,9 @@ class TCKDBAdapter:
             species_record=species_record,
             calc_keys_by_role=species_calc_keys_by_role,
             workflow_tool_release=arc_wt,
+            # This bundle's root is ComputedSpeciesUploadRequest, whose
+            # statmech field is ``StatmechInBundle``.
+            target_model="StatmechInBundle",
         )
         if statmech_block is not None:
             bundle["statmech"] = statmech_block
@@ -1167,8 +1237,8 @@ class TCKDBAdapter:
         # 1D rotor whose log was parseable. Each entry already carries a
         # bundle-local ``key`` (``scan_rotor_<i>``) and a TCKDB-shaped
         # ``scan_result`` dict; the adapter only needs to layer level /
-        # software / workflow_tool_release on top, with opt-level
-        # fallback because rotors_dict has no per-scan level field. The
+        # software / workflow_tool_release on top. An explicit scan level
+        # is required; the optimization level does not identify the scan. The
         # ``depends_on`` edge points back to opt — the scan is a series
         # of constrained reoptimizations from that geometry.
         for scan_entry in _scan_entries_from_record(species_record):
@@ -1188,8 +1258,8 @@ class TCKDBAdapter:
                     species_record=species_record,
                     calc_key=scan_key,
                     calc_type=_CALC_KEY_SCAN,
-                    level_kind="opt",
-                    ess_job_key="opt",
+                    level_kind="scan",
+                    ess_job_key="scan",
                     result_field="scan_result",
                     result_payload=scan_result,
                     depends_on=[{"parent_calculation_key": _CALC_KEY_OPT,
@@ -1749,10 +1819,11 @@ class TCKDBAdapter:
         [...], "source": "parsed_log"|"parsed_hess", "parser_version": ...}``.
 
         The Hessian is native atomic units (hartree/bohr²) straight from the
-        parser — no unit conversion is applied here. ``geometry_xyz_text`` is
-        the freq calc's input geometry (the conformer's optimized xyz, already
-        normalized to standard XYZ), which is the configuration the Hessian was
-        computed at.
+        parser — no unit conversion is applied here. Portable evidence carries
+        the geometry in the Hessian's own Cartesian frame, which must be used
+        unchanged even when the conformer uses a different orientation.
+        Raw parser fallback also requires the parser's frame-matched geometry;
+        the conformer's geometry cannot establish the Hessian coordinate frame.
 
         Returns ``None`` — never raises — when the Hessian is unavailable for
         any reason (no geometry, no freq log on disk, unknown/unsupported ESS,
@@ -1772,7 +1843,7 @@ class TCKDBAdapter:
                 "source": value["source"],
                 "parser_version": value["parser_version"],
             }
-        if lookup.state == "unavailable" or not geometry_xyz_text:
+        if lookup.state == "unavailable":
             return None
         log_path = species_record.get(_LOG_FIELD_BY_CALC_KEY[_CALC_KEY_FREQ])
         if not log_path:
@@ -1797,6 +1868,26 @@ class TCKDBAdapter:
             if parse is None:
                 return None
             triangle = parse()
+            if not triangle:
+                return None
+            parse_frame = getattr(ess_adapter, "parse_cartesian_hessian_geometry", None)
+            frame_xyz, frame = parse_frame() if parse_frame else (None, None)
+            expected_frame = {"gaussian": "gaussian_input_orientation", "orca": "orca_hess_atoms"}
+            if frame_xyz is None or frame != expected_frame.get(ess_name):
+                logger.warning(
+                    "TCKDB bundle: Hessian omitted for label=%s: matching Cartesian frame geometry unavailable",
+                    species_record.get("label"),
+                )
+                return None
+            from tckdb_arc._vendor import xyz_to_str
+
+            geometry_xyz_text = _normalize_xyz_text(xyz_to_str(frame_xyz), species_record.get("label"))
+            if geometry_xyz_text is None:
+                return None
+            dimension = 3 * int(geometry_xyz_text.splitlines()[0])
+            if len(triangle) != dimension * (dimension + 1) // 2:
+                logger.warning("TCKDB bundle: Hessian omitted: matrix dimension disagrees with frame geometry")
+                return None
         except Exception as exc:  # noqa: BLE001 — Hessian is best-effort only.
             logger.debug(
                 "TCKDB bundle: Hessian parse skipped for label=%s (%s)",
@@ -1980,9 +2071,11 @@ class TCKDBAdapter:
         reaction_label = reaction_record.get("label") or "unlabeled"
         project_label = self._config.project_label or output_doc.get("project")
 
+        build_warnings: list[dict[str, Any]] = []
         payload = self._build_computed_reaction_payload(
             output_doc=output_doc,
             reaction_record=reaction_record,
+            warnings=build_warnings,
         )
 
         idempotency_inputs = IdempotencyInputs.from_payload(
@@ -2008,6 +2101,7 @@ class TCKDBAdapter:
             base_url=self._config.base_url,
             subdir=PayloadWriter.COMPUTED_REACTION_SUBDIR,
             is_partial=is_partial,
+            warnings=build_warnings,
         )
         if is_partial:
             # Phase-1 policy: partial reaction sidecars never POST. The
@@ -2041,6 +2135,7 @@ class TCKDBAdapter:
         *,
         output_doc: Mapping[str, Any],
         reaction_record: Mapping[str, Any],
+        warnings: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Compose one ``ComputedReactionUploadRequest`` dict.
 
@@ -2048,6 +2143,7 @@ class TCKDBAdapter:
         delegates per-actor block construction (species + TS) to the
         shared per-actor helpers, and stitches in a single
         modified-Arrhenius kinetics fit when ARC produced one.
+        Producer-side omissions are appended to ``warnings``.
         """
         species_index = _index_species(output_doc)
         ts_index = _index_transition_states(output_doc)
@@ -2086,6 +2182,7 @@ class TCKDBAdapter:
                 species_record=record,
                 actor_key=actor_key,
                 calc_prefix=calc_prefix,
+                warnings=warnings,
             )
             species_blocks.append(block)
             reactant_keys.append(actor_key)
@@ -2105,6 +2202,7 @@ class TCKDBAdapter:
                 species_record=record,
                 actor_key=actor_key,
                 calc_prefix=calc_prefix,
+                warnings=warnings,
             )
             species_blocks.append(block)
             product_keys.append(actor_key)
@@ -2209,6 +2307,7 @@ class TCKDBAdapter:
         species_record: Mapping[str, Any],
         actor_key: str,
         calc_prefix: str,
+        warnings: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, str]]:
         """Build one ``BundleSpeciesIn`` dict + a calc-role → bundle-key map.
 
@@ -2272,6 +2371,9 @@ class TCKDBAdapter:
         # computed_reaction_upload.py:446 exempts it from needing
         # geometry_key — leave it bare.
         if opt_coarse_calc is not None:
+            # Anchor to the conformer observation without claiming the coarse
+            # geometry is the final conformer geometry.
+            opt_coarse_calc["conformer_key"] = conf_key
             additional.append(opt_coarse_calc)
             calc_keys[_CALC_KEY_OPT_COARSE] = opt_coarse_key
 
@@ -2365,8 +2467,8 @@ class TCKDBAdapter:
                     calc_key=namespaced_scan_key,
                     calc_role=_CALC_KEY_SCAN,
                     calc_type=_CALC_KEY_SCAN,
-                    level_kind="opt",
-                    ess_job_key="opt",
+                    level_kind="scan",
+                    ess_job_key="scan",
                     result_field="scan_result",
                     result_payload=scan_result,
                     depends_on=[{"parent_calculation_key": opt_key,
@@ -2398,16 +2500,12 @@ class TCKDBAdapter:
         }
         thermo_block = _build_thermo_block(
             species_record.get("thermo"),
-            included_calc_keys=[
-                # Pass the bundle-local keys so source_calculations links
-                # match the calc keys actually emitted in this species
-                # block. _build_thermo_block expects role names — we
-                # pre-translate to keys via the role→key map below.
-                # Order kept deterministic: opt, freq, sp.
-                calc_keys[role]
-                for role in (_CALC_KEY_OPT, _CALC_KEY_FREQ, _CALC_KEY_SP)
-                if role in calc_keys
-            ],
+            # The current reaction root accepts species-scoped thermo provenance.
+            calc_keys_by_role=calc_keys,
+            target_model="BundleThermoIn",
+            warnings=warnings,
+            warning_field=f"species[{actor_key}].thermo",
+            energy_level=_thermo_energy_level(output_doc),
         )
         if thermo_block is not None:
             species_block["thermo"] = thermo_block
@@ -2430,22 +2528,27 @@ class TCKDBAdapter:
         # product (external_symmetry, is_linear, rigid_rotor_kind,
         # statmech_treatment, point_group, slim torsions, and
         # source_calculations referencing this species's own opt/freq/
-        # sp calcs). ``BundleStatmechIn`` accepts the same field set as
-        # ``StatmechInBundle``, so the shared builder produces the same
-        # shape; the only mode-specific input is the calc-key namespace
-        # — we pass the *species-scoped* ``calc_keys`` (e.g.
-        # ``{"opt": "r0_opt", ...}``) so the server-side ownership check
-        # sees only this species's own calculations. Sibling species
-        # and the TS use disjoint namespaces (``r1_*``/``p0_*``/``ts_*``)
-        # and therefore can't leak in here. The helper returns ``None``
-        # (and we skip the whole statmech block) when nothing useful
-        # resolves, keeping payloads backward-compatible with FSF-less
-        # runs.
+        # sp calcs). This bundle's root is ComputedReactionUploadRequest,
+        # whose per-species statmech field is ``BundleStatmechIn`` — it
+        # currently accepts the same field set this builder can produce
+        # as ``StatmechInBundle`` (the computed-species root) does (see
+        # ``_STATMECH_FIELDS_BY_TARGET``), but that parity is incidental
+        # rather than guaranteed, so ``target_model`` is passed
+        # explicitly below rather than assumed. The only mode-specific
+        # input is the calc-key namespace — we pass the *species-scoped*
+        # ``calc_keys`` (e.g. ``{"opt": "r0_opt", ...}``) so the
+        # server-side ownership check sees only this species's own
+        # calculations. Sibling species and the TS use disjoint
+        # namespaces (``r1_*``/``p0_*``/``ts_*``) and therefore can't
+        # leak in here. The helper returns ``None`` (and we skip the
+        # whole statmech block) when nothing useful resolves, keeping
+        # payloads backward-compatible with FSF-less runs.
         species_statmech = _build_statmech_block_for_species(
             output_doc=output_doc,
             species_record=species_record,
             calc_keys_by_role=calc_keys,
             workflow_tool_release=_arc_workflow_tool_release(output_doc),
+            target_model="BundleStatmechIn",
             scan_key_renames=scan_key_renames or None,
         )
         if species_statmech is not None:
@@ -2738,6 +2841,38 @@ class TCKDBAdapter:
             except ValueError as exc:
                 logger.debug("TCKDB computed-reaction: ts irc calc skipped: %s", exc)
 
+        # ARC exports successful TS rotor scans through the same record
+        # contract as stable species. Preserve the calculation and its parent
+        # even though the TS upload root has no statmech/torsion slot.
+        for scan_entry in _scan_entries_from_record(ts_record):
+            scan_key = scan_entry.get("key")
+            scan_result = scan_entry.get("scan_result")
+            if (scan_entry.get("type") != _CALC_KEY_SCAN
+                    or not isinstance(scan_key, str) or not scan_key
+                    or not isinstance(scan_result, Mapping)):
+                continue
+            try:
+                scan_calc = self._build_calc_in_bundle(
+                    output_doc=output_doc,
+                    species_record=ts_record,
+                    calc_key=f"ts_{scan_key}",
+                    calc_role=_CALC_KEY_SCAN,
+                    calc_type=_CALC_KEY_SCAN,
+                    level_kind="scan",
+                    ess_job_key="scan",
+                    result_field="scan_result",
+                    result_payload=scan_result,
+                    depends_on=[{"parent_calculation_key": ts_opt_key,
+                                 "role": "scan_parent"}],
+                    tckdb_origin=None,
+                    conformer_xyz_text=conformer_xyz_text,
+                    source_constraints=scan_entry.get("constraints"),
+                    include_artifacts=include_artifacts,
+                )
+                additional.append(scan_calc)
+            except ValueError as exc:
+                logger.warning("TCKDB transition-state: scan %s skipped: %s", scan_key, exc)
+
         # TS multiplicity: the TS record's own field is authoritative;
         # fall back to the reaction's multiplicity when missing (some
         # ARC runs only carry it on the reaction).
@@ -2939,10 +3074,16 @@ class TCKDBAdapter:
         # primary_opt is required and must be type=opt; _build_ts_block
         # always emits ts_block["calculation"] as the type=opt primary.
         primary_opt = self._ts_calc_to_standalone(ts_block["calculation"])
-        additional_calculations = [
-            self._ts_calc_to_standalone(calc)
-            for calc in ts_block.get("calculations", [])
-        ]
+        additional_calculations = []
+        for calc in ts_block.get("calculations", []):
+            if calc.get("type") == "scan":
+                logger.warning(
+                    "TCKDB transition-state %r: standalone uploads cannot carry "
+                    "rotor scan results; use computed_reaction mode to retain them.",
+                    str(ts_label),
+                )
+                continue
+            additional_calculations.append(self._ts_calc_to_standalone(calc))
 
         request: dict[str, Any] = {
             "reaction": self._build_ts_reaction_upload(
@@ -3065,6 +3206,36 @@ class TCKDBAdapter:
             )
         smiles_text = str(smiles)
         is_ts = bool(record.get("is_ts"))
+        if is_ts:
+            # Every production call site passes a record sourced from
+            # ``output_doc['species']`` (never ``output_doc
+            # ['transition_states']``), and arc/output.py's
+            # ``build_output_dict`` routes an entry into ``species`` or
+            # ``transition_states`` by ``spc.is_ts`` at construction time
+            # — so no path inside ARC's own pipeline is known to reach
+            # here with ``is_ts=True``. This is the same situation as the
+            # freq_n_imag contradictions in ``_freq_result_payload``: the
+            # live threat is a hand-written/older/third-party output.yml
+            # that carries ``is_ts=True`` on a ``species[]`` entry —
+            # evidence.py's schema check only verifies ``schema_version``,
+            # not the full output.yml JSON schema, so nothing upstream
+            # would stop it reaching here. TCKDB 0.22.0's
+            # ``StationaryPointKind`` has no ``transition_state`` member
+            # at all (only ``minimum``/``vdw_complex``), and neither is a
+            # defensible stand-in for a genuine TS — a transition state
+            # belongs in ``output_doc['transition_states']`` and its own
+            # upload path, not folded into a species_entry. Applying the
+            # same standard as ``_freq_result_payload``'s raises: refuse
+            # the record rather than emit an invalid enum value or
+            # silently reclassify it as a minimum.
+            raise ValueError(
+                f"output.yml record for label={record.get('label')!r} has "
+                f"is_ts=True in a species-entry context (species/reactant/"
+                f"product), but TCKDB 0.22.0's StationaryPointKind has no "
+                f"'transition_state' member. Refusing to deposit this "
+                f"record rather than emit an invalid enum value or "
+                f"silently reclassify it as a minimum."
+            )
         # ARC has no excited-state workflow, so every uploaded species_entry
         # is asserted as the electronic ground state. Sending this explicitly
         # (rather than relying on the server's column default) keeps the
@@ -3081,7 +3252,9 @@ class TCKDBAdapter:
             "smiles": smiles_text,
             "charge": int(record.get("charge", 0) or 0),
             "multiplicity": int(record.get("multiplicity", 1) or 1),
-            "species_entry_kind": "transition_state" if is_ts else "minimum",
+            # is_ts is always False here now — the raise above refuses
+            # any is_ts=True record before this point.
+            "species_entry_kind": "minimum",
             "electronic_state_kind": "ground",
         }
         # Optional ``unmapped_smiles``: TCKDB carries a free-form
@@ -3217,7 +3390,14 @@ class TCKDBAdapter:
                 f"level of theory for {calc_type} is missing method; "
                 "cannot build TCKDB calculation payload."
             )
-        software_name = level.get("software")
+        # ARC's per-job banner identification names the program that actually
+        # ran; the requested level may name a different troubleshooting ESS.
+        ess_software = record.get("ess_software")
+        observed_software = (
+            ess_software.get(ess_job_key)
+            if isinstance(ess_software, Mapping) else None
+        )
+        software_name = observed_software or level.get("software")
         if not software_name:
             raise ValueError(
                 f"level of theory for {calc_type} is missing software; "
@@ -3233,6 +3413,15 @@ class TCKDBAdapter:
                 "TCKDB LevelOfTheoryRef shape."
             )
 
+        # These are the references recorded from the actual freq/SP inputs.
+        # A species-level stability verdict does not prove the reference of
+        # its other jobs, so do not propagate it to opt, scans, or IRC.
+        scf_reference = record.get("scf_reference")
+        if calc_type in {_CALC_KEY_FREQ, _CALC_KEY_SP} and isinstance(scf_reference, Mapping):
+            reference = scf_reference.get(f"{calc_type}_reference")
+            if reference in {"restricted", "unrestricted", "restricted_open"}:
+                level_of_theory["spin_treatment"] = reference
+
         software_release: dict[str, Any] = {"name": str(software_name)}
         ess_versions = record.get("ess_versions")
         if isinstance(ess_versions, Mapping):
@@ -3240,7 +3429,16 @@ class TCKDBAdapter:
             # not by software name. Fall back to opt's version if the
             # job-specific entry is missing (often the case for combined
             # opt+freq runs or shared sp/freq logs).
-            ess_version = ess_versions.get(ess_job_key) or ess_versions.get("opt")
+            ess_version = ess_versions.get(ess_job_key)
+            if not ess_version and ess_job_key != _CALC_KEY_SCAN:
+                # Never borrow optimization provenance for a scan or pair
+                # another program's banner with this program.
+                opt_software = (
+                    ess_software.get("opt") if isinstance(ess_software, Mapping)
+                    else (_resolve_level(output_doc, "opt") or {}).get("software")
+                )
+                if (opt_software and str(opt_software).lower() == str(software_name).lower()):
+                    ess_version = ess_versions.get("opt")
             if ess_version:
                 software_release["version"] = str(ess_version)
 
@@ -3263,6 +3461,19 @@ class TCKDBAdapter:
 
         if result_field and result_payload:
             calc[result_field] = dict(result_payload)
+
+        hessian_method = record.get("freq_hessian_method")
+        if calc_type == _CALC_KEY_FREQ and hessian_method in {
+            "analytic", "finite_difference_gradient", "finite_difference_energy",
+        }:
+            calc["parameters"] = [{
+                "raw_key": "freq_hessian_method",
+                "raw_value": hessian_method,
+                "canonical_key": "freq.hessian_method",
+                "canonical_value": hessian_method,
+                "section": "freq",
+                "value_type": "string",
+            }]
 
         # Optional S**2 spin-contamination diagnostic for the sp calc. Every
         # sp-calc construction site funnels through here, so attaching it once
@@ -3320,6 +3531,7 @@ class TCKDBAdapter:
             payload_path=written.payload_path,
             sidecar_path=written.sidecar_path,
             idempotency_key=sc.idempotency_key,
+            warnings=list(sc.warnings),
         )
 
     def _upload(
@@ -3364,6 +3576,19 @@ class TCKDBAdapter:
         sc.response_status_code = getattr(response, "status_code", None)
         response_data = getattr(response, "data", None)
         sc.response_body = _summarize_response_body(response_data)
+        # Keep the server's structured scientific findings independently of
+        # the response summary so callers need not inspect an HTTP envelope.
+        # They follow any producer-side warnings recorded at write time.
+        response_warnings = (
+            response_data.get("warnings", []) if isinstance(response_data, dict) else []
+        )
+        server_warnings = (
+            [dict(item) for item in response_warnings if isinstance(item, dict)]
+            if isinstance(response_warnings, list) else []
+        )
+        for warning in server_warnings:
+            logger.warning("TCKDB upload warning: %s", warning)
+        sc.warnings = [*sc.warnings, *server_warnings]
         sc.public_refs = _extract_tckdb_public_refs(response_data)
         _append_request_id(sc, "upload", response)
         sc.idempotency_replayed = bool(getattr(response, "idempotency_replayed", False))
@@ -3390,6 +3615,7 @@ class TCKDBAdapter:
             response=sc.response_body,
             primary_calculation=primary,
             additional_calculations=additional,
+            warnings=sc.warnings,
         )
 
     def _record_failure(
@@ -3451,6 +3677,7 @@ class TCKDBAdapter:
             sidecar_path=written.sidecar_path,
             idempotency_key=sc.idempotency_key,
             error=sc.last_error,
+            warnings=list(sc.warnings),
         )
 
     def _log_readiness_recovery(self) -> None:
@@ -3470,14 +3697,14 @@ class TCKDBAdapter:
         if project_dir is not None:
             input_ref = f"{project_dir}/input.yml"
             recovery_cmd = (
-                f"python -m arc.tckdb.cli {input_ref} "
+                f"tckdb-arc-upload {input_ref} "
                 f"-p {project_dir} --upload-mode {mode}"
             )
         else:
             # No project directory in scope — give the invariant shape with
             # a clear placeholder rather than a wrong absolute path.
             recovery_cmd = (
-                f"python -m arc.tckdb.cli <input.yml> --upload-mode {mode}"
+                f"tckdb-arc-upload <input.yml> --upload-mode {mode}"
             )
         logger.warning(
             "TCKDB server was not ready after %d attempts; payloads were "
@@ -3919,7 +4146,7 @@ def _preflight_sleep(seconds: float) -> None:
     """Sleep between readiness-probe retries.
 
     Thin indirection over :func:`time.sleep` so tests can patch out the
-    real backoff wait (``mock.patch('arc.tckdb.adapter._preflight_sleep')``)
+    real backoff wait (``mock.patch('tckdb_arc.adapter._preflight_sleep')``)
     and run instantly without changing the retry logic.
     """
     time.sleep(seconds)
@@ -4163,11 +4390,12 @@ def _resolve_level(
     only declare ``opt_level=`` — ``output.yml`` then writes ``freq_level:
     null`` / ``sp_level: null``. To avoid silently dropping the freq/sp
     additional calculations in the common case, fall back to ``opt_level``
-    when the job-specific level is absent. A present-but-distinct
+    when the job-specific level is absent. Scans require their own level;
+    ARC can run them at a different method from optimization. A present-but-distinct
     ``freq_level`` / ``sp_level`` is treated as authoritative.
     """
-    if job_kind == "opt":
-        level = output_doc.get("opt_level")
+    if job_kind in {"opt", "scan"}:
+        level = output_doc.get(f"{job_kind}_level")
         return level if isinstance(level, Mapping) else None
     job_level = output_doc.get(f"{job_kind}_level")
     if isinstance(job_level, Mapping):
@@ -4220,6 +4448,61 @@ _FREQ_FIELD_SPECS = (
 )
 
 
+# ARC's own criterion for a transition state's *major* mode (the
+# reaction coordinate): the unique imaginary mode whose magnitude falls
+# strictly inside this window. Anything outside it is either numerical
+# noise (too soft — a grid/optimisation artifact) or implausibly stiff
+# (an SCF/parse artifact), per ``arc/checks/ts.py::
+# check_imaginary_frequencies`` and ``arc/settings/settings.py``'s
+# ``LOWEST_MAJOR_TS_FREQ`` / ``HIGHEST_MAJOR_TS_FREQ``.
+_TS_MAJOR_MODE_MIN_CM1 = 75.0
+_TS_MAJOR_MODE_MAX_CM1 = 10000.0
+
+
+def _designate_reaction_coordinate_index(
+    imaginary_values: list[float],
+) -> int | None:
+    """1-based position in ``imaginary_values`` of the unique major TS mode.
+
+    Applies ARC's own window criterion instead of "most negative wins"
+    over ALL modes: a candidate is any imaginary mode whose magnitude
+    sits strictly inside (75, 10000) cm-1 — mirroring
+    ``arc/checks/ts.py::check_imaginary_frequencies``, the same rule ARC
+    itself uses to accept a TS. Restricting candidacy to the window is
+    what keeps a parse/SCF artifact (e.g. -12000 cm-1, outside the
+    window) from ever being asserted as the barrier over the real
+    reaction coordinate (e.g. -1320.5 cm-1) sitting right where ARC
+    itself would call it — see
+    ``test_ts_designates_window_mode_over_a_stiffer_artifact``.
+
+    When more than one candidate qualifies, the largest-magnitude
+    candidate is designated. This is safe against TCKDB's own ambiguity
+    check (``W_TS_REACTION_COORDINATE_AMBIGUOUS`` in
+    ``stationary_point.py``), which blocks only when an undeclared extra
+    mode is *at least as stiff* as the designated one: a smaller
+    in-window sibling can never trip it once the larger one is chosen and
+    the others are marked ``unassigned``. See
+    ``test_ts_two_in_window_candidates_designates_larger_magnitude``.
+
+    Returns ``None`` only when the designation is genuinely undecidable:
+    zero candidates qualify, or more than one candidate ties for the
+    largest magnitude — including the classic degenerate-pair case,
+    where two modes share one magnitude and both sit inside the window.
+    Callers must not guess in that case — see
+    ``stationary_point.py``'s ``W_TS_REACTION_COORDINATE_AMBIGUOUS``,
+    which an undesignated same-magnitude "extra" mode would trip anyway.
+    """
+    candidates = [
+        (i, abs(v)) for i, v in enumerate(imaginary_values, start=1)
+        if _TS_MAJOR_MODE_MIN_CM1 < abs(v) < _TS_MAJOR_MODE_MAX_CM1
+    ]
+    if not candidates:
+        return None
+    max_magnitude = max(magnitude for _, magnitude in candidates)
+    top = [i for i, magnitude in candidates if magnitude == max_magnitude]
+    return top[0] if len(top) == 1 else None
+
+
 def _freq_result_payload(record: Mapping[str, Any]) -> dict[str, Any] | None:
     """Build a FreqResultPayload-shaped dict from an output.yml record.
 
@@ -4227,6 +4510,70 @@ def _freq_result_payload(record: Mapping[str, Any]) -> dict[str, Any] | None:
     and logs a warning when any present field cannot be coerced to the
     expected numeric type — the task spec mandates skipping the whole
     additional calculation rather than uploading a partial freq row.
+
+    Raises ``ValueError`` on a genuine contradiction between ARC's own
+    record and the stationary-point claim this freq result will be
+    uploaded under. Callers deliberately do NOT catch it (unlike the
+    ``ValueError`` a downstream calc builder can raise for e.g. a missing
+    level of theory, which every call site wraps in a local
+    try/except-and-skip): it is left to propagate out of the enclosing
+    ``submit_*`` method, matching the documented "build failures raise;
+    the caller wraps the per-record call in a try/except" contract those
+    methods already advertise. That caller is ``sweep.py``, whose
+    per-record ``except Exception`` counts the record ``failed`` and
+    prints ``failed: <label> — <error>`` — a loud, attributable failure
+    the operator cannot miss, unlike a ``logger.warning`` buried in the
+    run log.
+
+    TCKDB 0.22.0 cross-checks ``freq_n_imag`` against the stationary-
+    point claim this record is uploaded under: species_entry_kind=
+    'minimum' for every species/reactant/product path (``_species_entry_
+    payload`` now refuses any record with ``is_ts=True`` before it can
+    reach this function at all — see its own docstring — so 'minimum' is
+    the only value that ever gets here), and "this is the
+    transition_state block" for a TS. ``_species_entry_payload`` derives
+    that claim from ARC's ``is_ts`` flag completely independently of the
+    n_imag read here, so nothing guarantees they agree.
+
+    No concrete path inside ARC's own pipeline is known to produce this
+    contradiction. ``Scheduler.check_negative_freq`` (arc/scheduler.py)
+    refuses to mark a non-TS species converged while any negative
+    frequency remains, and refuses to mark a TS converged with zero. A
+    species loaded from a pre-existing Arkane YAML
+    (``species.yml_path``) looked like a candidate bypass —
+    ``Scheduler.schedule_jobs`` sets ``self.output[label]['convergence']
+    = True`` unconditionally for it ("Species is loaded from an Arkane
+    YAML file (no need to execute any job)"), with no frequency sanity
+    check at all — but it isn't one: ``ARCSpecies.from_yml_file``
+    (arc/species/species.py) loads only ``final_xyz``, ``mol``,
+    ``multiplicity``, ``charge``, and a handful of Arkane-conformer
+    fields; it never sets ``spc.freqs``. ``_get_imaginary_freqs``
+    (arc/output.py) reads only ``spc.freqs`` and ``spc.
+    ts_guesses[chosen].imaginary_freqs``, neither of which the YAML load
+    touches, so a YAML-loaded species reports ``freq_n_imag=None`` — the
+    check below is skipped for it, not contradicted.
+
+    These checks are therefore defensive validation for an ``output.yml``
+    document this adapter did not produce — hand-written, third-party,
+    or from a future/older ARC — which the adapter genuinely accepts:
+    ``evidence.py::validate_output_schema`` checks only
+    ``schema_version``, never the document shape, so nothing upstream
+    would stop a record like that from reaching this function. If a
+    concrete producer inside ARC's own pipeline is later found to trigger
+    this, update this note with it; until then, treat these raises as
+    precautionary rather than evidence of a live bug.
+
+    Uploading the contradiction verbatim would 422 the whole payload
+    (``n_imag_contradicts_minimum`` / ``transition_state_no_imaginary_
+    mode`` / ``transition_state_reaction_coordinate_not_designated``).
+    Quietly dropping just the offending field(s) is not a fix: it
+    defeats TCKDB's own guard (``evaluate_transition_state_frequency``
+    and ``evaluate_species_entry_frequency`` both report nothing when
+    n_imag is absent — "absence is never contradiction") and deposits
+    the record under a classification its own evidence disputes, with
+    the disproving evidence quietly removed. Refusing the whole record
+    is the honest alternative: nothing is deposited that asserts
+    something ARC's own frequency evidence contradicts.
     """
     statmech = record.get("statmech") or {}
     raw_freqs = statmech.get("harmonic_frequencies_cm1")
@@ -4249,55 +4596,221 @@ def _freq_result_payload(record: Mapping[str, Any]) -> dict[str, Any] | None:
                 record.get("label"), record_key, value, exc,
             )
             return None
+
+    label = record.get("label")
+    is_ts = bool(record.get("is_ts"))
+    n_imag = out.get("n_imag")
+
+    if n_imag is not None and not is_ts and n_imag > 0:
+        raise ValueError(
+            f"TCKDB freq: label={label!r} is_ts=False (species_entry_kind="
+            f"'minimum') but ARC reports freq_n_imag={n_imag} — TCKDB "
+            f"0.22.0 refuses a minimum with an imaginary mode "
+            f"(n_imag_contradicts_minimum). Refusing to deposit this "
+            f"record rather than silently drop the disproving evidence. "
+            f"No path inside ARC's own pipeline is known to produce this; "
+            f"likely cause is a hand-written, third-party, or non-current-"
+            f"ARC output.yml whose is_ts and frequency evidence disagree. "
+            f"Re-optimise on a tighter integration grid, fix a stale "
+            f"is_ts, or declare the entry as what it actually is."
+        )
+    if n_imag is not None and is_ts and n_imag <= 0:
+        raise ValueError(
+            f"TCKDB freq: label={label!r} is_ts=True (transition state) "
+            f"but ARC reports freq_n_imag={n_imag} — TCKDB 0.22.0 refuses "
+            f"a transition state with no imaginary mode "
+            f"(transition_state_no_imaginary_mode). Refusing to deposit "
+            f"this record rather than silently drop the disproving "
+            f"evidence. No path inside ARC's own pipeline is known to "
+            f"produce this; likely cause is a hand-written, third-party, "
+            f"or non-current-ARC output.yml whose is_ts and frequency "
+            f"evidence disagree. Re-run the saddle-point search, or "
+            f"deposit the structure as a species entry."
+        )
+
+    modes: list[dict[str, Any]] = []
     if has_modes_source:
         try:
-            modes = []
             for f in raw_freqs:
                 freq = float(f)
-                modes.append({
-                    "frequency_cm1": freq,
-                    "is_imaginary": freq < 0,
-                })
+                modes.append({"frequency_cm1": freq, "is_imaginary": freq < 0})
         except (TypeError, ValueError) as exc:
             logger.warning(
                 "TCKDB freq additional calculation skipped for label=%s: "
                 "malformed harmonic_frequencies_cm1=%r (%s)",
-                record.get("label"), raw_freqs, exc,
+                label, raw_freqs, exc,
             )
             return None
-        # ARC's statmech ``harmonic_frequencies_cm1`` lists only the REAL
-        # vibrational modes; a transition state's imaginary (reaction-
-        # coordinate) frequency is carried separately in ``imag_freq_cm1``.
-        # Re-insert it as an imaginary mode so ``modes`` is internally
-        # consistent with ``n_imag`` — the TCKDB FreqResultPayload validator
-        # requires count(is_imaginary) == n_imag.
-        n_imag = out.get("n_imag")
+
+    # ARC's statmech ``harmonic_frequencies_cm1`` lists only the REAL
+    # vibrational modes for a TS (arc/output.py excludes every negative
+    # frequency — not just the reaction coordinate — whenever ``spc.
+    # is_ts``, and may be entirely absent even though imaginary
+    # frequencies were recorded — see the ``ts_guesses`` fallback in
+    # ``arc/output.py::_get_imaginary_freqs``). That is the common case,
+    # but not the only one: a record can also already carry every
+    # imaginary value inline in ``harmonic_frequencies_cm1`` (e.g. a
+    # hand-written/foreign output.yml, or a producer that doesn't follow
+    # ARC's REAL-modes-only convention). Re-insert the imaginary mode(s)
+    # from whatever source is available only when none are present yet —
+    # independent of whether ``has_modes_source`` — so ``modes`` is
+    # internally consistent with ``n_imag``: the TCKDB FreqResultPayload
+    # validator requires count(is_imaginary) == n_imag whenever both are
+    # present.
+    if n_imag and not any(m["is_imaginary"] for m in modes):
+        all_imaginary = record.get("imaginary_frequencies_cm1")
         imag = record.get("imag_freq_cm1")
-        if n_imag and imag is not None and not any(
-            m["is_imaginary"] for m in modes
-        ):
+        if isinstance(all_imaginary, (list, tuple)) and len(all_imaginary) == n_imag:
             try:
-                modes.insert(0, {
+                imaginary_values = [float(f) for f in all_imaginary]
+            except (TypeError, ValueError):
+                imaginary_values = None
+            if imaginary_values is not None:
+                imaginary_modes = [
+                    {"frequency_cm1": -abs(v), "is_imaginary": True}
+                    for v in imaginary_values
+                ]
+                modes = imaginary_modes + modes
+        elif imag is not None and n_imag == 1:
+            # Older/malformed records without the plural field: fall back
+            # to reinserting only the one scalar ARC reports. Only
+            # reconciles n_imag == 1 — no designation is required there.
+            try:
+                modes = [{
                     "frequency_cm1": -abs(float(imag)),
                     "is_imaginary": True,
-                })
+                }] + modes
             except (TypeError, ValueError):
                 pass
-        imag_count = sum(1 for m in modes if m["is_imaginary"])
-        if n_imag is not None and imag_count != n_imag:
-            # Cannot reconcile modes with n_imag (e.g. a higher-order saddle
-            # with a single stored imag_freq_cm1). Emit the scalar
-            # n_imag/imag_freq_cm1 without ``modes`` rather than a payload the
-            # backend validator would reject.
-            logger.warning(
-                "TCKDB freq modes omitted for label=%s: could not reconcile "
-                "n_imag=%s with %d imaginary mode(s) from statmech.",
-                record.get("label"), n_imag, imag_count,
+        elif n_imag > 1:
+            # No plural imaginary-frequency list, or its length disagrees
+            # with n_imag: there is no honest way to designate a unique
+            # reaction coordinate. Refuse rather than deposit an
+            # undesignated multi-imaginary TS TCKDB would 422 anyway.
+            raise ValueError(
+                f"TCKDB freq: label={label!r} is a transition state with "
+                f"freq_n_imag={n_imag} but ARC's "
+                f"imaginary_frequencies_cm1={all_imaginary!r} does not "
+                f"give exactly one value per imaginary mode, so the "
+                f"reaction coordinate cannot be designated (TCKDB "
+                f"0.22.0: transition_state_reaction_coordinate_not_"
+                f"designated). Refusing to deposit this record rather "
+                f"than guess."
             )
-        else:
-            for i, m in enumerate(modes, start=1):
-                m["mode_index"] = i
-            out["modes"] = modes
+
+    # Designation is a separate concern from reinsertion above, and must
+    # run whenever n_imag > 1 regardless of WHERE the imaginary mode(s) in
+    # ``modes`` came from: reinserted just now, or already present in
+    # ``harmonic_frequencies_cm1`` before this function ever ran.
+    # Gating designation on "reinsertion happened" left a hole — a record
+    # whose harmonic list already included every imaginary value (see the
+    # comment above) skipped this block entirely and reached TCKDB with
+    # ``modes`` populated but no ``reaction_coordinate_mode_index``,
+    # tripping the exact ``transition_state_reaction_coordinate_not_
+    # designated`` finding this function exists to prevent.
+    reaction_coordinate_mode_index: int | None = None
+    if n_imag and n_imag > 1:
+        imaginary_entries = [
+            (i, m) for i, m in enumerate(modes, start=1) if m["is_imaginary"]
+        ]
+        if len(imaginary_entries) == n_imag:
+            # ADR 0012 requires exactly one designated reaction coordinate
+            # whenever n_imag > 1. See
+            # ``_designate_reaction_coordinate_index`` for why this is
+            # ARC's own (75, 10000) cm-1 window plus largest-magnitude
+            # tie-break among in-window candidates, not "most negative
+            # wins" over every mode.
+            designated_values = [m["frequency_cm1"] for _, m in imaginary_entries]
+            designated_position = _designate_reaction_coordinate_index(designated_values)
+            if designated_position is None:
+                raise ValueError(
+                    f"TCKDB freq: label={label!r} is a transition state "
+                    f"with {n_imag} imaginary modes {designated_values} "
+                    f"cm-1, and no single one is the unique major TS mode "
+                    f"in ARC's own (75, 10000) cm-1 window "
+                    f"(arc/checks/ts.py::"
+                    f"check_imaginary_frequencies) — zero candidates "
+                    f"qualify, or more than one ties for the largest "
+                    f"magnitude. TCKDB 0.22.0 requires exactly one "
+                    f"designated reaction coordinate "
+                    f"(transition_state_reaction_coordinate_not_"
+                    f"designated) and refuses to guess; refusing to "
+                    f"deposit this record rather than pick one "
+                    f"arbitrarily."
+                )
+            reaction_coordinate_mode_index = imaginary_entries[designated_position - 1][0]
+            # Every OTHER imaginary mode is "extra" once one is designated
+            # (ADR 0012), and stationary_point.py's ambiguity check blocks
+            # whenever an undeclared extra is at least as stiff as the
+            # designated one — which the excluded, out-of-window mode(s)
+            # that motivated this window criterion often are (that is the
+            # whole point: an SCF/parse artifact can be *more* negative
+            # than the real reaction coordinate). Declare them
+            # ``unassigned`` — ImaginaryModeDisposition's honest "I do not
+            # know what this mode is, but it is not the reaction
+            # coordinate" — rather than leave them undeclared and let a
+            # stiffer artifact, or a smaller distinct-magnitude in-window
+            # sibling, block the upload. ``unassigned`` still keeps ADR
+            # 0012's structural flag (via the below-designation-magnitude/
+            # tau warning path); it only lifts the hard block.
+            for i, m in imaginary_entries:
+                if i != reaction_coordinate_mode_index:
+                    m["imaginary_disposition"] = "unassigned"
+        # else: the imaginary-mode count found in ``modes`` doesn't match
+        # n_imag (malformed/insufficient data). No honest designation is
+        # possible; fall through to the reconciliation check below, which
+        # omits ``modes`` entirely with a warning rather than guess.
+
+    imag_count = sum(1 for m in modes if m["is_imaginary"])
+    if n_imag == 0 and imag_count > 0:
+        # is_ts=True with n_imag<=0 already raised above, so reaching
+        # here with n_imag==0 means is_ts=False (species_entry_kind=
+        # 'minimum'). ARC's own harmonic_frequencies_cm1 shows an
+        # imaginary mode that freq_n_imag=0 says doesn't exist — the same
+        # n_imag_contradicts_minimum contradiction guarded above, just
+        # surfaced through the frequency list instead of the freq_n_imag
+        # field itself. Quietly stripping the negative value(s) and
+        # depositing freq_n_imag=0 anyway would defeat TCKDB's guard with
+        # the disproving evidence removed — the same failure mode this
+        # function's docstring rejects for every other contradiction.
+        raise ValueError(
+            f"TCKDB freq: label={label!r} is_ts=False (species_entry_kind="
+            f"'minimum') reports freq_n_imag=0, but ARC's own "
+            f"statmech.harmonic_frequencies_cm1 contains {imag_count} "
+            f"negative value(s) "
+            f"{[m['frequency_cm1'] for m in modes if m['is_imaginary']]} — "
+            f"TCKDB 0.22.0 refuses a minimum with an imaginary mode "
+            f"(n_imag_contradicts_minimum). Refusing to deposit this "
+            f"record rather than silently drop the disproving evidence."
+        )
+    if n_imag is not None and imag_count != n_imag:
+        # Cannot reconcile modes with n_imag (e.g. a higher-order saddle
+        # with a single stored imag_freq_cm1, or malformed statmech data).
+        # Emit the scalar n_imag/imag_freq_cm1 without ``modes`` rather
+        # than a payload the backend validator would reject.
+        logger.warning(
+            "TCKDB freq modes omitted for label=%s: could not reconcile "
+            "n_imag=%s with %d imaginary mode(s) from statmech.",
+            label, n_imag, imag_count,
+        )
+    elif modes:
+        for i, m in enumerate(modes, start=1):
+            m["mode_index"] = i
+        out["modes"] = modes
+        if reaction_coordinate_mode_index is not None:
+            out["reaction_coordinate_mode_index"] = reaction_coordinate_mode_index
+            # Keep the scalar in agreement with the designation: without
+            # this, ``imag_freq_cm1`` can carry ARC's raw min() (which may
+            # be an out-of-window artifact, e.g. -12000.0) while
+            # ``reaction_coordinate_mode_index`` names a different mode
+            # (e.g. -1320.5) — two different "the reaction coordinate"
+            # answers in the same payload. TCKDB does not cross-check
+            # them, but ``imag_freq_cm1`` is documented as "Value of the
+            # imaginary frequency" and is what a tunneling consumer reads.
+            designated_mode = next(
+                m for m in modes if m["mode_index"] == reaction_coordinate_mode_index
+            )
+            out["imag_freq_cm1"] = designated_mode["frequency_cm1"]
     return out or None
 
 
@@ -4516,7 +5029,19 @@ def _build_applied_energy_corrections(
             })
 
         scheme_in = rec["scheme"]
-        scheme_out = {k: scheme_in[k] for k in scheme_in if k != "level_of_theory"}
+        scheme_out = {
+            k: scheme_in[k] for k in scheme_in
+            if k not in {"level_of_theory", "version"}
+        }
+        # Older ARC-shaped payloads carried a free-form scheme version.
+        # Current TCKDB identifies schemes by scientific/software provenance;
+        # retain a reported legacy label as a note, not an invented release.
+        legacy_version = scheme_in.get("version")
+        if legacy_version is not None:
+            version_note = f"Legacy scheme version: {legacy_version}"
+            scheme_out["note"] = "; ".join(
+                str(value) for value in (scheme_out.get("note"), version_note) if value
+            )
         lot_ref = _scheme_level_of_theory(scheme_in)
         if lot_ref is not None:
             scheme_out["level_of_theory"] = lot_ref
@@ -4540,17 +5065,297 @@ def _build_applied_energy_corrections(
     return out
 
 
+# Explicit target field sets guard against future divergence of the two
+# bundle roots. Both current roots accept calculation provenance.
+_THERMO_FIELDS_BY_TARGET: dict[str, frozenset[str]] = {
+    "ThermoInBundle": frozenset({
+        "h298_kj_mol", "s298_j_mol_k", "tmin_k", "tmax_k",
+        "nasa", "points", "source_calculations",
+        "enthalpy_reference_kind", "reference_pressure_bar",
+    }),
+    "BundleThermoIn": frozenset({
+        "h298_kj_mol", "s298_j_mol_k", "tmin_k", "tmax_k",
+        "nasa", "points", "source_calculations",
+        "enthalpy_reference_kind", "reference_pressure_bar",
+    }),
+}
+
+# TCKDB #520: a thermo record carrying enthalpy content must declare its
+# enthalpy basis. Arkane's H298 and NASA a6/b6 (and the H/G points ARC
+# evaluates from that fit) are formation enthalpies from the elements at
+# 298.15 K, which is exactly ``formation_298k``.
+_THERMO_ENTHALPY_REFERENCE_KIND = "formation_298k"
+
+# That holds only when Arkane subtracted the atom energies of the level the
+# species' energies were computed at. With none for the level of theory,
+# ARC runs Arkane with useAtomCorrections=False and every enthalpy (H298,
+# NASA a6/b6, point H/G) is the raw absolute energy. output.yml 1.2 records
+# that switch (``thermo.atom_corrections_applied``) and the level whose
+# atom energies were used (``thermo.atom_corrections_level``), which can be
+# a stand-in for the energy level (ARC only warns). Enthalpies failing
+# either check are stripped from the block, keeping its entropy and Cp.
+_W_ENTHALPY_ATOM_CORRECTIONS_NOT_APPLIED = "enthalpy_atom_corrections_not_applied"
+_W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_MISMATCH = "enthalpy_atom_corrections_level_mismatch"
+_W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_UNVERIFIABLE = "enthalpy_atom_corrections_level_unverifiable"
+_W_ENTHALPY_NOT_FINITE = "enthalpy_not_finite"
+# Levels compare by effective method (the method with its dispersion
+# folded in) and basis, normalized exactly as ARC matches levels against
+# Arkane's database: case, hyphens and spaces and a trailing refit year are
+# ignored, and ``b3lyp`` + ``gd3bj``, ``b3lyp-d3bj`` and ``b3lyp-d3(bj)`` are
+# one method, while ``wb97xd``/``wb97xd3`` and ``ccsd(t)``/``ccsdt`` stay
+# two. Software, year, method_type and args never matter. Ported, since the
+# adapter must not import ARC, from ARC 1977e53b: arc/statmech/arkane.py
+# ``_normalize_name`` and ``_split_method_year``; arc/main.py
+# ``DISPERSION_SUFFIX_REGEX``, ``_canonical_dispersion`` and
+# ``_normalized_method_and_basis``. A parity test runs against ARC when it
+# has them.
+_METHOD_REFIT_YEAR_RE = re.compile(r"^(.*?)(\d{4})$")
+_DISPERSION_SUFFIX_RE = re.compile(r"g?d[234](\(?bj\)?)?$")
+# ARC's Arkane key match and data/AEC.yml lookup read only the method
+# string and basis, ignoring these level fields, so when either level sets
+# one, a matching ``atom_corrections_level`` cannot show that the applied
+# atom energies carried it (ARC applies plain B3LYP atom energies to
+# B3LYP + GD3BJ, gas-phase ones to SMD).
+_LEVEL_FIELDS_ARC_MATCHING_IGNORES = ("dispersion", "solvation_method")
+
+# Magnitude backstop, and the only check for thermo whose flag is null or
+# absent (pre-1.2 output, species Arkane loaded from its own YAML). Raw
+# absolute energies are about -1e5 kJ/mol per heavy atom, while the largest
+# real |ΔHf| are O(10^3-10^4) kJ/mol, so anything beyond this bound cannot
+# be a formation enthalpy. It misses every species whose raw total energy
+# is below about 7.6 hartree (2e4 kJ/mol): H, H2, He, the Li atom.
+_FORMATION_ENTHALPY_MAX_ABS_KJ_MOL = 2.0e4
+_W_ENTHALPY_NOT_FORMATION_MAGNITUDE = "enthalpy_not_formation_magnitude"
+_GAS_CONSTANT_J_MOL_K = 8.314462618
+_T298_K = 298.15
+
+# TCKDB #529: the server never defaults ``reference_pressure_bar``. RMG's
+# ``IdealGasTranslation`` partition function hard-codes P0 = 1 atm
+# (101325 Pa), so every ARC/Arkane entropy (S298, NASA a7/b7, point S/G)
+# stands at 1.01325 bar, never 1 bar. Used when output.yml does not record
+# ``thermo.standard_state_pressure_pa`` (older ARC output).
+_ARC_THERMO_REFERENCE_PRESSURE_BAR = 1.01325
+
+# Plausible standard-state pressures, in bar. Every real convention (1 bar,
+# 1 atm) sits well inside; a value in bar mistaken for Pa (1.01325 ->
+# 1e-5 bar) or a YAML boolean (True -> 1e-5 bar) falls far outside.
+_THERMO_REFERENCE_PRESSURE_WINDOW_BAR = (0.5, 2.0)
+
+
+def _thermo_reference_pressure_bar(thermo_record: Mapping[str, Any]) -> float:
+    """Return the standard-state pressure (bar) ARC's entropies stand at.
+
+    Current ARC records the pressure RMG applied as
+    ``standard_state_pressure_pa``; prefer it when it is a real number in
+    Pa that lands inside ``_THERMO_REFERENCE_PRESSURE_WINDOW_BAR``, else
+    RMG's hard-coded 1 atm.
+    """
+    recorded = thermo_record.get("standard_state_pressure_pa")
+    if recorded is not None:
+        pressure_bar = math.nan
+        if isinstance(recorded, (int, float)) and not isinstance(recorded, bool):
+            pressure_bar = float(recorded) / 1e5
+        low, high = _THERMO_REFERENCE_PRESSURE_WINDOW_BAR
+        if low <= pressure_bar <= high:
+            return pressure_bar
+        logger.warning(
+            "TCKDB thermo: malformed standard_state_pressure_pa=%r; "
+            "using RMG's hard-coded 1 atm.", recorded,
+        )
+    return _ARC_THERMO_REFERENCE_PRESSURE_BAR
+
+
+def _nasa_h298_kj_mol(nasa: Mapping[str, float]) -> float:
+    """Evaluate a NASA-7 block's H at 298.15 K (kJ/mol)."""
+    prefix = "a" if _T298_K <= nasa["t_mid"] else "b"
+    c = [nasa[f"{prefix}{i}"] for i in range(1, 8)]
+    t = _T298_K
+    h_rt = c[0] + c[1] * t / 2 + c[2] * t**2 / 3 + c[3] * t**3 / 4 + c[4] * t**4 / 5 + c[5] / t
+    return h_rt * _GAS_CONSTANT_J_MOL_K * t / 1000.0
+
+
+def _thermo_energy_level(output_doc: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Return the level a species' energies were computed at.
+
+    ``composite_method`` when set, else the SP level (``opt_level`` when
+    ``sp_level`` is null, as ARC then reuses the opt energy). output.yml
+    records one level per run, so under ARC ``adaptive_levels`` this is
+    not every species' energy level.
+    """
+    composite = output_doc.get("composite_method")
+    if isinstance(composite, Mapping):
+        return composite
+    return _resolve_level(output_doc, "sp")
+
+
+def _normalize_level_name(name: Any) -> str | None:
+    """ARC's ``arkane.py::_normalize_name``: lowercase, hyphens and spaces removed."""
+    if name is None:
+        return None
+    return str(name).replace("-", "").replace(" ", "").lower()
+
+
+def _canonical_dispersion(dispersion: Any) -> str:
+    """ARC's ``main.py::_canonical_dispersion``: ``gd3bj``, ``D3(BJ)`` and
+    ``EmpiricalDispersion=GD3BJ`` all give ``d3bj``; ``''`` for none."""
+    if not dispersion:
+        return ""
+    dispersion = str(dispersion).lower()
+    for character in ("-", " ", "(", ")"):
+        dispersion = dispersion.replace(character, "")
+    dispersion = dispersion.removeprefix("empiricaldispersion=")
+    if dispersion in ("gd2", "gd3", "gd3bj"):
+        dispersion = dispersion[1:]  # Gaussian's spelling.
+    return dispersion
+
+
+def _level_identity(level: Any) -> tuple[str, str | None] | None:
+    """ARC's ``main.py::_normalized_method_and_basis`` on an output.yml level dict.
+
+    Returns the normalized ``(effective method, basis)``, or ``None`` for a
+    level without a method.
+    """
+    if not isinstance(level, Mapping) or not level.get("method"):
+        return None
+    method = _normalize_level_name(level["method"])
+    year_split = _METHOD_REFIT_YEAR_RE.match(method)  # arkane.py::_split_method_year
+    if year_split is not None:
+        method = year_split.group(1)
+    suffix = _DISPERSION_SUFFIX_RE.search(method)
+    if suffix is not None:
+        method = method[:suffix.start()] + _canonical_dispersion(suffix.group())
+    method += _canonical_dispersion(level.get("dispersion"))
+    return method, _normalize_level_name(level.get("basis"))
+
+
+def _describe_level(level: Any) -> str:
+    if not isinstance(level, Mapping) or not level.get("method"):
+        return "an unrecorded level"
+    method = str(level["method"])
+    if level.get("dispersion"):
+        method += f" + {level['dispersion']}"
+    return "/".join([method, *([str(level["basis"])] if level.get("basis") else [])])
+
+
+def _enthalpy_validity_error(
+    block: Mapping[str, Any],
+    thermo_record: Mapping[str, Any],
+    energy_level: Mapping[str, Any] | None,
+) -> tuple[str, str] | None:
+    """Return why the block's enthalpies are not formation_298k, or ``None``.
+
+    Reads ARC's recorded atom-correction switch and level first; a null or
+    absent switch leaves only the non-finite and magnitude checks. A switch
+    that was on still needs ``atom_corrections_level`` to be the energy
+    level (``_level_identity``), and a match cannot be verified when either
+    level sets a dispersion or solvation field ARC's matching ignores.
+    """
+    applied = thermo_record.get("atom_corrections_applied")
+    if applied is False:
+        return (
+            _W_ENTHALPY_ATOM_CORRECTIONS_NOT_APPLIED,
+            "ARC recorded atom_corrections_applied=false: Arkane subtracted no "
+            "atom energies, so H298, the NASA fit and point H/G are raw absolute "
+            "energies, not formation enthalpies.",
+        )
+    if applied is True:
+        corrections_level = thermo_record.get("atom_corrections_level")
+        corrections_key = _level_identity(corrections_level)
+        if corrections_key is None or corrections_key != _level_identity(energy_level):
+            return (
+                _W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_MISMATCH,
+                f"Arkane subtracted the atom energies of "
+                f"{_describe_level(corrections_level)} from energies computed at "
+                f"{_describe_level(energy_level)}, so the enthalpies mix two levels "
+                f"and are not formation enthalpies.",
+            )
+        for side, level in (("energy level", energy_level),
+                            ("atom_corrections_level", corrections_level)):
+            for field in _LEVEL_FIELDS_ARC_MATCHING_IGNORES:
+                if level.get(field):
+                    return (
+                        _W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_UNVERIFIABLE,
+                        f"The {side} {_describe_level(level)} sets "
+                        f"{field}={level[field]!r}, which ARC's atom-energy matching "
+                        f"ignores, so a matching level does not show that the "
+                        f"subtracted atom energies carried it.",
+                    )
+    values = [block.get("h298_kj_mol"), *block.get("nasa", {}).values()]
+    values += [p.get(key) for p in block.get("points", ()) for key in ("h_kj_mol", "g_kj_mol")]
+    if any(v is not None and not math.isfinite(v) for v in values):
+        return (
+            _W_ENTHALPY_NOT_FINITE,
+            "An enthalpy value (H298, NASA coefficient or bound, point H or G) "
+            "is not finite.",
+        )
+    return _enthalpy_magnitude_error(block)
+
+
+def _has_enthalpy_content(block: Mapping[str, Any]) -> bool:
+    return "h298_kj_mol" in block or "nasa" in block or any(
+        "h_kj_mol" in p or "g_kj_mol" in p for p in block.get("points", ())
+    )
+
+
+def _strip_enthalpy_content(block: dict[str, Any]) -> None:
+    """Remove H298, the NASA fit, and point H/G; keep S298, point S and Cp.
+
+    A point left with only its temperature is dropped (TCKDB requires a
+    property on every point).
+    """
+    block.pop("h298_kj_mol", None)
+    block.pop("nasa", None)
+    points = [
+        {k: v for k, v in p.items() if k not in ("h_kj_mol", "g_kj_mol")}
+        for p in block.pop("points", ())
+    ]
+    points = [p for p in points if set(p) - {"temperature_k"}]
+    if points:
+        block["points"] = points
+
+
+def _enthalpy_magnitude_error(block: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Refuse a block whose enthalpy is too large to be a formation enthalpy.
+
+    Checks ``h298_kj_mol``, every point ``h_kj_mol``, and the NASA fit's
+    H at 298.15 K (the only enthalpy a NASA-only block carries).
+    """
+    enthalpies = [("h298_kj_mol", block.get("h298_kj_mol"))]
+    enthalpies += [
+        (f"points[T={p['temperature_k']}].h_kj_mol", p.get("h_kj_mol"))
+        for p in block.get("points", ())
+    ]
+    if "nasa" in block:
+        enthalpies.append(("nasa H(298.15 K)", _nasa_h298_kj_mol(block["nasa"])))
+    for name, value in enthalpies:
+        if value is not None and abs(value) > _FORMATION_ENTHALPY_MAX_ABS_KJ_MOL:
+            return (
+                _W_ENTHALPY_NOT_FORMATION_MAGNITUDE,
+                f"{name}={value:.6g} kJ/mol exceeds the "
+                f"{_FORMATION_ENTHALPY_MAX_ABS_KJ_MOL:.6g} kJ/mol bound on any "
+                f"formation enthalpy, so it cannot be formation_298k. Arkane "
+                f"most likely ran without atom-energy corrections for this "
+                f"level of theory, leaving raw absolute energies.",
+            )
+    return None
+
+
 def _build_thermo_block(
     thermo_record: Any,
     *,
-    included_calc_keys: list[str],
+    calc_keys_by_role: Mapping[str, str],
+    target_model: Literal["ThermoInBundle", "BundleThermoIn"],
+    warnings: list[dict[str, Any]] | None = None,
+    warning_field: str = "thermo",
+    energy_level: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Build a ThermoInBundle dict from ``output.yml`` thermo data.
+    """Build a ``target_model``-shaped thermo dict from ``output.yml`` thermo data.
 
     Returns ``None`` when no usable thermo content can be assembled. The
-    server-side ``ThermoInBundle.validate_has_scientific_content``
-    rejects empty thermo blocks, so emitting one with nothing in it
-    would just produce a 422; better to omit at the producer.
+    server-side ``validate_has_scientific_content`` validator (present on
+    both roots) rejects empty thermo blocks, so emitting one with
+    nothing in it would just produce a 422; better to omit at the
+    producer.
 
     Mapping (from ``arc/output.py::_thermo_to_dict``):
         h298_kj_mol  → h298_kj_mol
@@ -4564,11 +5369,31 @@ def _build_thermo_block(
         nasa_high.tmax_k → nasa.t_high
         thermo_points    → points (per-point validation; bad points dropped)
 
-    ``source_calculations`` are populated from ``included_calc_keys``:
-    each of ``opt`` / ``freq`` / ``sp`` that actually made it into the
-    bundle gets a link with the matching role, since
-    ``ThermoCalculationRole`` accepts those literals directly.
+    Enthalpy content (h298, NASA, point H or G) is first checked by
+    ``_enthalpy_validity_error`` against ARC's recorded atom-correction
+    switch and level (``energy_level`` is the species' energy level, see
+    ``_thermo_energy_level``). Enthalpy that is not a formation enthalpy is
+    stripped, keeping S298, point S and Cp; the refusal is appended to
+    ``warnings`` under ``warning_field`` with action
+    ``thermo_enthalpy_omitted`` (``thermo_omitted`` when nothing is left).
+
+    Remaining enthalpy content adds
+    ``enthalpy_reference_kind="formation_298k"``; entropy content (s298,
+    NASA, point S or G) adds ``reference_pressure_bar``. Neither is set on
+    a Cp-only block. The finished block is checked with the shared
+    ``enthalpy_reference_error`` rule; a refused block is never emitted:
+    ``None`` is returned and the refusal is appended to ``warnings`` with
+    action ``thermo_omitted``.
+
+    ``calc_keys_by_role`` maps roles to the actual bundle-local keys.
+    Both roots accept source links; reaction participants use their own
+    scoped keys (for example ``r0_opt``), never another participant's keys.
     """
+    if target_model not in _THERMO_FIELDS_BY_TARGET:
+        raise ValueError(
+            f"_build_thermo_block: unknown target_model={target_model!r}; "
+            f"expected one of {sorted(_THERMO_FIELDS_BY_TARGET)}"
+        )
     if not isinstance(thermo_record, Mapping):
         return None
 
@@ -4614,20 +5439,79 @@ def _build_thermo_block(
     # to traverse `calculation_dependency` to recover the opt calc.
     # Order is fixed (opt, freq, sp) so payloads are deterministic — same
     # inputs hash to the same idempotency key across runs.
+    #
     sources: list[dict[str, str]] = []
-    for key in (_CALC_KEY_OPT, _CALC_KEY_FREQ, _CALC_KEY_SP):
-        if key in included_calc_keys:
-            sources.append({"calculation_key": key, "role": key})
+    for role in (_CALC_KEY_OPT, _CALC_KEY_FREQ, _CALC_KEY_SP):
+        key = calc_keys_by_role.get(role)
+        if key:
+            sources.append({"calculation_key": key, "role": role})
     if sources:
         block["source_calculations"] = sources
 
-    has_scalar = "h298_kj_mol" in block or "s298_j_mol_k" in block
-    has_nasa = "nasa" in block
-    has_points = "points" in block
-    if not (has_scalar or has_nasa or has_points):
+    def has_content() -> bool:
+        return any(key in block for key in ("h298_kj_mol", "s298_j_mol_k", "nasa", "points"))
+
+    if not has_content():
         # Server would 422 us; nothing usable here.
         return None
-    return block
+
+    # Refusals as (code, message), reported once the block's fate is known.
+    refusals: list[tuple[str, str]] = []
+    if _has_enthalpy_content(block):
+        enthalpy_refusal = _enthalpy_validity_error(block, thermo_record, energy_level)
+        if enthalpy_refusal is not None:
+            refusals.append(enthalpy_refusal)
+            _strip_enthalpy_content(block)
+    keep = has_content()
+
+    if keep:
+        points_out = block.get("points", ())
+        if _has_enthalpy_content(block):
+            block["enthalpy_reference_kind"] = _THERMO_ENTHALPY_REFERENCE_KIND
+        # G = H - T*S carries the entropy's standard state as well.
+        if "s298_j_mol_k" in block or "nasa" in block or any(
+            "s_j_mol_k" in p or "g_kj_mol" in p for p in points_out
+        ):
+            block["reference_pressure_bar"] = _thermo_reference_pressure_bar(thermo_record)
+
+    # Belt-and-suspenders: this is the exact bug class that motivated
+    # ``target_model`` in the first place (see
+    # ``_THERMO_FIELDS_BY_TARGET``'s docstring) — a real raise here, not
+    # just in the test suite, so a future field added to this builder
+    # without updating the allow-list fails loudly the moment it's
+    # exercised, rather than shipping a silent 422 to production. A bare
+    # ``assert`` would vanish under ``python -O``, precisely when a
+    # production guard is wanted most.
+    disallowed = set(block) - _THERMO_FIELDS_BY_TARGET[target_model]
+    if disallowed:
+        raise ValueError(
+            f"_build_thermo_block emitted field(s) not accepted by "
+            f"{target_model}: {sorted(disallowed)}"
+        )
+
+    # TCKDB refuses the whole upload over an incoherent enthalpy
+    # declaration. Never send a block the shared rule would refuse: drop
+    # only the thermo block (the enclosing payload stays valid without
+    # it). Record every refusal next to the server's own warnings.
+    if keep:
+        shared_refusal = enthalpy_reference_error(block)
+        if shared_refusal is not None:
+            refusals.append(shared_refusal)
+            keep = False
+    action = "thermo_enthalpy_omitted" if keep else "thermo_omitted"
+    for code, message in refusals:
+        logger.warning(
+            "TCKDB thermo %s: producer self-check refused %s (%s): %s",
+            warning_field, "its enthalpy" if keep else "it", code, message,
+        )
+        if warnings is not None:
+            warnings.append({
+                "code": code,
+                "message": message,
+                "field": warning_field,
+                "context": {"source": "tckdb_arc_self_check", "action": action},
+            })
+    return block if keep else None
 
 
 def _build_nasa_block(
@@ -5011,15 +5895,50 @@ _TCKDB_RIGID_ROTOR_KINDS = frozenset({
 _ARC_TO_TCKDB_TORSION_TREATMENTS = frozenset({"free_rotor", "hindered_rotor"})
 
 
+# Which statmech-block fields this adapter can emit, keyed by the
+# *root* model the block is destined for. Unlike thermo, both statmech
+# roots currently accept the full set the builder below is capable of
+# producing:
+#   - "StatmechInBundle" is the computed-SPECIES bundle root.
+#   - "BundleStatmechIn" is the computed-REACTION per-species root.
+# ``StatmechInBundle`` additionally accepts species-only fields this
+# builder never emits today (``literature``, ``rotational_constant_a
+# /b/c_cm1``, ``software_release``, ``workflow_tool_release``) — see
+# ``ComputedSpeciesUploadRequest``'s schema. That means today's parity
+# is incidental, not structural: adding an emission for any of those
+# fields without also updating this allow-list (and gating it on
+# ``target_model``, the same way ``_build_thermo_block`` gates
+# ``source_calculations``) would silently 422 every computed-reaction
+# upload that hits it — exactly the bug class this file's thermo fix
+# addresses. The final assert below turns that into a loud failure
+# instead. Kept honest against schema drift by
+# ``tests/test_shared_builder_field_sets.py``, which imports the real
+# ``tckdb_schemas`` models and asserts these sets are subsets of
+# ``<Model>.model_fields``.
+_STATMECH_FIELDS_BY_TARGET: dict[str, frozenset[str]] = {
+    "StatmechInBundle": frozenset({
+        "freq_scale_factor", "external_symmetry", "optical_isomers",
+        "is_linear", "rigid_rotor_kind", "statmech_treatment",
+        "torsions", "point_group", "source_calculations",
+    }),
+    "BundleStatmechIn": frozenset({
+        "freq_scale_factor", "external_symmetry", "optical_isomers",
+        "is_linear", "rigid_rotor_kind", "statmech_treatment",
+        "torsions", "point_group", "source_calculations",
+    }),
+}
+
+
 def _build_statmech_block_for_species(
     *,
     output_doc: Mapping[str, Any],
     species_record: Mapping[str, Any] | None = None,
     calc_keys_by_role: Mapping[str, str],
     workflow_tool_release: Mapping[str, Any] | None,
+    target_model: Literal["StatmechInBundle", "BundleStatmechIn"],
     scan_key_renames: Mapping[str, str] | None = None,
 ) -> dict[str, Any] | None:
-    """Build a ``StatmechInBundle``-/``BundleStatmechIn``-shaped dict, or ``None``.
+    """Build a ``target_model``-shaped statmech dict, or ``None``.
 
     Pulls per-species statmech metadata from
     ``species_record['statmech']`` (the dict that ``arc/output.py::
@@ -5027,13 +5946,10 @@ def _build_statmech_block_for_species(
     the upload schema. The frequency-scale-factor handling is unchanged.
 
     Both bundle endpoints (``StatmechInBundle`` for computed-species,
-    ``BundleStatmechIn`` for computed-reaction per-species) now accept
-    the same field set: ``external_symmetry``, ``is_linear``,
-    ``rigid_rotor_kind``, ``statmech_treatment``, ``point_group``,
-    ``freq_scale_factor``, ``torsions``, and ``source_calculations``.
-    Mode-specific filtering is therefore a no-op; the only thing the
-    caller varies is the calc-key namespace (unscoped for computed-
-    species, ``r0_*``/``p0_*``/``ts_*`` for computed-reaction).
+    ``BundleStatmechIn`` for computed-reaction per-species) currently
+    accept the same field set this builder is capable of producing —
+    see ``_STATMECH_FIELDS_BY_TARGET`` for why that's incidental rather
+    than guaranteed, and why ``target_model`` is required here anyway.
 
     ``calc_keys_by_role`` is the role-to-bundle-local-key map for the
     *owning* species block. Computed-species passes the unscoped keys
@@ -5046,6 +5962,12 @@ def _build_statmech_block_for_species(
     empty statmech container would just create a useless server-side
     row. Per the project convention, no empty containers.
     """
+    if target_model not in _STATMECH_FIELDS_BY_TARGET:
+        raise ValueError(
+            f"_build_statmech_block_for_species: unknown "
+            f"target_model={target_model!r}; expected one of "
+            f"{sorted(_STATMECH_FIELDS_BY_TARGET)}"
+        )
     block: dict[str, Any] = {}
 
     fsf_ref = _build_freq_scale_factor_ref(
@@ -5075,13 +5997,32 @@ def _build_statmech_block_for_species(
             block["rigid_rotor_kind"] = rotor_kind
 
         torsions_input = statmech_input.get("torsions")
-        treatment = _classify_statmech_treatment(torsions_input)
+        # Build first, then classify from what survived. The treatment names
+        # the rotors the record actually lists, and the builder drops rotors
+        # this adapter cannot represent, so classifying from ARC's raw input
+        # can claim a rotor-aware treatment the payload has no torsions to
+        # support -- which TCKDB refuses as self-contradictory.
+        # Only remove links to well-formed scans deliberately omitted for
+        # missing provenance. Unknown/malformed references still reach schema
+        # validation, rather than being silently repaired.
+        omitted_scan_keys = set()
+        if _resolve_level(output_doc, "scan") is None and isinstance(species_record, Mapping):
+            omitted_scan_keys = {
+                entry["key"] for entry in _scan_entries_from_record(species_record)
+                if entry.get("type") == _CALC_KEY_SCAN
+                and isinstance(entry.get("key"), str) and entry["key"]
+                and isinstance(entry.get("scan_result"), Mapping)
+            }
+        slim_torsions = _build_slim_torsions(
+            torsions_input, scan_key_renames=scan_key_renames,
+            omitted_scan_keys=omitted_scan_keys,
+        )
+        treatment = _classify_statmech_treatment(
+            torsions_input, emitted_torsions=slim_torsions,
+        )
         if treatment is not None:
             block["statmech_treatment"] = treatment
 
-        slim_torsions = _build_slim_torsions(
-            torsions_input, scan_key_renames=scan_key_renames,
-        )
         if slim_torsions:
             block["torsions"] = slim_torsions
 
@@ -5108,13 +6049,36 @@ def _build_statmech_block_for_species(
         if sources:
             block["source_calculations"] = sources
 
-    return block or None
+    if not block:
+        return None
+
+    # Belt-and-suspenders (see ``_STATMECH_FIELDS_BY_TARGET``'s
+    # docstring): fail loudly here, at build time, rather than shipping
+    # a field the target root's extra="forbid" would reject as a 422. A
+    # bare ``assert`` would vanish under ``python -O``, precisely when a
+    # production guard is wanted most, so this is a real ``raise``.
+    disallowed = set(block) - _STATMECH_FIELDS_BY_TARGET[target_model]
+    if disallowed:
+        raise ValueError(
+            f"_build_statmech_block_for_species emitted field(s) not "
+            f"accepted by {target_model}: {sorted(disallowed)}"
+        )
+    return block
 
 
 def _classify_statmech_treatment(
     torsions: Any,
+    *,
+    emitted_torsions: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """Map ARC's torsion list to a TCKDB ``StatmechTreatmentKind`` value.
+
+    ``emitted_torsions`` is the list :func:`_build_slim_torsions` actually
+    produced for this record. Pass it whenever the payload will carry
+    torsions: a rotor-aware treatment is *defined* by the rotors it treats,
+    so TCKDB rejects one that lists none, and the builder drops rotors whose
+    ARC ``treatment`` has no TCKDB equivalent. Classifying from ARC's raw
+    input alone would therefore claim ``rrho_1d`` over an empty list.
 
     Rules:
 
@@ -5122,6 +6086,12 @@ def _classify_statmech_treatment(
       record) → ``None``: ARC didn't emit a statmech evaluation, so the
       treatment is genuinely unknown. Don't fabricate one.
     * Empty list (statmech ran, no successful rotors) → ``"rrho"``.
+    * Rotors present but none survived into the payload → ``None``.
+      ``"rrho"`` would assert that the species was treated as a rigid
+      rotor harmonic oscillator, and ARC's own record says otherwise --
+      it treated rotors this adapter could not express. Omitting the
+      field says "we are not naming a treatment", which is the only
+      claim the evidence supports.
     * ≥1 1D rotor (each entry's ``atom_indices`` is a flat 4-int list)
       and no ND → ``"rrho_1d"``.
     * ≥1 ND rotor (entry's ``atom_indices`` is a list of 4-int lists)
@@ -5138,6 +6108,23 @@ def _classify_statmech_treatment(
         return None
     if not torsions:
         return "rrho"
+    if emitted_torsions is not None:
+        if not emitted_torsions:
+            return None
+        # Classify from the emitted entries' ``dimension``, which the builder
+        # sets only when it resolved real coordinate quartets. An entry
+        # without one was emitted as a summary from unusable atom_indices;
+        # its dimensionality is unknown, so no treatment can be named.
+        dimensions = [t.get("dimension") for t in emitted_torsions]
+        if any(not isinstance(d, int) or d < 1 for d in dimensions):
+            return None
+        has_1d = any(d == 1 for d in dimensions)
+        has_nd = any(d > 1 for d in dimensions)
+        if has_1d and has_nd:
+            return "rrho_1d_nd"
+        if has_nd:
+            return "rrho_nd"
+        return "rrho_1d"
     has_1d = False
     has_nd = False
     for t in torsions:
@@ -5171,6 +6158,7 @@ def _build_slim_torsions(
     torsions: Any,
     *,
     scan_key_renames: Mapping[str, str] | None = None,
+    omitted_scan_keys: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build ``BundleStatmechTorsionIn`` entries, with coordinate quartets when available.
 
@@ -5217,19 +6205,46 @@ def _build_slim_torsions(
     ``pivot_atoms`` and ``barrier_kj_mol`` are deliberately not emitted:
     the bundle schema rejects ``pivot_atoms`` and has no destination
     column for the fitted barrier. Both stay out of the payload.
+
+    ``torsion_index`` is the entry's 1-based *position in this record's
+    own ``torsions`` argument* (i.e. ``statmech.torsions[]`` as it
+    appears in ``output.yml``), not a counter of how many torsions this
+    function has emitted so far. Positional index vs. emission-order
+    counter is the whole difference this function makes: skipping an
+    unrecognized-treatment entry leaves a gap in ``torsion_index``
+    rather than shifting every later entry's index down by one. TCKDB
+    only requires ``torsion_index`` to be unique within the record, not
+    contiguous (``BundleStatmechIn.validate_unique_torsion_indices`` /
+    ``StatmechTorsionInBundle.validate_unique_torsion_indices``, plus a
+    DB ``UniqueConstraint(statmech_id, torsion_index)`` with no
+    contiguity requirement), so the gap is valid, not a defect.
+
+    This does **not** restore joinability to ARC's ``rotors_dict``
+    ordinal numbering, and should not be described that way:
+    ``statmech.torsions[]`` is itself already compacted relative to
+    ``rotors_dict`` before it ever reaches the adapter —
+    ``_get_torsions`` (``ARC:arc/output.py:1435-1438``) iterates
+    ``spc.rotors_dict.items()`` and skips any rotor whose
+    ``success is not True``, so a rotor dropped for that reason leaves
+    no trace (no gap, no placeholder) in ``output.yml`` at all, and ARC
+    exports no raw rotor ordinal alongside it. ``torsion_index`` is
+    therefore only ever a stable, unique reference into *this record's
+    own* torsions list as ARC wrote it — a real and sufficient property
+    for TCKDB's uniqueness rule, but not a restored cross-reference to
+    ARC's internal rotor numbering, which the adapter has no way to
+    recover.
     """
     if not isinstance(torsions, list):
         return []
     out: list[dict[str, Any]] = []
-    next_index = 1
-    for entry in torsions:
+    for position, entry in enumerate(torsions, start=1):
         if not isinstance(entry, Mapping):
             continue
         treatment = entry.get("treatment")
         if treatment not in _ARC_TO_TCKDB_TORSION_TREATMENTS:
             continue
         slim: dict[str, Any] = {
-            "torsion_index": next_index,
+            "torsion_index": position,
             "treatment_kind": treatment,
         }
         sym = entry.get("symmetry_number")
@@ -5246,7 +6261,7 @@ def _build_slim_torsions(
                 logger.warning(
                     "TCKDB statmech: torsion #%d has unusable atom_indices=%r; "
                     "emitting torsion summary without coordinates.",
-                    next_index, atom_indices,
+                    position, atom_indices,
                 )
         # Link the torsion to its underlying scan calc when ARC provided a
         # bundle-local key. Computed-reaction bundles namespace scan calcs
@@ -5257,12 +6272,11 @@ def _build_slim_torsions(
         # bundles have a single species and pass ``None``: the original
         # un-prefixed key is already unique.
         scan_key = entry.get("source_scan_key") or entry.get("source_scan_calculation_key")
-        if isinstance(scan_key, str) and scan_key:
+        if isinstance(scan_key, str) and scan_key and scan_key not in (omitted_scan_keys or set()):
             if scan_key_renames is not None:
                 scan_key = scan_key_renames.get(scan_key, scan_key)
             slim["source_scan_calculation_key"] = scan_key
         out.append(slim)
-        next_index += 1
     return out
 
 
@@ -5422,10 +6436,67 @@ _REACTION_FLAT_RESULT_FIELDS: dict[str, dict[str, str]] = {
         "n_imag": "freq_n_imag",
         "imag_freq_cm1": "freq_imag_freq_cm1",
         "zpe_hartree": "freq_zpe_hartree",
+        "reaction_coordinate_mode_index": "freq_reaction_coordinate_mode_index",
     },
     "sp_result": {
         "electronic_energy_hartree": "sp_electronic_energy_hartree",
     },
+}
+
+# Wrapped-result top-level fields with no 1:1 entry in
+# ``_REACTION_FLAT_RESULT_FIELDS`` above but that ARE carried onto the
+# reaction route by dedicated code further down in
+# :func:`_flatten_result_fields`, rather than the generic src->dst copy
+# loop. ``freq_result.modes`` is the only one today: it fans out into
+# both ``freq_frequencies_cm1`` and ``freq_imaginary_dispositions``.
+_REACTION_RESULT_FIELDS_HANDLED_ELSEWHERE: dict[str, frozenset[str]] = {
+    "freq_result": frozenset({"modes"}),
+}
+
+# Wrapped-result top-level fields that are deliberately NOT carried onto
+# the reaction route's flat shape, keyed by wrapped_key -> {field:
+# reason}. Empty today: every top-level field ``OptResultPayload`` /
+# ``FreqResultPayload`` / ``SPResultPayload`` can carry already has a
+# mapping above or a dedicated handler. Kept as a real (checked) table
+# rather than omitted so a future field that genuinely can't be carried
+# has an explicit place to land, with a reason, instead of the
+# completeness guard below being silenced by deleting its check.
+_REACTION_RESULT_FIELDS_NOT_CARRIED: dict[str, dict[str, str]] = {}
+
+# Per-mode (``FrequencyModePayload``) fields consumed while building
+# ``freq_frequencies_cm1`` / ``freq_imaginary_dispositions`` above.
+# ``mode_index`` and ``is_imaginary`` are read as indexing/control data
+# and not re-emitted under their own name (``mode_index`` becomes the
+# mode's position in ``freq_frequencies_cm1`` and its key in
+# ``freq_imaginary_dispositions``; ``is_imaginary`` is implied on the
+# flat side by the sign of ``frequency_cm1`` — see
+# ``shared/calculation_in.py::freq_result_of``).
+_REACTION_MODE_FIELDS_HANDLED = frozenset({
+    "mode_index", "frequency_cm1", "is_imaginary", "imaginary_disposition",
+})
+
+# ``FrequencyModePayload`` fields with no home at all on the reaction
+# route: ``CalculationIn.freq_frequencies_cm1`` is a bare ``list[float]``
+# and ``freq_imaginary_dispositions`` is a bare ``{mode_index:
+# disposition}`` map (``shared/calculation_in.py``) — neither has a slot
+# for per-mode metadata beyond frequency and imaginary disposition. This
+# is a structural limit of the flat reaction shape itself, not an
+# adapter oversight: ``shared/calculation_in.py::freq_result_of``
+# reconstructs ``FrequencyModePayload`` from the flat fields using only
+# ``mode_index``/``frequency_cm1``/``is_imaginary``/
+# ``imaginary_disposition``, so nothing downstream could receive these
+# even if this adapter tried to carry them. ``_freq_result_payload``
+# does not currently populate any of them either, so nothing is lost in
+# practice today; they are listed here (with the schema-level reason)
+# so the completeness guard has a real, checked table to point at
+# instead of an unexamined "everything else is fine".
+_REACTION_MODE_FIELDS_NOT_CARRIED: dict[str, str] = {
+    "reduced_mass_amu": "no flat CalculationIn slot for per-mode reduced mass",
+    "force_constant_mdyne_angstrom": "no flat CalculationIn slot for per-mode force constant",
+    "ir_intensity_km_mol": "no flat CalculationIn slot for per-mode IR intensity",
+    "raman_activity": "no flat CalculationIn slot for per-mode Raman activity",
+    "symmetry_label": "no flat CalculationIn slot for per-mode symmetry label",
+    "note": "no flat CalculationIn slot for per-mode free-text notes",
 }
 
 
@@ -5436,18 +6507,80 @@ def _flatten_result_fields(calc: dict[str, Any]) -> None:
     its values are promoted to the network_pdep-style flat field names.
     A no-op for IRC and any other calc type without a wrapped result —
     those carry their data through ``parameters_json`` instead.
+
+    Completeness guard: any key inside a wrapped result (or inside one
+    of ``freq_result``'s ``modes`` entries) that is not accounted for by
+    ``_REACTION_FLAT_RESULT_FIELDS``, ``_REACTION_RESULT_FIELDS_
+    HANDLED_ELSEWHERE``/``_REACTION_MODE_FIELDS_HANDLED``, or the
+    corresponding "not carried" table raises ``ValueError`` instead of
+    being silently dropped. Before this guard existed, any such key
+    (e.g. a new field a species-shape builder starts emitting without
+    updating this module) would vanish here with no error and no test
+    failure — the reaction upload would simply lack data the species
+    upload has, discovered only by a human diffing two uploads of the
+    "same" calculation.
     """
     for wrapped_key, field_map in _REACTION_FLAT_RESULT_FIELDS.items():
         result = calc.pop(wrapped_key, None)
         if not isinstance(result, Mapping):
             continue
+        handled_elsewhere = _REACTION_RESULT_FIELDS_HANDLED_ELSEWHERE.get(
+            wrapped_key, frozenset()
+        )
+        not_carried = _REACTION_RESULT_FIELDS_NOT_CARRIED.get(wrapped_key, {})
+        unknown = set(result) - set(field_map) - handled_elsewhere - set(not_carried)
+        if unknown:
+            raise ValueError(
+                f"{wrapped_key} carries field(s) {sorted(unknown)!r} with no "
+                f"reaction-route flat-field mapping, explicit handler, or "
+                f"documented 'not carried' justification. Update "
+                f"_REACTION_FLAT_RESULT_FIELDS, "
+                f"_REACTION_RESULT_FIELDS_HANDLED_ELSEWHERE, or "
+                f"_REACTION_RESULT_FIELDS_NOT_CARRIED in adapter.py before "
+                f"this field can silently vanish on the computed-reaction "
+                f"route."
+            )
         for src, dst in field_map.items():
             if src in result:
                 calc[dst] = result[src]
         if wrapped_key == "freq_result":
             modes = result.get("modes")
             if modes:
+                for m in modes:
+                    mode_unknown = (
+                        set(m)
+                        - _REACTION_MODE_FIELDS_HANDLED
+                        - set(_REACTION_MODE_FIELDS_NOT_CARRIED)
+                    )
+                    if mode_unknown:
+                        raise ValueError(
+                            f"freq_result.modes carries field(s) "
+                            f"{sorted(mode_unknown)!r} with no reaction-route "
+                            f"handling or documented 'not carried' "
+                            f"justification. Update "
+                            f"_REACTION_MODE_FIELDS_HANDLED or "
+                            f"_REACTION_MODE_FIELDS_NOT_CARRIED in "
+                            f"adapter.py before this field can silently "
+                            f"vanish on the computed-reaction route."
+                        )
                 calc["freq_frequencies_cm1"] = [m["frequency_cm1"] for m in modes]
+                # ``modes``' per-entry ``imaginary_disposition`` (set by
+                # ``_freq_result_payload`` on every non-designated
+                # imaginary mode once a reaction coordinate is
+                # designated) has no home on the flat per-mode list —
+                # the network_pdep/computed-reaction shape carries it
+                # separately, keyed by mode_index, via
+                # ``CalculationIn.freq_imaginary_dispositions``
+                # (shared/calculation_in.py). Drop it and it silently
+                # reverts to "undeclared", which is exactly the state
+                # stationary_point.py's ambiguity check blocks on.
+                dispositions = {
+                    m["mode_index"]: m["imaginary_disposition"]
+                    for m in modes
+                    if m.get("imaginary_disposition") is not None
+                }
+                if dispositions:
+                    calc["freq_imaginary_dispositions"] = dispositions
 
 
 def _flatten_all_reaction_calcs(bundle: dict[str, Any]) -> None:
@@ -5550,7 +6683,7 @@ def _build_kinetics_block(
     """Build a ``BundleKineticsIn``-shaped dict from ARC kinetics.
 
     Mapping (ARC → TCKDB):
-        A           → a
+        A, T0_k, n  → a = A / T0_k**n (RMG uses (T/T0)**n)
         A_units     → a_units (via :func:`arc_to_tckdb_a_units`)
         n           → n
         Ea          → reported_ea
@@ -5579,6 +6712,22 @@ def _build_kinetics_block(
     Returns ``None`` when neither A nor Ea is populated — TCKDB's
     ``BundleKineticsIn`` allows empty kinetics, but a totally empty
     record is just noise and easier to omit than to send.
+
+    When ``A`` (or ``Ea``) is present but its unit string doesn't map to
+    a TCKDB enum (missing or unrecognized), the magnitude is *never*
+    deposited without its unit — but the failure is scoped to that one
+    field, not to the whole bundle. ``a``/``a_units`` (or
+    ``reported_ea``/``reported_ea_units``) are both omitted and a
+    WARNING is logged; ``n``, the other of A/Ea, ``Tmin_k``/``Tmax_k``
+    and the rest of the kinetics block are still built and returned.
+    Raising here would abort ``_build_computed_reaction_payload``
+    entirely (the call site is unguarded) and discard the reaction's
+    species blocks, TS block, geometries, IRC and path-search data for
+    the sake of one optional rate-coefficient field — a wildly
+    disproportionate response to an unresolvable unit string. See
+    PHASE_C_PLAN.md C-4 for the original defect (a unitless magnitude
+    silently shipped) and its adversarial-review follow-up (this
+    proportionality fix) for why bare failure was replaced.
     """
     has_substantive_field = any(
         kinetics_record.get(k) is not None
@@ -5593,15 +6742,45 @@ def _build_kinetics_block(
         "model_kind": "modified_arrhenius",
     }
 
+    # A rate coefficient's pre-exponential factor is meaningless without
+    # its unit. ``arc_to_tckdb_a_units`` returns None both when A_units is
+    # absent and when it's a string the map doesn't recognize; either way,
+    # depositing ``a`` alone would ship a unitless number that reads as
+    # correct and silently isn't. Note this is a routine, *valid* ARC
+    # shape, not just a hand-written/third-party edge case: ARC's own
+    # ``output.yml`` schema requires ``A_units`` to be present but allows
+    # it to be ``null`` (``arc/schemas/output_yml_schema.json``:
+    # ``"A_units": {"type": ["string", "null"]}``, in ``required``), and
+    # ``arc/output.py`` deliberately emits ``null`` whenever ``A`` isn't a
+    # ``(value, unit)`` tuple. So omit ``a``/``a_units`` and log a WARNING
+    # rather than raise — a single unresolvable unit on an optional field
+    # must not abort the whole reaction bundle (species, TS, geometries,
+    # IRC, path-search) via the unguarded call site in
+    # ``_build_computed_reaction_payload``. ``a_units`` has no coupling
+    # validator on ``BundleKineticsIn`` (unlike ``reported_ea``/
+    # ``reported_ea_units`` — see the Ea handling below), so omitting both
+    # is guaranteed to still validate.
     a = kinetics_record.get("A")
     if a is not None:
         try:
-            block["a"] = float(a)
+            a_value = float(a)
         except (TypeError, ValueError) as exc:
             logger.warning("TCKDB kinetics: malformed A=%r (%s)", a, exc)
-    a_units = arc_to_tckdb_a_units(kinetics_record.get("A_units"))
-    if a_units:
-        block["a_units"] = a_units
+        else:
+            a_units = arc_to_tckdb_a_units(kinetics_record.get("A_units"))
+            if a_units is None:
+                logger.warning(
+                    "TCKDB kinetics: A=%r has no recognized TCKDB unit "
+                    "(A_units=%r); omitting a/a_units rather than "
+                    "depositing a pre-exponential factor with no unit. "
+                    "Add the ARC string to _ARC_TO_TCKDB_A_UNITS if it is "
+                    "a legitimate unit, or fix the producer. The rest of "
+                    "the kinetics block is still built.",
+                    a_value, kinetics_record.get("A_units"),
+                )
+            else:
+                block["a"] = a_value
+                block["a_units"] = a_units
 
     n = kinetics_record.get("n")
     if n is not None:
@@ -5610,15 +6789,60 @@ def _build_kinetics_block(
         except (TypeError, ValueError) as exc:
             logger.warning("TCKDB kinetics: malformed n=%r (%s)", n, exc)
 
+    # RMG/Arkane fits A * (T/T0)**n; TCKDB evaluates a * T**n.
+    # Older exports omitted T0 entirely and used the 1 K convention.
+    # An explicit null/invalid T0 is unknown, not evidence for 1 K.
+    if "a" in block:
+        try:
+            t0 = float(kinetics_record.get("T0_k", 1.0))
+            if not math.isfinite(t0) or t0 <= 0:
+                raise ValueError("T0_k must be finite and positive")
+            if t0 != 1.0:
+                exponent = block.get("n")
+                if exponent is None or not math.isfinite(exponent):
+                    raise ValueError("non-unit T0_k requires a finite n")
+                normalized_a = block["a"] / t0**exponent
+                if not math.isfinite(normalized_a) or (normalized_a == 0 and block["a"] != 0):
+                    raise ValueError("normalized A is not representable")
+                block["a"] = normalized_a
+        except (TypeError, ValueError, OverflowError, ZeroDivisionError) as exc:
+            logger.warning(
+                "TCKDB kinetics: cannot normalize A with T0_k=%r, n=%r (%s); "
+                "omitting a/a_units.", kinetics_record.get("T0_k"), n, exc,
+            )
+            block.pop("a", None)
+            block.pop("a_units", None)
+
+    # Same policy as A/A_units above, and for the same reason: an
+    # activation energy with no unit is not a smaller version of the
+    # right answer, it's an unrecoverable one. But same fix as above too
+    # — omit the pair and warn rather than raise. TCKDB's own
+    # ``validate_ea_pair`` (``BundleKineticsIn`` model validator) already
+    # requires ``reported_ea``/``reported_ea_units`` to be both provided
+    # or both omitted, so omitting both here is exactly what the schema
+    # wants when only one half is resolvable, and it costs nothing extra
+    # server-side (no failed round trip) since the adapter never sends
+    # the broken half. ``ea_units`` is computed unconditionally because
+    # the dEa fallback below reuses it.
     ea = kinetics_record.get("Ea")
     ea_units = arc_to_tckdb_ea_units(kinetics_record.get("Ea_units"))
     if ea is not None:
         try:
-            block["reported_ea"] = float(ea)
+            ea_value = float(ea)
         except (TypeError, ValueError) as exc:
             logger.warning("TCKDB kinetics: malformed Ea=%r (%s)", ea, exc)
-    if ea_units:
-        block["reported_ea_units"] = ea_units
+        else:
+            if ea_units is None:
+                logger.warning(
+                    "TCKDB kinetics: Ea=%r has no recognized TCKDB unit "
+                    "(Ea_units=%r); omitting reported_ea/reported_ea_units "
+                    "rather than depositing an activation energy with no "
+                    "unit. The rest of the kinetics block is still built.",
+                    ea_value, kinetics_record.get("Ea_units"),
+                )
+            else:
+                block["reported_ea"] = ea_value
+                block["reported_ea_units"] = ea_units
 
     for arc_key, payload_key in (("Tmin_k", "tmin_k"), ("Tmax_k", "tmax_k")):
         v = kinetics_record.get(arc_key)
@@ -5647,28 +6871,36 @@ def _build_kinetics_block(
     # dEa policy: ARC's dEa_units may differ from Ea_units. TCKDB has
     # only one Ea unit per kinetics row (no separate d_reported_ea_units
     # column today), so we can only safely emit d_reported_ea when the
-    # producer reported it in the same units as Ea — otherwise the
-    # number would be silently misinterpreted as the wrong unit.
+    # producer reported it in the same units as Ea *and* that unit is
+    # actually on the wire as ``reported_ea_units`` — otherwise the
+    # number would be silently misinterpreted as the wrong unit, or (the
+    # "both unitless" case — same defect C-4 exists to prevent, applied
+    # here too) shipped with no unit anywhere in the record at all.
+    # ``ea_units is not None`` alone is not enough: it only proves the
+    # string *resolved*, not that ``reported_ea``/``reported_ea_units``
+    # actually made it into ``block`` (Ea itself may be absent or
+    # malformed even when Ea_units resolves).
     dea = kinetics_record.get("dEa")
     if dea is not None:
         dea_units_raw = kinetics_record.get("dEa_units")
         dea_units = arc_to_tckdb_ea_units(dea_units_raw) if dea_units_raw else ea_units
-        if dea_units is not None and ea_units is not None and dea_units == ea_units:
-            try:
-                block["d_reported_ea"] = float(dea)
-            except (TypeError, ValueError) as exc:
-                logger.warning("TCKDB kinetics: malformed dEa=%r (%s)", dea, exc)
-        elif dea_units is None and ea_units is None:
-            # Best-effort: both unitless; pass through.
+        if (
+            dea_units is not None
+            and dea_units == ea_units
+            and "reported_ea_units" in block
+        ):
             try:
                 block["d_reported_ea"] = float(dea)
             except (TypeError, ValueError) as exc:
                 logger.warning("TCKDB kinetics: malformed dEa=%r (%s)", dea, exc)
         else:
-            logger.debug(
-                "TCKDB kinetics: dEa units (%r) differ from Ea units (%r); "
-                "omitting d_reported_ea to avoid unit ambiguity.",
-                dea_units_raw, kinetics_record.get("Ea_units"),
+            logger.warning(
+                "TCKDB kinetics: dEa=%r has no unambiguous unit to ship "
+                "with (dEa_units=%r, Ea_units=%r, reported_ea_units on "
+                "wire=%s); omitting d_reported_ea rather than depositing "
+                "an uncertainty with no unit or a mismatched one.",
+                dea, dea_units_raw, kinetics_record.get("Ea_units"),
+                "reported_ea_units" in block,
             )
 
     # dA policy: Arkane/ARC dA is a multiplicative uncertainty factor
@@ -5711,8 +6943,20 @@ def _build_kinetics_block(
     # value (the schema treats missing as NULL, *not* 1.0, and the
     # producer must too: don't default to 1, don't infer from
     # stoichiometry). Non-numeric / None / non-positive → omit.
+    #
+    # This field is guarded, not unreachable: ``output.yml``'s JSON
+    # schema (output_yml_schema.json) sets ``additionalProperties: false``
+    # on ``kinetics``, but that schema is never enforced at runtime — the
+    # adapter ``yaml.load``s the file directly (``_vendor.py``) and only
+    # checks ``schema_version`` (``evidence.py::validate_output_schema``),
+    # and ARC itself doesn't validate against it on write either (it's
+    # referenced only from ``arc/output_schema_test.py``). A hand-written,
+    # older, or third-party ``output.yml`` can carry a ``degeneracy`` key
+    # this branch reads. ``degeneracy > 0`` rejects NaN and -inf (both
+    # compare False against 0), but ``float('inf') > 0`` is True, so
+    # ``math.isfinite`` closes that one remaining hole.
     degeneracy = _coerce_optional_float(kinetics_record.get("degeneracy"))
-    if degeneracy is not None and degeneracy > 0:
+    if degeneracy is not None and math.isfinite(degeneracy) and degeneracy > 0:
         block["degeneracy"] = degeneracy
 
     # Free-form note. Prefer an explicit ``note`` on the kinetics record
@@ -5814,12 +7058,6 @@ def _detect_irc_direction(log_path: str) -> str | None:
     return None
 
 
-# Hartree → kJ/mol conversion. Matches CODATA 2018 within the
-# truncation TCKDB downstream code uses for relative energies; defining
-# it inline keeps this helper free of further imports at module top.
-_HARTREE_TO_KJ_MOL = 2625.4996
-
-
 def _build_irc_result_payload(
     trajectories: list[dict[str, Any]],
     zero_energy_reference_hartree: float | None = None,
@@ -5870,8 +7108,12 @@ def _build_irc_result_payload(
     """
     if not trajectories:
         return None
-    # Vendored xyz formatter (no ARC dependency).
-    from tckdb_arc._vendor import xyz_to_str
+    # Vendored xyz formatter + Hartree->kJ/mol constant (no ARC
+    # dependency). Same constant ``path_search_result`` uses below, so
+    # the two ``relative_energy_kj_mol`` fields agree bit-for-bit rather
+    # than differing by the ~7e-8 relative amount a second, independently
+    # rounded inline literal introduced (see PHASE_C_PLAN.md C-3).
+    from tckdb_arc._vendor import E_h_kJmol, xyz_to_str
 
     points: list[dict[str, Any]] = []
     has_forward = False
@@ -5940,7 +7182,7 @@ def _build_irc_result_payload(
                 if zero_energy_reference_hartree is not None:
                     point["relative_energy_kj_mol"] = (
                         (float(energy) - zero_energy_reference_hartree)
-                        * _HARTREE_TO_KJ_MOL
+                        * E_h_kJmol
                     )
             rc = record["reaction_coordinate"]
             if rc is not None:
@@ -5996,7 +7238,7 @@ def _build_irc_result_payload(
                 if zero_energy_reference_hartree is not None:
                     ts_point["relative_energy_kj_mol"] = (
                         (ts_energy_f - zero_energy_reference_hartree)
-                        * _HARTREE_TO_KJ_MOL
+                        * E_h_kJmol
                     )
         points.append(ts_point)
         ts_point_index = ts_index
@@ -6310,14 +7552,14 @@ def _build_path_search_result_payload(
         parse_trajectory,
     )
 
-    # Per-node parsed metadata from preserved xtb outputs, when the
-    # producer wrote them. Empty dict for older runs (wrapper predates
-    # preservation) — points stay geometry-only, no inventing.
-    node_metadata: dict[int, dict[str, float]] = (
-        _read_gsm_node_outputs(node_outputs_dir)
-        if gsm_evidence is None and not evidence_unavailable and node_outputs_dir is not None and method == "gsm"
-        else {}
-    )
+    # Archived ograd ids identify invocations, not final stringfile frames.
+    # Only portable evidence supplies verified geometry matches. Raw fallback
+    # keeps geometries and stringfile relative energies, never index-attached
+    # absolute energies or gradients from node_outputs_dir.
+    if gsm_evidence is None and not evidence_unavailable and node_outputs_dir is not None and method == "gsm":
+        logger.warning(
+            "TCKDB path_search: archived GSM energies/gradients omitted without geometry-matched parser evidence"
+        )
 
     points: list[dict[str, Any]] = []
     selected_index: int | None = None
@@ -6333,6 +7575,8 @@ def _build_path_search_result_payload(
             }
             if "path_coordinate_angstrom" in source_point:
                 point["path_coordinate"] = source_point["path_coordinate_angstrom"]
+            if "cumulative_com_superposed_displacement_angstrom" in source_point:
+                point["path_coordinate"] = source_point["cumulative_com_superposed_displacement_angstrom"]
             if index == selected_index:
                 point["is_ts_guess"] = True
             for evidence_key, payload_key in (
@@ -6408,27 +7652,6 @@ def _build_path_search_result_payload(
                     point["path_coordinate"] = arc_lengths[i]
                 if i == selected_index:
                     point["is_ts_guess"] = True
-                # Per-node energy / gradient (when preserved by the
-                # patched ograd wrapper). The producer-side label
-                # convention is that the on-disk node label NN maps
-                # directly to the stringfile frame index i — confirmed on
-                # real reaction_06 data: the peak node (label 8) lands
-                # exactly on the selected TS-guess frame (index 8). The
-                # fixed reactant-endpoint frame 0 carries no ograd energy
-                # (``node_metadata.get(0)`` is ``None``), so it stays
-                # energy-less; every other frame is matched. If a future
-                # GSM version shifts this mapping, only mismatched indices
-                # are silently skipped here, never invented.
-                meta = node_metadata.get(i)
-                if meta:
-                    if "electronic_energy_hartree" in meta:
-                        point["electronic_energy_hartree"] = meta[
-                            "electronic_energy_hartree"
-                        ]
-                    if "max_gradient" in meta:
-                        point["max_gradient"] = meta["max_gradient"]
-                    if "rms_gradient" in meta:
-                        point["rms_gradient"] = meta["rms_gradient"]
                 points.append(point)
 
     if not points and evidence_unavailable:
@@ -6455,16 +7678,9 @@ def _build_path_search_result_payload(
     # explicit gap — never a fabricated value; a null is not a "misleading
     # dip" the way a made-up number would be).
     #
-    # This is deliberately NOT all-or-none: a real xTB-GSM run writes one
-    # more stringfile frame than it runs per-node gradients on. GSM does
-    # not re-evaluate the fixed reactant-endpoint anchor each round, so
-    # ``gsm_node_outputs/`` holds N energies (node labels 1..N mapping
-    # directly onto frame indices 1..N) for an N+1-frame stringfile,
-    # leaving exactly frame 0 without an energy. Requiring *every* point
-    # to have an energy would therefore suppress the entire profile on
-    # essentially all real data. ``min(known)`` is the reactant well here,
-    # so relative energies read as barrier heights measured from the
-    # reactant — the natural reference.
+    # Only geometrically attached evidence points have absolute energies.
+    # Unmatched points retain missing values; the minimum known energy is a
+    # numerical reference, not an inferred reactant assignment.
     energies = [
         p.get("electronic_energy_hartree") for p in points
     ]
@@ -6506,10 +7722,12 @@ def _build_path_search_result_payload(
             rel_kcal = None
         if rel_kcal is not None:
             point_indices = [p["point_index"] for p in points]
-            if point_indices and all(
+            # Evidence values were collected in payload point order above;
+            # source indices need not be contiguous offsets into that list.
+            if point_indices and (gsm_evidence is not None or all(
                 0 <= ix < len(rel_kcal) for ix in point_indices
-            ):
-                vals = [rel_kcal[ix] for ix in point_indices]
+            )):
+                vals = rel_kcal if gsm_evidence is not None else [rel_kcal[ix] for ix in point_indices]
                 if max(vals) - min(vals) > _GSM_STRINGFILE_ENERGY_EPS:
                     base_kcal = min(vals)
                     for p, v in zip(points, vals):

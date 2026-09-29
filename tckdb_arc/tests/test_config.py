@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-"""Unit tests for arc.tckdb.config."""
+"""Unit tests for tckdb_arc.config."""
 
 import os
 import tempfile

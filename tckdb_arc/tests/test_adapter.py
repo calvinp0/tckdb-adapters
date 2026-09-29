@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-"""Unit tests for arc.tckdb.adapter.
+"""Unit tests for tckdb_arc.adapter.
 
 These tests do not require a live TCKDB server. The TCKDBClient is
 replaced by a stub via the adapter's ``client_factory`` parameter.
@@ -9,6 +9,7 @@ replaced by a stub via the adapter's ``client_factory`` parameter.
 
 import copy
 import json
+import math
 import os
 import pathlib
 import shutil
@@ -26,6 +27,7 @@ from tckdb_arc.adapter import (
     TCKDBAdapter,
     UploadOutcome,
     _extract_tckdb_public_refs,
+    _freq_result_payload,
     arc_to_tckdb_a_units,
     arc_to_tckdb_ea_units,
 )
@@ -45,6 +47,7 @@ except ImportError:
     ARC_TESTING_PATH = None
 
 from tckdb_schemas.fragments.calculation import (
+    FreqResultPayload,
     HessianPayload,
     HessianSource,
     IRCResultPayload,
@@ -255,6 +258,7 @@ def _fake_output_doc():
         "arc_version": "1.2.3",
         "arc_git_commit": "deadbeef",
         "opt_level": {"method": "wb97xd", "basis": "def2-tzvp", "software": "gaussian"},
+        "scan_level": {"method": "wb97xd", "basis": "def2-tzvp", "software": "gaussian"},
     }
 
 
@@ -540,7 +544,7 @@ class TestAdapterPayloadAndUpload(unittest.TestCase):
         )
         # The exact CLI command, with the real project dir + upload mode.
         self.assertIn(
-            "python -m arc.tckdb.cli /proj/run7/input.yml "
+            "tckdb-arc-upload /proj/run7/input.yml "
             f"-p /proj/run7 --upload-mode {self.cfg.upload_mode}",
             blob,
         )
@@ -1289,25 +1293,79 @@ class TestAdditionalCalculations(unittest.TestCase):
         sp = next(c for c in payload["additional_calculations"] if c["type"] == "sp")
         self.assertNotIn("spin_diagnostic", sp)
 
-    def test_opt_freq_sp_record_yields_two_additional_calculations(self):
-        """4. opt+freq+sp record produces two additional calculations."""
+    def test_opt_freq_sp_record_is_refused_when_minimum_reports_an_imaginary_mode(self):
+        """4 (was "opt+freq+sp record produces two additional calculations").
+
+        This fixture is unchanged from the original: ``is_ts=False`` (the
+        default) with ``freq_n_imag=1``. A previous fix pass changed it to
+        ``is_ts=True``, calling the original "arbitrary" -- it was not.
+        ``is_ts=True`` was itself wrong: ``adapter.py``'s
+        ``_species_entry_payload`` would then emit
+        ``species_entry_kind="transition_state"``, a value that does not
+        exist in TCKDB 0.22.0's ``StationaryPointKind`` enum.
+
+        Restored to ``is_ts=False``, this fixture is a genuine
+        ``species_entry_kind='minimum'`` reporting one imaginary mode --
+        exactly the contradiction TCKDB 0.22.0 refuses
+        (``n_imag_contradicts_minimum``). The correct behaviour (D2 in
+        ``_freq_result_payload``) is for the adapter to refuse to build
+        this record at all, loudly, rather than upload two additional
+        calculations under a classification the evidence disputes.
+        opt+freq+sp chaining coverage (both additional calcs present,
+        non-contradictory data) lives on
+        ``TestFreqNImagSpeciesEntryKindConsistency.
+        test_ts_two_imaginary_modes_designates_reaction_coordinate``.
+        """
         record = _fake_record()
         record["freq_n_imag"] = 1
         record["imag_freq_cm1"] = -512.3
         record["zpe_hartree"] = 0.0399
         record["sp_energy_hartree"] = -155.111
-        _, _, payload = self._submit(output_doc=_fake_output_doc(), record=record)
-        additional = payload["additional_calculations"]
-        self.assertEqual([c["type"] for c in additional], ["freq", "sp"])
-        freq, sp = additional
-        self.assertEqual(freq["freq_result"]["n_imag"], 1)
-        self.assertAlmostEqual(freq["freq_result"]["imag_freq_cm1"], -512.3)
-        self.assertAlmostEqual(freq["freq_result"]["zpe_hartree"], 0.0399)
-        self.assertAlmostEqual(sp["sp_result"]["electronic_energy_hartree"], -155.111)
+        client = _StubClient(response=_StubResponse({"id": 1}))
+        adapter = self._adapter(client)
+        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+            with self.assertRaises(ValueError) as ctx:
+                adapter.submit_from_output(
+                    output_doc=_fake_output_doc(), species_record=record,
+                )
+        self.assertIn("n_imag_contradicts_minimum", str(ctx.exception))
 
-    def test_freq_modes_populated_from_statmech_harmonic_frequencies(self):
-        """statmech.harmonic_frequencies_cm1 lands in freq_result.modes with
-        1-based mode_index and sign-derived is_imaginary."""
+    def test_freq_refused_when_minimum_reports_imaginary_mode_with_statmech_populated(self):
+        """Restored is_ts=False fixture is a genuine contradiction, not a
+        modes/sign-derivation exercise.
+
+        Renamed from ``test_freq_modes_populated_from_statmech_harmonic_
+        frequencies`` -- that name asserted the opposite of what this test
+        now does (a raise, not populated modes). Its sibling immediately
+        above was renamed correctly when this fixture was fixed; this one
+        was missed.
+
+        This fixture is unchanged from the original: ``is_ts=False`` (the
+        default), ``freq_n_imag=1``, and a negative entry in
+        ``statmech.harmonic_frequencies_cm1``. A previous fix pass changed
+        it to ``is_ts=True``, calling ``freq_n_imag=1`` "arbitrary" -- it
+        was not: this is ``is_ts=False``'s realistic default value.
+        ``is_ts=True`` was wrong for a separate, independent reason too:
+        ARC's ``_statmech_to_dict`` (arc/output.py) strips every negative
+        frequency out of ``harmonic_frequencies_cm1`` whenever
+        ``spc.is_ts`` ("Exclude the imaginary mode"), so a converged TS
+        can never carry ``-1320.5`` there -- with ``is_ts=True`` this
+        fixture was impossible ARC output.
+
+        Restored to ``is_ts=False``, ``freq_n_imag=1`` plus a negative
+        harmonic entry is a genuine ``species_entry_kind='minimum'``
+        reporting an imaginary mode -- exactly the contradiction TCKDB
+        0.22.0 refuses (``n_imag_contradicts_minimum``). The correct
+        behaviour (D2 in ``_freq_result_payload``) is refusal, not a
+        payload with ``modes`` built under a disputed classification.
+        Sign-derivation coverage (a negative harmonic entry becoming
+        ``is_imaginary=True``) on VALID, non-contradictory data is
+        exercised directly on ``_freq_result_payload`` in
+        ``test_freq_result_payload_modes_mode_index_and_is_imaginary``
+        below, and on the TS fixture in
+        ``TestFreqNImagSpeciesEntryKindConsistency.
+        test_ts_two_imaginary_modes_designates_reaction_coordinate``.
+        """
         record = _fake_record()
         record["freq_n_imag"] = 1
         record["imag_freq_cm1"] = -1320.5
@@ -1315,16 +1373,63 @@ class TestAdditionalCalculations(unittest.TestCase):
         record["statmech"] = {
             "harmonic_frequencies_cm1": [-1320.5, 800.0, 1500.0, 3000.0],
         }
-        _, _, payload = self._submit(output_doc=_fake_output_doc(), record=record)
-        freq = next(c for c in payload["additional_calculations"] if c["type"] == "freq")
-        modes = freq["freq_result"]["modes"]
+        client = _StubClient(response=_StubResponse({"id": 1}))
+        adapter = self._adapter(client)
+        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+            with self.assertRaises(ValueError) as ctx:
+                adapter.submit_from_output(
+                    output_doc=_fake_output_doc(), species_record=record,
+                )
+        self.assertIn("n_imag_contradicts_minimum", str(ctx.exception))
+
+    def test_freq_result_payload_modes_mode_index_and_is_imaginary(self):
+        """D3: direct coverage of ``_freq_result_payload`` on valid,
+        non-contradictory data -- restoring the suite's only assertions
+        on literal ``mode_index``/``is_imaginary`` values, which the
+        fixture above stopped providing once it became (correctly) a
+        contradiction/raise test.
+
+        No species-entry path (``species_entry_kind='minimum'``) can
+        ever carry an imaginary mode without tripping a D2 contradiction
+        -- that is the whole point of D2 -- so there is no way to reach
+        a valid, schema-accepted payload with an ``is_imaginary=True``
+        mode through ``submit_from_output``/``submit_computed_species_
+        from_output``. ``is_ts=True`` with ``freq_n_imag=1`` is
+        non-contradictory (a converged TS has exactly one imaginary
+        mode by definition), so this calls ``_freq_result_payload``
+        directly on a TS-shaped record instead: ARC's own convention
+        (arc/output.py) strips negative frequencies from
+        ``statmech.harmonic_frequencies_cm1`` whenever ``spc.is_ts``, so
+        the single imaginary mode is reinserted from ``imag_freq_cm1``
+        at ``mode_index=1``, ahead of the three real modes.
+
+        Validated against the real ``FreqResultPayload`` schema
+        directly -- the exact shape this function's own docstring says
+        it builds -- rather than a full ``submit_*`` pipeline, since no
+        such pipeline can produce this shape (see above).
+        """
+        record = {
+            "label": "TS0",
+            "is_ts": True,
+            "converged": True,
+            "freq_n_imag": 1,
+            "imag_freq_cm1": -1320.5,
+            "zpe_hartree": 0.05,
+            "statmech": {
+                "harmonic_frequencies_cm1": [800.0, 1500.0, 3000.0],
+            },
+        }
+        result = _freq_result_payload(record)
+        modes = result["modes"]
         self.assertEqual([m["mode_index"] for m in modes], [1, 2, 3, 4])
         self.assertEqual(
-            [m["frequency_cm1"] for m in modes], [-1320.5, 800.0, 1500.0, 3000.0]
+            [m["frequency_cm1"] for m in modes], [-1320.5, 800.0, 1500.0, 3000.0],
         )
         self.assertEqual(
-            [m["is_imaginary"] for m in modes], [True, False, False, False]
+            [m["is_imaginary"] for m in modes], [True, False, False, False],
         )
+        self.assertNotIn("reaction_coordinate_mode_index", result)
+        FreqResultPayload(**result)
 
     def test_freq_modes_only_record_still_emits_freq_calc(self):
         """When only statmech.harmonic_frequencies_cm1 is populated (no
@@ -2923,11 +3028,14 @@ class TestComputedSpeciesBundle(unittest.TestCase):
         # The attached hessian dict validates under the TCKDB schema.
         payload_obj = HessianPayload(**hessian)
         self.assertEqual(payload_obj.source, HessianSource.parsed_log)
-        # The hessian geometry coincides with the freq calc's input geometry.
-        self.assertEqual(
-            hessian["geometry"]["xyz_text"],
-            freq["input_geometries"][0]["xyz_text"],
-        )
+        # Cartesian Hessians must use their parser frame, independently of
+        # the conformer's orientation.
+        from tckdb_arc._arc_optional import ess_factory
+        from tckdb_arc._vendor import xyz_to_str
+        from tckdb_arc.adapter import _normalize_xyz_text
+        xyz, frame = ess_factory(record["freq_log"], "gaussian").parse_cartesian_hessian_geometry()
+        self.assertEqual(frame, "gaussian_input_orientation")
+        self.assertEqual(hessian["geometry"]["xyz_text"], _normalize_xyz_text(xyz_to_str(xyz), record["label"]))
 
     # ---------------- 12d: absent freq_log => no hessian, never raises
     def test_freq_calc_without_log_has_no_hessian(self):
@@ -3435,6 +3543,23 @@ class TestChargePropagation(unittest.TestCase):
         payload = TCKDBAdapter._species_entry_payload(record)
         self.assertEqual(payload["charge"], 0)
 
+    def test_species_entry_payload_refuses_is_ts_record(self):
+        """D2: applying the same standard as ``_freq_result_payload``'s
+        contradiction raises. No path inside ARC's own pipeline is known
+        to reach here with ``is_ts=True`` (a converged TS is routed to
+        ``output_doc['transition_states']`` and its own upload path), so
+        this is defensive validation for a hand-written/older/third-party
+        output.yml -- the same threat model D2 exists for. TCKDB
+        0.22.0's StationaryPointKind has no 'transition_state' member, so
+        the previous behaviour (silently emitting that invalid string)
+        would have failed model_validate anyway; refusing here is
+        earlier and more attributable than a downstream 422.
+        """
+        record = _fake_record(smiles="CCO", is_ts=True)
+        with self.assertRaises(ValueError) as ctx:
+            TCKDBAdapter._species_entry_payload(record)
+        self.assertIn("is_ts=True", str(ctx.exception))
+
     # ---------------- 2: full computed-species bundle preserves charge ---
 
     def _bundle_payload(self, *, charge, multiplicity, smiles):
@@ -3855,6 +3980,43 @@ class TestComputedSpeciesStatmechBaseFields(unittest.TestCase):
         # FSF block still present; no statmech_treatment.
         self.assertNotIn("statmech_treatment", payload["statmech"])
 
+    def test_statmech_treatment_omitted_when_every_rotor_is_dropped(self):
+        # A rotor whose ARC ``treatment`` has no TCKDB equivalent is dropped
+        # from ``torsions``, but its atom_indices are a well-formed 1D
+        # quartet. Deriving the treatment from ARC's raw input would claim
+        # "rrho_1d" over an empty torsion list, which TCKDB refuses as
+        # self-contradictory ("must list the torsions it treated").
+        #
+        # "rrho" would be wrong too: ARC's record says rotors *were*
+        # treated, so asserting a plain rigid-rotor treatment would
+        # misstate the science. Omission is the only honest claim.
+        record = self._record_with_statmech()
+        record["statmech"]["torsions"] = [{
+            "symmetry_number": 3,
+            "treatment": "some_future_arc_rotor_kind",
+            "atom_indices": [1, 2, 3, 4],
+            "pivot_atoms": [2, 3],
+        }]
+        _, payload = self._submit(doc=self._doc(), record=record)
+        self.assertNotIn("statmech_treatment", payload["statmech"])
+        self.assertNotIn("torsions", payload["statmech"])
+
+    def test_statmech_treatment_reflects_only_the_rotors_emitted(self):
+        # One 1D rotor survives, one ND rotor is dropped. The treatment must
+        # describe the payload's own torsion list ("rrho_1d"), not ARC's
+        # richer input ("rrho_1d_nd") -- a consumer reading rrho_1d_nd would
+        # look for an ND rotor that is not there.
+        record = self._record_with_statmech()
+        record["statmech"]["torsions"] = [
+            {"symmetry_number": 3, "treatment": "hindered_rotor",
+             "atom_indices": [1, 2, 3, 4], "pivot_atoms": [2, 3]},
+            {"symmetry_number": 1, "treatment": "some_future_arc_rotor_kind",
+             "atom_indices": [[5, 6, 7, 8], [9, 6, 7, 10]], "pivot_atoms": [6, 7]},
+        ]
+        _, payload = self._submit(doc=self._doc(), record=record)
+        self.assertEqual(payload["statmech"]["statmech_treatment"], "rrho_1d")
+        self.assertEqual(len(payload["statmech"]["torsions"]), 1)
+
     # ---------------- 6: FSF behavior preserved
     def test_freq_scale_factor_behavior_preserved(self):
         # Sanity: the FSF block remains fully populated even when the
@@ -3918,8 +4080,42 @@ class TestComputedSpeciesStatmechBaseFields(unittest.TestCase):
         torsions = payload["statmech"]["torsions"]
         self.assertEqual(len(torsions), 1)
         self.assertEqual(torsions[0]["treatment_kind"], "hindered_rotor")
-        # torsion_index runs over emitted entries, not source entries.
+        # torsion_index is this entry's 1-based position in ARC's
+        # torsions list, not a counter of emitted entries — it stayed 1
+        # here only because the surviving entry is also first in the
+        # list. See test_slim_torsions_index_is_source_position_not_a_
+        # compacted_counter below for the case that actually
+        # distinguishes the two policies (PHASE_C_PLAN.md C-7).
         self.assertEqual(torsions[0]["torsion_index"], 1)
+
+    def test_slim_torsions_index_is_source_position_not_a_compacted_counter(self):
+        # C-7: dropping an earlier rotor (unsupported treatment) must
+        # leave a gap in torsion_index, not renumber every later rotor
+        # down by one. A compacting counter silently breaks the only
+        # cross-reference back to ARC's rotors_dict ordering — exactly
+        # what a curator re-deriving a barrier would rely on. TCKDB only
+        # requires torsion_index to be unique, not contiguous
+        # (BundleStatmechIn / StatmechTorsionInBundle
+        # .validate_unique_torsion_indices), so a gap is valid.
+        record = self._record_with_statmech()
+        record["statmech"]["torsions"] = [
+            {"symmetry_number": 1, "treatment": "experimental_rotor_xyz",
+             "atom_indices": [1, 2, 3, 4], "pivot_atoms": [2, 3]},   # dropped: ARC rotor #1
+            {"symmetry_number": 3, "treatment": "hindered_rotor",
+             "atom_indices": [5, 6, 7, 8], "pivot_atoms": [6, 7]},   # ARC rotor #2
+            {"symmetry_number": 1, "treatment": "free_rotor",
+             "atom_indices": [2, 6, 7, 8], "pivot_atoms": [6, 7]},   # ARC rotor #3
+        ]
+        _, payload = self._submit(doc=self._doc(), record=record)
+        torsions = payload["statmech"]["torsions"]
+        self.assertEqual(len(torsions), 2)
+        # Rotor #2 keeps index 2 (its real source position), not 1.
+        self.assertEqual(torsions[0]["torsion_index"], 2)
+        self.assertEqual(torsions[0]["treatment_kind"], "hindered_rotor")
+        # Rotor #3 keeps index 3, not 2.
+        self.assertEqual(torsions[1]["torsion_index"], 3)
+        self.assertEqual(torsions[1]["treatment_kind"], "free_rotor")
+        ComputedSpeciesUploadRequest.model_validate(payload)
 
     # ---------------- coordinate definitions (1D, ND, malformed)
     def test_torsion_coordinates_emitted_for_1d(self):
@@ -4231,10 +4427,8 @@ class TestScanCalculations(unittest.TestCase):
         self.assertEqual(scan["scan_result"]["dimension"], 1)
         self.assertEqual(len(scan["scan_result"]["points"]), 3)
 
-    def test_scan_calc_uses_opt_level_fallback(self):
-        # No ``scan_level`` exists on rotors_dict — adapter must fall
-        # back to opt level + opt software (same fallback used for
-        # freq/sp when *_level is null on the doc).
+    def test_scan_calc_uses_explicit_scan_level(self):
+        # Scan provenance must be supplied explicitly by the producer.
         _, _, payload = self._submit(record=self._record_with_scan())
         scan = next(c for c in payload["conformers"][0]["additional_calculations"]
                     if c["type"] == "scan")
@@ -4529,6 +4723,504 @@ class TestComputedReactionStatmechBaseFields(unittest.TestCase):
     def test_payload_validates_against_tckdb_schema(self):
         _, payload = self._submit(doc=self._doc_with_statmech_and_fsf())
         ComputedReactionUploadRequest.model_validate(payload)
+
+
+class TestFreqNImagSpeciesEntryKindConsistency(unittest.TestCase):
+    """TCKDB 0.22.0 cross-checks freq_result.n_imag against the stationary-
+    point kind the record is uploaded under (species_entry_kind='minimum'
+    for every species/reactant/product path; "this is the transition_state
+    block" for a TS) and BLOCKS the whole upload on contradiction
+    (n_imag_contradicts_minimum / transition_state_no_imaginary_mode /
+    transition_state_reaction_coordinate_not_designated).
+
+    The adapter derives the kind from ARC's ``is_ts`` flag
+    (``_species_entry_payload``) completely independently of the n_imag it
+    reads in ``_freq_result_payload``, so nothing used to reconcile them.
+
+    No concrete path inside ARC's own current pipeline is known to
+    produce a contradiction. ``Scheduler.check_negative_freq``
+    (arc/scheduler.py) refuses to mark a non-TS species converged while
+    any negative frequency remains, and refuses to mark a TS converged
+    with zero. A species loaded from a pre-existing Arkane YAML
+    (``species.yml_path``) looks like a bypass at first --
+    ``Scheduler.schedule_jobs`` sets ``self.output[label]['convergence']
+    = True`` unconditionally for it, with no frequency sanity check at
+    all -- but ``ARCSpecies.from_yml_file`` never sets ``spc.freqs``
+    (only ``final_xyz``, ``mol``, ``multiplicity``, ``charge``, and a
+    handful of Arkane-conformer fields), and ``_get_imaginary_freqs``
+    (arc/output.py) reads only ``spc.freqs`` / ``spc.
+    ts_guesses[chosen].imaginary_freqs``. A YAML-loaded species reports
+    ``freq_n_imag=None``, so every check below is skipped for it, not
+    contradicted. The scenarios below are therefore defensive validation
+    for an ``output.yml`` this adapter did not produce -- hand-written,
+    third-party, or from a future/older ARC -- which the adapter
+    genuinely accepts: ``evidence.py::validate_output_schema`` checks
+    only ``schema_version``, never the document shape.
+
+    On a genuine contradiction, ``_freq_result_payload`` raises
+    ``ValueError`` rather than quietly omitting the offending field(s):
+    omission would defeat TCKDB's own guard (both
+    ``evaluate_species_entry_frequency`` and
+    ``evaluate_transition_state_frequency`` report nothing when n_imag is
+    absent) and deposit the record under a classification its own
+    evidence disputes, with the disproving evidence quietly removed. The
+    raise is deliberately left uncaught by every ``submit_*`` call site
+    (see their own "build failures raise" docstrings), so it propagates to
+    the sweep's per-record ``except Exception`` (``sweep.py``), which
+    counts the record ``failed`` and prints
+    ``failed: <label> -- <error>`` -- the loud, attributable signal a
+    ``logger.warning`` alone is not.
+
+    Separately: a converged TS can carry more than one imaginary mode even
+    on ARC's normal, non-bypass path. ``check_imaginary_frequencies``
+    (arc/checks/ts.py) accepts a TS as long as exactly one imaginary mode
+    falls within (LOWEST_MAJOR_TS_FREQ, HIGHEST_MAJOR_TS_FREQ) = (75, 10000)
+    cm-1 -- any *other* imaginary modes (small grid-noise artifacts, a
+    torsional maximum riding along) are tolerated. ADR 0012 then requires
+    the payload to designate which mode is the reaction coordinate, and
+    the adapter designates it by that same (75, 10000) cm-1 window --
+    never by magnitude alone, which can never be contradicted by a
+    stiffer artifact mode (see
+    ``test_ts_designates_window_mode_over_a_stiffer_artifact`` below).
+    """
+
+    # ---------------- computed-reaction path ----------------
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="arc-tckdb-nimag-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.cfg = TCKDBConfig(
+            enabled=True,
+            base_url="http://localhost:8000/api/v1",
+            payload_dir=self.tmp,
+            api_key_env="X_TCKDB_API_KEY",
+            project_label="proj-A",
+            upload_mode="computed_reaction",
+        )
+
+    def _adapter(self, client):
+        return TCKDBAdapter(self.cfg, client_factory=lambda c, k: client)
+
+    def _submit_reaction(self, *, doc):
+        client = _StubClient(response=_StubResponse({"reaction_id": 42}))
+        adapter = self._adapter(client)
+        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+            outcome = adapter.submit_computed_reaction_from_output(
+                output_doc=doc, reaction_record=_reaction_record(),
+            )
+        return outcome, json.loads(outcome.payload_path.read_text())
+
+    def _refused_reaction(self, *, doc):
+        """Submit ``doc`` and return the ``ValueError`` the build raises.
+
+        No payload/sidecar is written -- the exception propagates out of
+        ``submit_computed_reaction_from_output`` before ``self._writer.
+        write`` is ever reached (mirrors the caller contract every
+        ``submit_*`` docstring already advertises: "build failures
+        raise").
+        """
+        client = _StubClient(response=_StubResponse({"reaction_id": 42}))
+        adapter = self._adapter(client)
+        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+            with self.assertRaises(ValueError) as ctx:
+                adapter.submit_computed_reaction_from_output(
+                    output_doc=doc, reaction_record=_reaction_record(),
+                )
+        return ctx.exception
+
+    def test_ts_two_imaginary_modes_designates_reaction_coordinate(self):
+        """A converged TS with 2 imaginary modes (the major TS mode plus a
+        small extra one check_imaginary_frequencies tolerates) must
+        designate freq_reaction_coordinate_mode_index or TCKDB 0.22.0
+        blocks with transition_state_reaction_coordinate_not_designated.
+
+        ARC strips ALL negative frequencies from
+        statmech.harmonic_frequencies_cm1 for a TS (arc/output.py), so the
+        adapter must reinsert every entry of ``imaginary_frequencies_cm1``
+        -- not just the scalar ``imag_freq_cm1`` -- to reconcile n_imag=2
+        with the emitted modes. -1320.5 cm-1 is designated because it is
+        the unique mode inside ARC's own (75, 10000) cm-1 "major TS mode"
+        window (arc/checks/ts.py::check_imaginary_frequencies); -30.0 cm-1
+        is excluded because it sits below the window. -1320.5 also happens
+        to be the most negative of the two, so this alone does not
+        distinguish "designate by ARC's window" from the wrong "designate
+        by magnitude" rule -- see
+        ``test_ts_designates_window_mode_over_a_stiffer_artifact`` for a
+        case where the two rules disagree.
+        """
+        doc = _reaction_output_doc()
+        ts = doc["transition_states"][0]
+        ts["freq_n_imag"] = 2
+        ts["imag_freq_cm1"] = -1320.5
+        ts["imaginary_frequencies_cm1"] = [-1320.5, -30.0]
+        ts["statmech"] = {"harmonic_frequencies_cm1": [800.0, 1500.0]}
+
+        _, payload = self._submit_reaction(doc=doc)
+        freq = next(
+            c for c in payload["transition_state"]["calculations"]
+            if c["type"] == "freq"
+        )
+        self.assertEqual(freq["freq_n_imag"], 2)
+        self.assertEqual(
+            freq["freq_frequencies_cm1"], [-1320.5, -30.0, 800.0, 1500.0]
+        )
+        self.assertEqual(freq["freq_reaction_coordinate_mode_index"], 1)
+        # Would have raised CodedValidationError pre-fix.
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    def test_ts_two_imaginary_modes_designates_without_statmech_harmonic_frequencies(self):
+        """D4(a): n_imag=2 with NO statmech.harmonic_frequencies_cm1 at all.
+
+        Reachable on ARC's own path: when ``spc.freqs`` is empty,
+        ``_get_imaginary_freqs`` (arc/output.py) falls back to
+        ``ts_guesses[chosen].imaginary_freqs`` for
+        ``imaginary_frequencies_cm1``, while ``_statmech_to_dict`` builds
+        ``harmonic_frequencies_cm1`` from that same empty ``spc.freqs``
+        and gets ``None``. Designation must not be gated on a harmonic
+        list being present -- ``modes`` here is imaginary-only.
+        """
+        doc = _reaction_output_doc()
+        ts = doc["transition_states"][0]
+        ts["freq_n_imag"] = 2
+        ts["imag_freq_cm1"] = -1320.5
+        ts["imaginary_frequencies_cm1"] = [-1320.5, -30.0]
+        # No "statmech" key at all -- unlike the sibling test above.
+
+        _, payload = self._submit_reaction(doc=doc)
+        freq = next(
+            c for c in payload["transition_state"]["calculations"]
+            if c["type"] == "freq"
+        )
+        self.assertEqual(freq["freq_n_imag"], 2)
+        self.assertEqual(freq["freq_frequencies_cm1"], [-1320.5, -30.0])
+        self.assertEqual(freq["freq_reaction_coordinate_mode_index"], 1)
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    def test_ts_designates_reaction_coordinate_when_harmonic_frequencies_already_include_imaginary_modes(self):
+        """D1: designation must run whenever n_imag > 1, independent of
+        WHETHER ``modes`` needed reinsertion at all.
+
+        A previous fix pass gated the whole reinsertion-and-designation
+        block on ``modes`` having zero ``is_imaginary`` entries yet --
+        i.e. on reinsertion being necessary. That left a hole: when
+        ``statmech.harmonic_frequencies_cm1`` already carries every
+        imaginary value inline (unlike ARC's usual REAL-modes-only
+        convention for a TS -- e.g. a producer that doesn't follow it, or
+        ARC itself on some path this adapter doesn't specifically know
+        about), the guard saw modes were already internally consistent
+        with n_imag and skipped designation entirely. The resulting
+        payload had ``freq_n_imag=2`` and a full ``modes`` list but no
+        ``freq_reaction_coordinate_mode_index`` -- exactly the
+        transition_state_reaction_coordinate_not_designated finding this
+        function exists to prevent, emitted from inside the function
+        meant to prevent it.
+        """
+        doc = _reaction_output_doc()
+        ts = doc["transition_states"][0]
+        ts["freq_n_imag"] = 2
+        ts["imag_freq_cm1"] = -1320.5
+        ts["imaginary_frequencies_cm1"] = [-1320.5, -30.0]
+        # Unlike the sibling tests above: both imaginary values are
+        # already present in the harmonic list itself, so no reinsertion
+        # is needed -- ``modes`` is already internally consistent with
+        # n_imag=2 before designation ever runs.
+        ts["statmech"] = {
+            "harmonic_frequencies_cm1": [-1320.5, -30.0, 800.0],
+        }
+
+        _, payload = self._submit_reaction(doc=doc)
+        freq = next(
+            c for c in payload["transition_state"]["calculations"]
+            if c["type"] == "freq"
+        )
+        self.assertEqual(freq["freq_n_imag"], 2)
+        self.assertEqual(freq["freq_frequencies_cm1"], [-1320.5, -30.0, 800.0])
+        # Would have been absent pre-fix, and model_validate below would
+        # have raised transition_state_reaction_coordinate_not_designated.
+        self.assertEqual(freq["freq_reaction_coordinate_mode_index"], 1)
+        self.assertEqual(freq["freq_imaginary_dispositions"], {"2": "unassigned"})
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    def test_ts_designates_window_mode_over_a_stiffer_artifact(self):
+        """D5: designation follows ARC's (75, 10000) cm-1 window, not
+        "most negative wins".
+
+        -12000.0 cm-1 is the more negative of the two, but it sits
+        outside ARC's own major-TS-mode window (too stiff -- an SCF/parse
+        artifact per arc/checks/ts.py::check_imaginary_frequencies).
+        -1320.5 cm-1 is the one ARC's own check would call the reaction
+        coordinate. A magnitude-only rule would wrongly designate mode 1
+        (-12000.0) here and assert a reaction coordinate TCKDB can never
+        have grounds to contradict, since nothing is ever more negative
+        than "most negative".
+
+        Also covers D6 and D4 on this same fixture: the ``imag_freq_cm1``
+        scalar must agree with the designated mode (not ARC's raw
+        min()), and the excluded artifact mode must carry an
+        ``unassigned`` disposition in ``freq_imaginary_dispositions`` --
+        see ``test_removing_freq_imaginary_dispositions_would_fail_
+        validation`` below for proof that disposition is load-bearing on
+        this exact data.
+        """
+        doc = _reaction_output_doc()
+        ts = doc["transition_states"][0]
+        ts["freq_n_imag"] = 2
+        ts["imag_freq_cm1"] = -12000.0
+        ts["imaginary_frequencies_cm1"] = [-12000.0, -1320.5]
+
+        _, payload = self._submit_reaction(doc=doc)
+        freq = next(
+            c for c in payload["transition_state"]["calculations"]
+            if c["type"] == "freq"
+        )
+        self.assertEqual(freq["freq_frequencies_cm1"], [-12000.0, -1320.5])
+        # Mode 2 (-1320.5), NOT mode 1 (-12000.0, "most negative").
+        self.assertEqual(freq["freq_reaction_coordinate_mode_index"], 2)
+        # D6: the scalar must agree with the designation, not carry ARC's
+        # raw -12000.0 artifact past a consumer that only reads the
+        # scalar (e.g. tunneling correction code).
+        self.assertEqual(freq["freq_imag_freq_cm1"], -1320.5)
+        # D4: the excluded artifact (mode 1) is declared, not left
+        # undeclared; the designated mode (mode 2) is not.
+        self.assertEqual(freq["freq_imaginary_dispositions"], {"1": "unassigned"})
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    def test_removing_freq_imaginary_dispositions_would_fail_validation(self):
+        """D4: prove ``freq_imaginary_dispositions`` is load-bearing, not
+        decoration, on the exact data from
+        ``test_ts_designates_window_mode_over_a_stiffer_artifact``.
+
+        -12000.0 cm-1 (mode 1, excluded/artifact) is stiffer than the
+        designated -1320.5 cm-1 (mode 2): without a declared disposition,
+        stationary_point.py's ambiguity check blocks because an
+        undeclared extra mode is at least as stiff as the designated one
+        (``W_TS_REACTION_COORDINATE_AMBIGUOUS``). With ``unassigned``
+        declared, the same payload is accepted. A test that only checks
+        the accept case (as the sibling test above does) can't tell
+        "dispositions are required" from "dispositions are ignored" --
+        this one can.
+        """
+        doc = _reaction_output_doc()
+        ts = doc["transition_states"][0]
+        ts["freq_n_imag"] = 2
+        ts["imag_freq_cm1"] = -12000.0
+        ts["imaginary_frequencies_cm1"] = [-12000.0, -1320.5]
+
+        _, payload = self._submit_reaction(doc=doc)
+        freq = next(
+            c for c in payload["transition_state"]["calculations"]
+            if c["type"] == "freq"
+        )
+        dispositions = freq.pop("freq_imaginary_dispositions")
+        self.assertEqual(dispositions, {"1": "unassigned"})
+
+        with self.assertRaises(Exception) as ctx:
+            ComputedReactionUploadRequest.model_validate(payload)
+        self.assertIn(
+            "transition_state_reaction_coordinate_ambiguous", str(ctx.exception),
+        )
+
+        freq["freq_imaginary_dispositions"] = dispositions
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    def test_ts_two_in_window_candidates_designates_larger_magnitude(self):
+        """D5: two DISTINCT-magnitude candidates both inside ARC's (75,
+        10000) cm-1 window is not the same as a genuine tie.
+
+        TCKDB's own ambiguity check (stationary_point.py) compares with
+        ``>=``, so an unequal, undesignated smaller mode never trips it
+        -- only an exact tie (or a mode at least as stiff) would. The
+        adapter must designate the larger-magnitude in-window candidate
+        rather than refuse the whole record as ambiguous; refusal is
+        reserved for a genuine tie (see
+        ``test_ts_degenerate_pair_refused_as_ambiguous``) or zero
+        in-window candidates.
+        """
+        doc = _reaction_output_doc()
+        ts = doc["transition_states"][0]
+        ts["freq_n_imag"] = 2
+        ts["imag_freq_cm1"] = -1320.5
+        ts["imaginary_frequencies_cm1"] = [-1320.5, -400.0]
+
+        _, payload = self._submit_reaction(doc=doc)
+        freq = next(
+            c for c in payload["transition_state"]["calculations"]
+            if c["type"] == "freq"
+        )
+        self.assertEqual(freq["freq_frequencies_cm1"], [-1320.5, -400.0])
+        self.assertEqual(freq["freq_reaction_coordinate_mode_index"], 1)
+        self.assertEqual(freq["freq_imag_freq_cm1"], -1320.5)
+        self.assertEqual(freq["freq_imaginary_dispositions"], {"2": "unassigned"})
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    def test_ts_degenerate_pair_refused_as_ambiguous(self):
+        """D5: a degenerate pair sharing one magnitude, both inside ARC's
+        window, is genuinely ambiguous -- refuse rather than designate
+        one arbitrarily.
+
+        Designating either arbitrarily would 422 downstream anyway:
+        stationary_point.py's ambiguity check compares with ``>=``, so
+        the un-designated twin (same magnitude, no declared disposition)
+        would trip transition_state_reaction_coordinate_ambiguous.
+        """
+        doc = _reaction_output_doc()
+        ts = doc["transition_states"][0]
+        ts["freq_n_imag"] = 2
+        ts["imag_freq_cm1"] = -1320.5
+        ts["imaginary_frequencies_cm1"] = [-1320.5, -1320.5]
+
+        exc = self._refused_reaction(doc=doc)
+        self.assertIn(
+            "transition_state_reaction_coordinate_not_designated", str(exc),
+        )
+
+    def test_ts_multi_imaginary_length_mismatch_refused(self):
+        """D4(b): len(imaginary_frequencies_cm1) disagrees with n_imag --
+        cannot say which values are the n_imag modes, so cannot designate.
+        """
+        doc = _reaction_output_doc()
+        ts = doc["transition_states"][0]
+        ts["freq_n_imag"] = 2
+        ts["imag_freq_cm1"] = -1320.5
+        ts["imaginary_frequencies_cm1"] = [-1320.5]  # only 1, n_imag says 2
+
+        exc = self._refused_reaction(doc=doc)
+        self.assertIn(
+            "transition_state_reaction_coordinate_not_designated", str(exc),
+        )
+
+    def test_ts_multi_imaginary_without_plural_list_refused(self):
+        """D4(c): imaginary_frequencies_cm1 absent entirely with n_imag>1 --
+        only the scalar imag_freq_cm1 is available, which reconciles
+        n_imag==1 but can never designate among several modes.
+        """
+        doc = _reaction_output_doc()
+        ts = doc["transition_states"][0]
+        ts["freq_n_imag"] = 2
+        ts["imag_freq_cm1"] = -1320.5
+        ts["imaginary_frequencies_cm1"] = None
+
+        exc = self._refused_reaction(doc=doc)
+        self.assertIn(
+            "transition_state_reaction_coordinate_not_designated", str(exc),
+        )
+
+    def test_ts_zero_imaginary_refused(self):
+        """A TS record whose own frequency evidence shows no imaginary mode
+        contradicts "this is a transition state" outright
+        (transition_state_no_imaginary_mode is a BLOCKING finding). The
+        adapter cannot fabricate an imaginary mode that was never
+        computed, so it refuses to build the record -- loudly, via a
+        raise the sweep counts as a failure -- rather than quietly strip
+        the disproving n_imag/imag_freq_cm1 and deposit a TS with no
+        evidence either way.
+        """
+        doc = _reaction_output_doc()
+        ts = doc["transition_states"][0]
+        ts["freq_n_imag"] = 0
+        ts["imag_freq_cm1"] = None
+
+        exc = self._refused_reaction(doc=doc)
+        self.assertIn("transition_state_no_imaginary_mode", str(exc))
+
+    def test_reactant_species_positive_imaginary_refused(self):
+        """A reactant/product species entry always carries
+        species_entry_kind='minimum' (the adapter never emits
+        'vdw_complex' or a TS-flavored kind for a non-TS record). One
+        reporting an imaginary mode contradicts that outright
+        (n_imag_contradicts_minimum is BLOCKING). There is no vdw_complex
+        evidence to fall back on, so the adapter refuses to build the
+        whole reaction bundle rather than quietly strip the contradictory
+        n_imag/imag_freq_cm1 and deposit the species as an undisputed
+        minimum.
+        """
+        doc = _reaction_output_doc()
+        for s in doc["species"]:
+            if s["label"] == "CHO":
+                s["freq_n_imag"] = 1
+                s["imag_freq_cm1"] = -45.0
+
+        exc = self._refused_reaction(doc=doc)
+        self.assertIn("n_imag_contradicts_minimum", str(exc))
+
+    # ---------------- computed-species path ----------------
+
+    def _submit_species(self, *, record):
+        client = _StubClient(response=_StubResponse({
+            "species_entry_id": 1,
+            "conformers": [{
+                "key": "conf0",
+                "primary_calculation": {
+                    "key": "opt", "calculation_id": 1, "type": "opt", "role": "primary",
+                },
+                "additional_calculations": [],
+            }],
+        }))
+        cfg = TCKDBConfig(
+            enabled=True,
+            base_url="http://localhost:8000/api/v1",
+            payload_dir=self.tmp,
+            api_key_env="X_TCKDB_API_KEY",
+            project_label="proj-A",
+            upload_mode="computed_species",
+        )
+        adapter = TCKDBAdapter(cfg, client_factory=lambda c, k: client)
+        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+            outcome = adapter.submit_computed_species_from_output(
+                output_doc=_fake_output_doc(), species_record=record,
+            )
+        return outcome, json.loads(outcome.payload_path.read_text())
+
+    def _refused_species(self, *, record):
+        client = _StubClient(response=_StubResponse({"species_entry_id": 1}))
+        cfg = TCKDBConfig(
+            enabled=True,
+            base_url="http://localhost:8000/api/v1",
+            payload_dir=self.tmp,
+            api_key_env="X_TCKDB_API_KEY",
+            project_label="proj-A",
+            upload_mode="computed_species",
+        )
+        adapter = TCKDBAdapter(cfg, client_factory=lambda c, k: client)
+        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+            with self.assertRaises(ValueError) as ctx:
+                adapter.submit_computed_species_from_output(
+                    output_doc=_fake_output_doc(), species_record=record,
+                )
+        return ctx.exception
+
+    def test_computed_species_minimum_with_positive_imaginary_refused(self):
+        """Same contract on the /uploads/computed-species path: a species
+        bundle's species_entry_kind is always 'minimum' (is_ts=False is
+        the only value that reaches this endpoint), so a record reporting
+        an imaginary mode must refuse the whole bundle rather than upload
+        it as a self-contradictory 'minimum' with the evidence stripped.
+        """
+        record = _full_record()
+        record["freq_n_imag"] = 1
+        record["imag_freq_cm1"] = -20.0
+
+        exc = self._refused_species(record=record)
+        self.assertIn("n_imag_contradicts_minimum", str(exc))
+
+    def test_computed_species_minimum_with_negative_harmonic_entry_refused(self):
+        """D7: apply the same standard when the contradiction shows up in
+        ``statmech.harmonic_frequencies_cm1`` instead of the
+        ``freq_n_imag``/``imag_freq_cm1`` scalars directly.
+        ``freq_n_imag=0`` with a negative value hiding in the harmonic
+        list is the identical n_imag_contradicts_minimum contradiction --
+        just discovered through the frequency list. Quietly stripping the
+        negative value and depositing ``freq_n_imag=0`` would defeat
+        TCKDB's guard exactly as D2's docstring condemns; refuse the
+        whole record instead, the same as when the scalar field itself
+        carries the contradiction.
+        """
+        record = _full_record()
+        record["freq_n_imag"] = 0
+        record["statmech"] = {"harmonic_frequencies_cm1": [-45.0, 800.0]}
+
+        exc = self._refused_species(record=record)
+        self.assertIn("n_imag_contradicts_minimum", str(exc))
 
 
 class TestComputedReactionBundle(unittest.TestCase):
@@ -5030,6 +5722,158 @@ class TestComputedReactionBundle(unittest.TestCase):
         self.assertAlmostEqual(kin["tmax_k"], 3000.0)
         self.assertEqual(kin["reactant_keys"], ["r0_CHO", "r1_CH4"])
         self.assertEqual(kin["product_keys"], ["p0_CH2O", "p1_CH3"])
+        # And the whole bundle satisfies the real validator, not just a
+        # dict-shape assertion.
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    # ---------------- C-4 / adversarial-review D1: A/Ea with no usable
+    # unit must never be deposited as a bare (unitless) magnitude — see
+    # PHASE_C_PLAN.md C-4 — but an unresolvable unit on this one
+    # *optional* field must never take down the whole reaction bundle
+    # either. ``A_units: null`` alongside a numeric ``A`` is valid,
+    # deliberate ARC output (``arc/schemas/output_yml_schema.json``:
+    # ``A_units`` is ``["string","null"]`` and required; ``arc/output.py``
+    # emits ``null`` whenever ``A`` isn't a ``(value, unit)`` tuple), so
+    # raising here would discard a reaction's species/TS/geometry/IRC
+    # data over one missing rate-coefficient unit. The fix: omit
+    # ``a``/``a_units`` (or ``reported_ea``/``reported_ea_units``) and
+    # keep building everything else. These tests cover both hand-written/
+    # third-party ``output.yml`` (unrecognized unit strings — ``evidence.py``
+    # only checks ``schema_version``, and ARC's own JSON schema doesn't
+    # constrain ``A_units``/``Ea_units`` to an enum) and ARC's own
+    # documented ``null``-unit shape.
+    def test_kinetics_a_units_unrecognized_omits_a_and_keeps_rest(self):
+        rxn = _reaction_record()
+        rxn["kinetics"]["A_units"] = "bushels/fortnight"
+        with self.assertLogs("tckdb_arc", level="WARNING") as log_ctx:
+            _, _, payload = self._submit(reaction=rxn)
+        self.assertTrue(any("A_units" in m for m in log_ctx.output))
+        kin = payload["kinetics"][0]
+        self.assertNotIn("a", kin)
+        self.assertNotIn("a_units", kin)
+        # The rest of the kinetics block survives.
+        self.assertAlmostEqual(kin["n"], 4.37949)
+        self.assertAlmostEqual(kin["reported_ea"], 78.9012)
+        self.assertEqual(kin["reported_ea_units"], "kj_mol")
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    def test_kinetics_a_units_missing_omits_a_and_keeps_rest(self):
+        # A present, A_units absent entirely — same defect as an
+        # unrecognized string: a magnitude with an implied-but-unstated
+        # unit is exactly as wrong as one with a typo'd unit, and gets
+        # the same "omit, don't discard the bundle" treatment.
+        rxn = _reaction_record()
+        rxn["kinetics"].pop("A_units")
+        _, _, payload = self._submit(reaction=rxn)
+        kin = payload["kinetics"][0]
+        self.assertNotIn("a", kin)
+        self.assertNotIn("a_units", kin)
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    def test_kinetics_a_units_explicit_null_omits_a_and_keeps_rest(self):
+        # D1 repro: ARC's documented, deliberate ``A_units: null`` shape
+        # (numeric A, unit explicitly null) -- not just a missing key.
+        rxn = _reaction_record()
+        rxn["kinetics"]["A_units"] = None
+        _, _, payload = self._submit(reaction=rxn)
+        kin = payload["kinetics"][0]
+        self.assertNotIn("a", kin)
+        self.assertNotIn("a_units", kin)
+        self.assertAlmostEqual(kin["reported_ea"], 78.9012)
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    def test_kinetics_ea_units_unrecognized_omits_ea_and_keeps_rest(self):
+        rxn = _reaction_record()
+        rxn["kinetics"]["Ea_units"] = "erg/molecule"
+        with self.assertLogs("tckdb_arc", level="WARNING") as log_ctx:
+            _, _, payload = self._submit(reaction=rxn)
+        self.assertTrue(any("Ea_units" in m for m in log_ctx.output))
+        kin = payload["kinetics"][0]
+        self.assertNotIn("reported_ea", kin)
+        self.assertNotIn("reported_ea_units", kin)
+        self.assertAlmostEqual(kin["a"], 0.204298)
+        self.assertEqual(kin["a_units"], "cm3_mol_s")
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    def test_kinetics_ea_units_missing_omits_ea_and_keeps_rest(self):
+        rxn = _reaction_record()
+        rxn["kinetics"].pop("Ea_units")
+        _, _, payload = self._submit(reaction=rxn)
+        kin = payload["kinetics"][0]
+        self.assertNotIn("reported_ea", kin)
+        self.assertNotIn("reported_ea_units", kin)
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    def test_kinetics_a_present_n_and_ea_absent_still_omits_bad_a_units(self):
+        # The omit-not-raise behavior must fire even when A is the only
+        # substantive field (not masked by a healthy Ea alongside it).
+        rxn = _reaction_record()
+        rxn["kinetics"] = {
+            "A": 1.0e13, "A_units": "not-a-unit",
+            "n": None, "Ea": None, "Ea_units": None,
+            "Tmin_k": None, "Tmax_k": None,
+        }
+        _, _, payload = self._submit(reaction=rxn)
+        kin = payload["kinetics"][0]
+        self.assertNotIn("a", kin)
+        self.assertNotIn("a_units", kin)
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    def test_kinetics_recognized_units_do_not_omit_and_validate(self):
+        # Control case: a fully-recognized unit pair still builds and
+        # validates cleanly — the omit path only fires on the
+        # unresolvable case, it doesn't regress the happy path.
+        _, _, payload = self._submit()
+        kin = payload["kinetics"][0]
+        self.assertIn("a", kin)
+        self.assertIn("a_units", kin)
+        self.assertIn("reported_ea", kin)
+        self.assertIn("reported_ea_units", kin)
+        ComputedReactionUploadRequest.model_validate(payload)
+
+    def test_kinetics_a_units_null_reaction_still_uploads_species_ts_geometry(self):
+        # D1: the defect under review was that an unresolvable A unit
+        # discarded the *entire* upload -- species blocks, TS block,
+        # geometries, IRC and path-search data -- because the kinetics
+        # builder raised past an unguarded call site
+        # (``_build_computed_reaction_payload``). Prove the fix: with
+        # ARC's own deliberate ``A_units: null`` shape, everything except
+        # the rate coefficient still lands, and the whole payload still
+        # validates against the real model.
+        rxn = _reaction_record()
+        rxn["kinetics"]["A_units"] = None
+        doc = _reaction_output_doc(with_irc=True)
+        _, _, payload = self._submit(output_doc=doc, reaction=rxn)
+
+        # Species blocks: both reactants and both products present.
+        species_keys = sorted(s["key"] for s in payload["species"])
+        self.assertEqual(species_keys, ["p0_CH2O", "p1_CH3", "r0_CHO", "r1_CH4"])
+        for sp in payload["species"]:
+            self.assertTrue(sp["calculations"], f"species {sp['key']} lost its calculations")
+
+        # TS block, with geometry and an IRC calc slot still present.
+        self.assertIsNotNone(payload["transition_state"])
+        self.assertTrue(
+            payload["transition_state"].get("geometry", {}).get("xyz_text"),
+            "TS geometry must survive an unresolvable A unit",
+        )
+        ts_calcs = payload["transition_state"]["calculations"]
+        self.assertTrue(ts_calcs)
+        has_irc_calc = any(c.get("type") == "irc" for c in ts_calcs)
+        self.assertTrue(has_irc_calc, "IRC calc slot must survive an unresolvable A unit")
+
+        # Kinetics: rate coefficient omitted, not the whole record -- and
+        # the kinetics builder still links the IRC calc, proof IRC
+        # survived into source_calculations, not just the TS block.
+        kin = payload["kinetics"][0]
+        irc_roles = [e for e in kin["source_calculations"] if e["role"] == "irc"]
+        self.assertEqual(len(irc_roles), 1)
+        self.assertEqual(irc_roles[0]["calculation_key"], "ts_irc")
+        self.assertNotIn("a", kin)
+        self.assertNotIn("a_units", kin)
+        self.assertAlmostEqual(kin["reported_ea"], 78.9012)
+
+        ComputedReactionUploadRequest.model_validate(payload)
 
     # ---------------- tunneling_model passthrough
     def test_kinetics_tunneling_model_passes_through(self):
@@ -5161,6 +6005,23 @@ class TestComputedReactionBundle(unittest.TestCase):
                 _, _, payload = self._submit(reaction=rxn)
                 self.assertNotIn("degeneracy", payload["kinetics"][0])
 
+    def test_kinetics_degeneracy_omitted_when_non_finite(self):
+        # ``output.yml``'s JSON schema forbids unknown ``kinetics`` keys,
+        # but that schema is never enforced at runtime (the adapter
+        # ``yaml.load``s the file directly and only checks
+        # ``schema_version`` — see evidence.py), and ARC doesn't validate
+        # against it on write either. A hand-written/older/third-party
+        # output.yml can carry a non-finite degeneracy. ``> 0`` alone
+        # already rejects NaN and -inf (both compare False against 0);
+        # +inf is the one value that used to slip through ``> 0`` and
+        # would otherwise round-trip into invalid ``Infinity`` JSON.
+        for raw in (float("nan"), float("-inf"), float("inf")):
+            with self.subTest(raw=raw):
+                rxn = _reaction_record()
+                rxn["kinetics"]["degeneracy"] = raw
+                _, _, payload = self._submit(reaction=rxn)
+                self.assertNotIn("degeneracy", payload["kinetics"][0])
+
     def test_kinetics_degeneracy_validates_against_live_schema(self):
         # End-to-end: a positive degeneracy lands on the wire and the
         # full computed-reaction payload satisfies the live validator.
@@ -5260,6 +6121,27 @@ class TestComputedReactionBundle(unittest.TestCase):
         _, _, payload = self._submit(reaction=rxn)
         kin = payload["kinetics"][0]
         self.assertNotIn("d_reported_ea", kin)
+
+    def test_kinetics_dea_both_unitless_omits_d_reported_ea(self):
+        # D2 (adversarial review): Ea/Ea_units/dEa_units all None with a
+        # numeric dEa used to fall into a "best-effort: both unitless;
+        # pass through" branch that emitted ``d_reported_ea`` with no
+        # unit anywhere in the record -- exactly what C-4 exists to
+        # prevent, just 30 lines further down. Reproduce verbatim and
+        # assert it no longer ships.
+        rxn = _reaction_record()
+        rxn["kinetics"]["Ea"] = None
+        rxn["kinetics"]["Ea_units"] = None
+        rxn["kinetics"]["dEa"] = 0.294363
+        rxn["kinetics"]["dEa_units"] = None
+        with self.assertLogs("tckdb_arc", level="WARNING") as log_ctx:
+            _, _, payload = self._submit(reaction=rxn)
+        self.assertTrue(any("dEa" in m for m in log_ctx.output))
+        kin = payload["kinetics"][0]
+        self.assertNotIn("d_reported_ea", kin)
+        self.assertNotIn("reported_ea", kin)
+        self.assertNotIn("reported_ea_units", kin)
+        ComputedReactionUploadRequest.model_validate(payload)
 
     # ---------------- 7: kinetics.source_calculations populated by local keys
     def test_kinetics_source_calculations_explicit(self):
@@ -5860,12 +6742,16 @@ class TestComputedReactionBundle(unittest.TestCase):
             if c["key"] == "ts_irc"
         )["irc_result"]
         self.assertAlmostEqual(result["zero_energy_reference_hartree"], -303.6)
-        # relative_energy_kj_mol = (E - E_ref) * 2625.4996
+        # relative_energy_kj_mol = (E - E_ref) * E_h_kJmol. Uses the same
+        # vendored constant as path_search_result (PHASE_C_PLAN.md C-3) —
+        # not the old inline ``2625.4996`` literal — so this doubles as
+        # the regression test for the two fields agreeing bit-for-bit.
+        from tckdb_arc._vendor import E_h_kJmol
         for p in result["points"]:
             expected = (
                 p["electronic_energy_hartree"] - (-303.6)
-            ) * 2625.4996
-            self.assertAlmostEqual(p["relative_energy_kj_mol"], expected, places=4)
+            ) * E_h_kJmol
+            self.assertAlmostEqual(p["relative_energy_kj_mol"], expected, places=9)
 
     def test_irc_zero_energy_reference_falls_back_to_opt_when_sp_level_differs(self):
         # sp_level distinct from opt_level → adapter must NOT use the
@@ -6959,9 +7845,13 @@ class TestCalculationConstraints(unittest.TestCase):
 
     def test_opt_constraints_appear_on_primary_calculation(self):
         record = _full_record()
+        # index_base is required on every dict-shaped constraint (C-1c) —
+        # these are already 1-based, matching Gaussian's native base.
         record["opt_constraints"] = [
-            {"constraint_kind": "bond", "atoms": [1, 2], "target_value": 1.45},
-            {"constraint_kind": "angle", "atoms": [1, 2, 3], "target_value": None},
+            {"constraint_kind": "bond", "atoms": [1, 2], "target_value": 1.45,
+             "index_base": 1},
+            {"constraint_kind": "angle", "atoms": [1, 2, 3], "target_value": None,
+             "index_base": 1},
         ]
         payload = self._submit(record)
         primary = payload["conformers"][0]["primary_calculation"]
@@ -6977,6 +7867,7 @@ class TestCalculationConstraints(unittest.TestCase):
         self.assertAlmostEqual(primary["constraints"][0]["target_value"], 1.45)
         self.assertEqual(primary["constraints"][1]["constraint_kind"], "angle")
         self.assertNotIn("target_value", primary["constraints"][1])
+        ComputedSpeciesUploadRequest.model_validate(payload)
 
     def test_constraints_omitted_when_record_field_absent(self):
         record = _full_record()
@@ -6991,11 +7882,11 @@ class TestCalculationConstraints(unittest.TestCase):
         record = _full_record()
         record["freq_constraints"] = [
             {"constraint_kind": "dihedral", "atoms": [1, 2, 3, 4],
-             "target_value": 180.0},
+             "target_value": 180.0, "index_base": 1},
         ]
         record["sp_constraints"] = [
             {"constraint_kind": "cartesian_atom", "atoms": [5],
-             "target_value": None},
+             "target_value": None, "index_base": 1},
         ]
         payload = self._submit(record)
         by_key = {c["key"]: c for c in payload["conformers"][0]["additional_calculations"]}
@@ -7007,6 +7898,7 @@ class TestCalculationConstraints(unittest.TestCase):
         # No cross-talk back onto the opt calc.
         primary = payload["conformers"][0]["primary_calculation"]
         self.assertNotIn("constraints", primary)
+        ComputedSpeciesUploadRequest.model_validate(payload)
 
     def test_scan_calc_constraints_attached_inline_via_additional_calculations(self):
         # The scan loop uses ``source_constraints`` from the per-entry
@@ -7024,13 +7916,13 @@ class TestCalculationConstraints(unittest.TestCase):
                     "coordinate_kind": "dihedral",
                     "atom1_index": 1, "atom2_index": 2,
                     "atom3_index": 3, "atom4_index": 4,
-                    "step_count": 36, "value_unit": "deg",
+                    "step_count": 36, "value_unit": "degree",
                 }],
                 "points": [],
             },
             "constraints": [
                 {"constraint_kind": "bond", "atoms": [5, 6],
-                 "target_value": 1.20},
+                 "target_value": 1.20, "index_base": 1},
             ],
         }]
         payload = self._submit(record)
@@ -7045,32 +7937,96 @@ class TestCalculationConstraints(unittest.TestCase):
             "dihedral",
             [c["constraint_kind"] for c in scans[0]["constraints"]],
         )
+        ComputedSpeciesUploadRequest.model_validate(payload)
 
     def test_invalid_constraints_filtered_silently(self):
         # Best-effort contract: a malformed entry must be dropped, not
         # explode the whole payload.
         record = _full_record()
         record["opt_constraints"] = [
-            {"constraint_kind": "bond", "atoms": [1], "target_value": None},          # arity wrong
-            {"constraint_kind": "wat", "atoms": [1, 2], "target_value": None},         # bad kind
-            {"constraint_kind": "angle", "atoms": [1, 2, 3], "target_value": None},   # OK
+            {"constraint_kind": "bond", "atoms": [1], "target_value": None,
+             "index_base": 1},          # arity wrong
+            {"constraint_kind": "wat", "atoms": [1, 2], "target_value": None,
+             "index_base": 1},          # bad kind
+            {"constraint_kind": "angle", "atoms": [1, 2, 3], "target_value": None,
+             "index_base": 1},          # OK
         ]
         payload = self._submit(record)
         primary = payload["conformers"][0]["primary_calculation"]
         self.assertEqual(len(primary["constraints"]), 1)
         self.assertEqual(primary["constraints"][0]["constraint_kind"], "angle")
         self.assertEqual(primary["constraints"][0]["constraint_index"], 1)
+        ComputedSpeciesUploadRequest.model_validate(payload)
+
+    def test_constraints_missing_index_base_dropped_not_assumed(self):
+        # C-1c: a dict-shaped constraint with no declared index_base must
+        # be refused, not silently treated as already 1-based. ARC's
+        # Gaussian (1-based) and ORCA (0-based) constraint parsers always
+        # attach index_base (C-1a); real ARC output never reaches this
+        # path. This guards a hand-written/older/third-party
+        # ``output.yml`` — the adapter accepts those (evidence.py only
+        # checks schema_version) and an unshifted ORCA-sourced atom list
+        # would otherwise point at the wrong atoms with no signal.
+        record = _full_record()
+        record["opt_constraints"] = [
+            {"constraint_kind": "bond", "atoms": [1, 2], "target_value": 1.45},
+        ]
+        payload = self._submit(record)
+        primary = payload["conformers"][0]["primary_calculation"]
+        self.assertNotIn("constraints", primary)
+        ComputedSpeciesUploadRequest.model_validate(payload)
+
+    def test_rotor_scan_end_to_end_through_real_submit_pipeline(self):
+        # C-2/C-5, end to end (not just the _neutral_scan_result_to_tckdb
+        # unit tests in TestNeutralArcResultTranslation): a real
+        # ``rotor_scans[]`` entry on a species record, run through the
+        # actual submit pipeline, must both rebase atom indices per its
+        # index_base and only stamp resolution_degrees for a degree-unit
+        # coordinate -- and the resulting bundle must satisfy the real
+        # validator.
+        record = _full_record()
+        record["rotor_scans"] = [{
+            "key": "scan_rotor_0",
+            "result": {
+                "dimension": 1,
+                "relaxed": True,
+                "coordinate": {
+                    "coordinate_type": "dihedral",
+                    "atom_indices": [0, 1, 2, 3],  # 0-based (ORCA-style)
+                    "index_base": 0,
+                    "unit": "degree",
+                    "requested_step_size": 15.0,
+                },
+                "samples": [
+                    {"source_index": 0, "angle_degrees": 0.0},
+                    {"source_index": 1, "angle_degrees": 15.0},
+                ],
+            },
+        }]
+        payload = self._submit(record)
+        scans = [c for c in payload["conformers"][0]["additional_calculations"]
+                 if c.get("type") == "scan"]
+        self.assertEqual(len(scans), 1)
+        coord = scans[0]["scan_result"]["coordinates"][0]
+        # 0-based [0,1,2,3] -> 1-based [1,2,3,4].
+        self.assertEqual(
+            [coord["atom1_index"], coord["atom2_index"],
+             coord["atom3_index"], coord["atom4_index"]],
+            [1, 2, 3, 4],
+        )
+        self.assertEqual(coord["resolution_degrees"], 15.0)
+        ComputedSpeciesUploadRequest.model_validate(payload)
 
 
 class TestCalculationConstraintsSerializer(unittest.TestCase):
-    """Direct tests for arc.tckdb.constraints.serialize_constraints."""
+    """Direct tests for tckdb_arc.constraints.serialize_constraints."""
 
     def test_indices_start_at_one_and_are_deterministic(self):
         from tckdb_arc.constraints import serialize_constraints
         items = [
-            {"constraint_kind": "bond", "atoms": [1, 2]},
-            {"constraint_kind": "dihedral", "atoms": [3, 4, 5, 6]},
-            {"constraint_kind": "cartesian_atom", "atoms": [7]},
+            {"constraint_kind": "bond", "atoms": [1, 2], "index_base": 1},
+            {"constraint_kind": "dihedral", "atoms": [3, 4, 5, 6], "index_base": 1},
+            {"constraint_kind": "cartesian_atom", "atoms": [7], "index_base": 1},
         ]
         result = serialize_constraints(items)
         self.assertEqual([r["constraint_index"] for r in result], [1, 2, 3])
@@ -7093,6 +8049,67 @@ class TestCalculationConstraintsSerializer(unittest.TestCase):
         from tckdb_arc.constraints import serialize_constraints
         self.assertEqual(serialize_constraints([]), [])
         self.assertEqual(serialize_constraints(None or []), [])
+
+    # ---------------- C-1c: index_base is mandatory on every dict shape
+    def test_legacy_dict_missing_index_base_dropped(self):
+        # The pre-fix behavior silently treated a bare {'constraint_kind',
+        # 'atoms'} dict as already 1-based. That's unsafe: ARC's ORCA
+        # constraint parser emits 0-based atoms with the same shape
+        # (modulo index_base), so an ORCA-sourced dict missing index_base
+        # would have been accepted pointing at the wrong atom.
+        from tckdb_arc.constraints import serialize_constraints
+        self.assertEqual(
+            serialize_constraints([{"constraint_kind": "bond", "atoms": [1, 2]}]),
+            [],
+        )
+
+    def test_legacy_dict_with_index_base_zero_is_rebased(self):
+        # ORCA-sourced legacy-shaped constraint: atoms [0, 1] at
+        # index_base=0 must land on TCKDB atoms [1, 2], exactly like the
+        # neutral coordinate_type shape already does.
+        from tckdb_arc.constraints import serialize_constraints
+        result = serialize_constraints([
+            {"constraint_kind": "bond", "atoms": [0, 1], "index_base": 0,
+             "target_value": 1.4},
+        ])
+        self.assertEqual(result, [{
+            "constraint_index": 1,
+            "constraint_kind": "bond",
+            "atom1_index": 1,
+            "atom2_index": 2,
+            "target_value": 1.4,
+        }])
+
+    def test_legacy_dict_with_index_base_one_is_unshifted(self):
+        from tckdb_arc.constraints import serialize_constraints
+        result = serialize_constraints([
+            {"constraint_kind": "bond", "atoms": [1, 2], "index_base": 1},
+        ])
+        self.assertEqual(result[0]["atom1_index"], 1)
+        self.assertEqual(result[0]["atom2_index"], 2)
+
+    def test_legacy_dict_invalid_index_base_dropped(self):
+        from tckdb_arc.constraints import serialize_constraints
+        self.assertEqual(serialize_constraints([
+            {"constraint_kind": "bond", "atoms": [1, 2], "index_base": 2},
+        ]), [])
+        self.assertEqual(serialize_constraints([
+            {"constraint_kind": "bond", "atoms": [1, 2], "index_base": "nope"},
+        ]), [])
+
+    def test_dataclass_input_exempt_from_index_base_requirement(self):
+        # A TCKDBCalculationConstraint instance is never produced by an
+        # ARC parser — only by a caller that already normalized its own
+        # indices — so it is not subject to the mapping-only index_base
+        # requirement.
+        from tckdb_arc.constraints import (
+            TCKDBCalculationConstraint,
+            serialize_constraints,
+        )
+        c = TCKDBCalculationConstraint(constraint_kind="bond", atom1_index=1,
+                                       atom2_index=2)
+        result = serialize_constraints([c])
+        self.assertEqual(len(result), 1)
 
 
 class TestArcArgsToKeywords(unittest.TestCase):
@@ -8282,8 +9299,7 @@ class TestReadGsmNodeOutputs(unittest.TestCase):
 
 
 class TestPathSearchPointsWithNodeMetadata(unittest.TestCase):
-    """End-to-end: ``_build_path_search_result_payload`` consumes the
-    parsed per-node dict and stamps energy/gradient onto matching points."""
+    """Raw GSM paths retain geometry without inventing invocation/frame matches."""
 
     def setUp(self):
         # arc-gated: these exercise ARC's real GSM stringfile parser
@@ -8325,62 +9341,27 @@ class TestPathSearchPointsWithNodeMetadata(unittest.TestCase):
             f.write(body)
         return p
 
-    def test_full_energies_yield_relative_energies_and_zero_ref(self):
-        pytest.importorskip("arc")  # arc-gated: needs ARC on PYTHONPATH
-        # Provide energies for every parsed frame index. Use the real
-        # fixture (15 frames) when available.
+    def test_full_energies_without_geometry_matches_are_omitted(self):
         sf = self._stringfile_for(n_frames=4)
-        from arc.parser.parser import parse_trajectory
-        n_frames = len(parse_trajectory(sf))
-        # Map labels 0..n-1 directly to point indices for this test.
-        # Make a clear minimum at one mid-index so we can check ref.
-        energies = {i: -28.0 - 0.1 * (i if i != 2 else 5) for i in range(n_frames)}
-        outputs_dir = self._seed_node_outputs(energies)
-
-        result = self.build(method='gsm', log_path=sf,
-                            fallback_xyz_text=None,
+        outputs_dir = self._seed_node_outputs({1: -28.5, 2: -28.9})
+        result = self.build(method='gsm', log_path=sf, fallback_xyz_text=None,
                             node_outputs_dir=outputs_dir)
-        self.assertIsNotNone(result)
-        # Every point has an energy → relative energies populated and
-        # zero_energy_reference_hartree stamped.
-        self.assertIn('zero_energy_reference_hartree', result)
-        self.assertAlmostEqual(result['zero_energy_reference_hartree'],
-                               min(energies.values()))
-        rel_zero_count = 0
-        for p in result['points']:
-            self.assertIn('electronic_energy_hartree', p)
-            self.assertIn('relative_energy_kj_mol', p)
-            if p['relative_energy_kj_mol'] == 0.0:
-                rel_zero_count += 1
-        # Exactly one point sits at relative-zero (the minimum).
-        self.assertEqual(rel_zero_count, 1)
+        self.assertEqual(len(result['points']), 4)
+        self.assertNotIn('zero_energy_reference_hartree', result)
+        for point in result['points']:
+            for key in ('electronic_energy_hartree', 'relative_energy_kj_mol', 'max_gradient', 'rms_gradient'):
+                self.assertNotIn(key, point)
 
-    def test_partial_energies_reference_available_points(self):
-        # NOT all-or-none: points that carry an absolute energy are
-        # referenced to the minimum available, and points without one
-        # stay null (an explicit gap, never a fabricated value). This is
-        # the real xTB-GSM shape — the fixed reactant-anchor frame carries
-        # no ograd energy, so requiring every point to have one would
-        # suppress the whole profile.
+    def test_partial_energies_without_geometry_matches_are_omitted(self):
         sf = self._stringfile_for(n_frames=4)
-        # Provide energies for two of four frames; leave a min at index 2.
-        outputs_dir = self._seed_node_outputs({0: -28.5, 2: -28.9})
-
-        result = self.build(method='gsm', log_path=sf,
-                            fallback_xyz_text=None,
+        outputs_dir = self._seed_node_outputs({1: -28.5, 2: -28.9})
+        result = self.build(method='gsm', log_path=sf, fallback_xyz_text=None,
                             node_outputs_dir=outputs_dir)
-        # Reference is the minimum absolute energy present (index 2).
-        self.assertIn('zero_energy_reference_hartree', result)
-        self.assertAlmostEqual(result['zero_energy_reference_hartree'], -28.9)
-        by_idx = {p['point_index']: p for p in result['points']}
-        # Points with an energy get a relative referenced to that min.
-        self.assertAlmostEqual(by_idx[2]['relative_energy_kj_mol'], 0.0)
-        self.assertIn('electronic_energy_hartree', by_idx[0])
-        self.assertIn('relative_energy_kj_mol', by_idx[0])
-        # Points without an energy carry neither field (honest null gap).
-        for ix in (1, 3):
-            self.assertNotIn('electronic_energy_hartree', by_idx[ix])
-            self.assertNotIn('relative_energy_kj_mol', by_idx[ix])
+        self.assertEqual(len(result['points']), 4)
+        self.assertNotIn('zero_energy_reference_hartree', result)
+        for point in result['points']:
+            for key in ('electronic_energy_hartree', 'relative_energy_kj_mol', 'max_gradient', 'rms_gradient'):
+                self.assertNotIn(key, point)
 
     def _seed_xtbout_node_outputs(self, energies_by_label):
         """Create ``.xtbout`` (xTB-stdout) files for each (label, e_h)
@@ -8397,42 +9378,15 @@ class TestPathSearchPointsWithNodeMetadata(unittest.TestCase):
         return d
 
     def test_real_shape_xtbout_only_orphan_endpoint_frame(self):
-        pytest.importorskip("arc")  # arc-gated: needs ARC on PYTHONPATH
-        # Mirrors real reaction_06: an (N+1)-frame stringfile with only
-        # ``.xtbout`` node files labelled 1..N. The fixed reactant-anchor
-        # frame 0 has no ograd energy; every other frame maps label NN ->
-        # frame index NN and gets an energy + a relative referenced to the
-        # minimum. The peak lands on the selected TS-guess frame.
-        n_nodes = 6
-        sf = self._stringfile_for(n_frames=n_nodes + 1)
-        from arc.parser.parser import parse_trajectory
-        self.assertEqual(len(parse_trajectory(sf)), n_nodes + 1)
-        # A barrier whose peak sits on the frame GSM selects as the TS
-        # guess: int((7-1)/2)+1 == 4.
-        energies = {1: -9.44, 2: -9.30, 3: -9.15,
-                    4: -9.02, 5: -9.19, 6: -9.40}
-        outputs_dir = self._seed_xtbout_node_outputs(energies)
-        result = self.build(method='gsm', log_path=sf,
-                            fallback_xyz_text=None,
+        sf = self._stringfile_for(n_frames=4)
+        outputs_dir = self._seed_xtbout_node_outputs({1: -28.5, 2: -28.9})
+        result = self.build(method='gsm', log_path=sf, fallback_xyz_text=None,
                             node_outputs_dir=outputs_dir)
-        by_idx = {p['point_index']: p for p in result['points']}
-        # Frame 0 (reactant anchor) carries no energy — explicit null.
-        self.assertNotIn('electronic_energy_hartree', by_idx[0])
-        self.assertNotIn('relative_energy_kj_mol', by_idx[0])
-        # Every node frame maps label NN -> frame NN with its energy+rel.
-        for label, e_h in energies.items():
-            self.assertAlmostEqual(
-                by_idx[label]['electronic_energy_hartree'], e_h)
-            self.assertIn('relative_energy_kj_mol', by_idx[label])
-        # Reference is the minimum absolute energy (node 1, -9.44).
-        self.assertAlmostEqual(result['zero_energy_reference_hartree'], -9.44)
-        self.assertAlmostEqual(by_idx[1]['relative_energy_kj_mol'], 0.0)
-        # The selected TS-guess frame (index 4) is the energy peak.
-        self.assertEqual(result['selected_ts_point_index'], 4)
-        self.assertTrue(by_idx[4].get('is_ts_guess'))
-        rels = {ix: p['relative_energy_kj_mol'] for ix, p in by_idx.items()
-                if 'relative_energy_kj_mol' in p}
-        self.assertEqual(max(rels, key=rels.get), 4)
+        self.assertEqual(len(result['points']), 4)
+        self.assertNotIn('zero_energy_reference_hartree', result)
+        for point in result['points']:
+            for key in ('electronic_energy_hartree', 'relative_energy_kj_mol', 'max_gradient', 'rms_gradient'):
+                self.assertNotIn(key, point)
 
     def test_no_node_outputs_dir_keeps_geometry_only_behavior(self):
         # Backwards compat: existing geometry-only fixtures (no
@@ -8509,9 +9463,8 @@ class TestPathSearchPointsWithNodeMetadata(unittest.TestCase):
 
     def test_node_output_hartrees_take_precedence_over_stringfile(self):
         pytest.importorskip("arc")  # arc-gated: needs ARC on PYTHONPATH
-        # When absolute per-node Hartrees are preserved, they win: the
-        # relative energies come from them (with a Hartree zero ref), not
-        # from the stringfile comment column.
+        # Raw invocation ids cannot identify frames. Stringfile relative
+        # energies remain valid even when archived absolute values exist.
         rel_kcal = [0.0, 5.0, 20.0, 2.0]
         sf = self._energetic_stringfile(rel_kcal)
         from arc.parser.parser import parse_trajectory
@@ -8521,13 +9474,11 @@ class TestPathSearchPointsWithNodeMetadata(unittest.TestCase):
         result = self.build(method='gsm', log_path=sf,
                             fallback_xyz_text=None,
                             node_outputs_dir=outputs_dir)
-        self.assertIn('zero_energy_reference_hartree', result)
-        for p in result['points']:
-            self.assertIn('electronic_energy_hartree', p)
-        # No climbing-image flag: that is only set by the stringfile
-        # fallback branch, which is skipped when Hartrees are present.
-        self.assertFalse(any(p.get('is_climbing_image')
-                             for p in result['points']))
+        self.assertNotIn('zero_energy_reference_hartree', result)
+        for point, energy in zip(result['points'], rel_kcal):
+            self.assertNotIn('electronic_energy_hartree', point)
+            self.assertAlmostEqual(point['relative_energy_kj_mol'], energy * 4.184)
+        self.assertTrue(any(point.get('is_climbing_image') for point in result['points']))
 
 
 class TestArtifactFilenameCoercion(unittest.TestCase):
@@ -8848,7 +9799,10 @@ class TestPhase3EvidenceParity(unittest.TestCase):
         return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
     def test_species_and_ts_hessian_sidecar_matches_fallback(self):
-        geometry = "2\nH2\nH 0 0 0\nH 0 0 0.7"
+        from tckdb_arc._vendor import xyz_to_str
+        from tckdb_arc.adapter import _normalize_xyz_text
+        frame_xyz = {"symbols": ("H", "H"), "coords": ((0., 0., 0.), (0., 0., .7))}
+        geometry = _normalize_xyz_text(xyz_to_str(frame_xyz), "H2")
         triangle = [float(i) / 100 for i in range(21)]
         for is_ts in (False, True):
             with self.subTest(is_ts=is_ts), tempfile.TemporaryDirectory() as root:
@@ -8861,6 +9815,8 @@ class TestPhase3EvidenceParity(unittest.TestCase):
                 )
                 parser = mock.Mock()
                 parser.parse_cartesian_hessian_lower_triangle.return_value = triangle
+                parser.parse_cartesian_hessian_geometry.return_value = (frame_xyz, "gaussian_input_orientation")
+                geometry = _normalize_xyz_text(xyz_to_str(frame_xyz), record["label"])
                 with mock.patch("tckdb_arc._arc_optional.determine_ess", return_value="gaussian"), \
                      mock.patch("tckdb_arc._arc_optional.ess_factory", return_value=parser):
                     fallback = adapter._build_freq_hessian_payload(
@@ -8914,7 +9870,7 @@ class TestPhase3EvidenceParity(unittest.TestCase):
         self.assertEqual(self._canonical(fallback), self._canonical(sidecar))
         IRCResultPayload(**sidecar)
 
-    def test_gsm_sidecar_matches_fallback_with_absolute_energies(self):
+    def test_gsm_absolute_energies_require_evidence_not_raw_node_indices(self):
         from tckdb_arc.adapter import _build_path_search_result_payload, _normalize_xyz_text
         from tckdb_arc._vendor import xyz_to_str
 
@@ -8960,86 +9916,351 @@ class TestPhase3EvidenceParity(unittest.TestCase):
                 method="gsm", log_path=None, fallback_xyz_text=None,
                 gsm_evidence={"selected_source_point_index": 2, "points": evidence_points},
             )
-        self.assertEqual(fallback, sidecar)
-        self.assertEqual(self._canonical(fallback), self._canonical(sidecar))
+        self.assertNotIn("zero_energy_reference_hartree", fallback)
+        self.assertTrue(all("electronic_energy_hartree" not in p for p in fallback["points"]))
+        self.assertAlmostEqual(sidecar["zero_energy_reference_hartree"], -1.2)
+        self.assertEqual(sidecar["points"][2]["max_gradient"], 0.03)
+        for actual, expected in zip(fallback["points"], sidecar["points"]):
+            self.assertEqual(actual["geometry"], expected["geometry"])
         PathSearchResultPayload(**sidecar)
 
-    def test_actual_arc_producer_to_evidence_store_matches_fallback_payload(self):
-        """Exercise ARC builders, JSON writer, EvidenceStore, and final composer together."""
+    # Scaffolding for the live-ARC-producer tests below: the golden project's
+    # logs, mocked ESS parsers, and distinct bent H3 stringfile frames, so the
+    # real ``kabsch`` gives a non-trivial path coordinate.
+    _PRODUCER_XYZ = {"symbols": ("H", "H", "H"), "isotopes": (1, 1, 1),
+                     "coords": ((0.0, 0.0, -0.8), (0.0, 0.0, 0.0), (0.0, 0.0, 0.8))}
+    _PRODUCER_H2_XYZ = {"symbols": ("H", "H"), "isotopes": (1, 1),
+                        "coords": ((0.0, 0.0, 0.0), (0.0, 0.0, 0.74))}
+    _PRODUCER_FRAMES = [
+        {"symbols": ("H", "H", "H"), "isotopes": (1, 1, 1),
+         "coords": ((0.0, 0.0, -d), (0.0, 0.0, 0.0), (0.3, 0.0, d))}
+        for d in (0.7, 0.8, 0.9)
+    ]
+    _PRODUCER_STRINGFILE_ENERGIES = [0.0, 3.0, 1.0]
+
+    @classmethod
+    def _producer_parser_for(cls, path, _ess):
+        is_ts = "TS0" in path
+        parser = mock.Mock()
+        parser.parse_cartesian_hessian_lower_triangle.return_value = [0.01] * (45 if is_ts else 21)
+        parser.parse_cartesian_hessian_geometry.return_value = (
+            cls._PRODUCER_XYZ if is_ts else cls._PRODUCER_H2_XYZ, "gaussian_input_orientation",
+        )
+        return parser
+
+    @classmethod
+    def _producer_irc_points(cls, log_file_path, **_kwargs):
+        direction = "forward" if "forward" in log_file_path else "reverse"
+        return [{"point_number": 1, "direction": direction, "xyz": cls._PRODUCER_XYZ,
+                 "electronic_energy_hartree": -1.62}]
+
+    def _run_actual_arc_producer(self, root, gradients):
+        """Write the golden project under ``root`` and run ARC's real producer.
+
+        ``gradients`` maps each archived ``ograd`` invocation id to its
+        ``(energy_hartree, H3 coordinates in bohr)``. Returns ``(base, evidence)``
+        after writing the sidecar with ``write_parser_evidence_atomic``.
+        """
         import yaml
-        pytest.importorskip("arc")
-        from arc.tckdb_evidence import build_tckdb_evidence, write_tckdb_evidence_atomic
+        from arc.parser_evidence import (
+            EVIDENCE_FILENAME,
+            OUTPUT_SCHEMA_VERSION,
+            build_parser_evidence,
+            write_parser_evidence_atomic,
+        )
 
         fixture = pathlib.Path(__file__).parent / "fixtures" / "golden" / "phase3_output.yml"
         base = yaml.safe_load(fixture.read_text())
-        xyz = {"symbols": ("H", "H", "H"), "isotopes": (1, 1, 1),
-               "coords": ((0.0, 0.0, -0.8), (0.0, 0.0, 0.0), (0.0, 0.0, 0.8))}
-        frames = [dict(xyz) for _ in range(3)]
+        # The producer stamps its own output schema version into the sidecar,
+        # and the adapter requires the document's to equal it: follow
+        # whichever ARC is installed (1.1 on main, 1.2 from a10e8ae0).
+        base["schema_version"] = OUTPUT_SCHEMA_VERSION
+        for record in (base["species"][0], base["transition_states"][0]):
+            for field in ("freq_log", "gsm_log"):
+                if record.get(field):
+                    path = pathlib.Path(root, record[field]); path.parent.mkdir(parents=True, exist_ok=True); path.write_text("x")
+                    if field == "gsm_log":
+                        node_outputs = path.parent / "gsm_node_outputs"
+                        node_outputs.mkdir()
+                        for invocation_id, (energy, coords_bohr) in gradients.items():
+                            (node_outputs / f"{invocation_id}.energy").write_text(
+                                f"$energy\n 1 {energy} 0 0\n$end\n"
+                            )
+                            atoms = "".join(f"   {x!r}  {y!r}  {z!r}   h\n" for x, y, z in coords_bohr)
+                            (node_outputs / f"{invocation_id}.gradient").write_text(
+                                f"$grad\n  cycle =      1    SCF energy =    {energy}\n{atoms}"
+                                "   0.0  0.0  0.02\n   0.0  0.0  0.0\n   0.0  0.0  -0.02\n$end\n"
+                            )
+            for relative in record.get("irc_logs") or []:
+                path = pathlib.Path(root, relative); path.parent.mkdir(parents=True, exist_ok=True); path.write_text("x")
 
-        with tempfile.TemporaryDirectory() as root:
-            for record in (base["species"][0], base["transition_states"][0]):
-                for field in ("freq_log", "gsm_log"):
-                    if record.get(field):
-                        path = pathlib.Path(root, record[field]); path.parent.mkdir(parents=True, exist_ok=True); path.write_text("x")
-                        if field == "gsm_log":
-                            (path.parent / "gsm_node_outputs").mkdir()
-                for relative in record.get("irc_logs") or []:
-                    path = pathlib.Path(root, relative); path.parent.mkdir(parents=True, exist_ok=True); path.write_text("x")
+        document_id = "0123456789abcdef0123456789abcdef"
+        with mock.patch("arc.parser_evidence.determine_ess", return_value="gaussian"), \
+             mock.patch("arc.parser_evidence.ess_factory", side_effect=self._producer_parser_for), \
+             mock.patch("arc.parser_evidence.parse_irc_path", side_effect=self._producer_irc_points), \
+             mock.patch("arc.parser_evidence.parse_trajectory", return_value=self._PRODUCER_FRAMES), \
+             mock.patch("arc.parser_evidence.parse_gsm_stringfile_energies",
+                        return_value=self._PRODUCER_STRINGFILE_ENERGIES):
+            evidence = build_parser_evidence(
+                output_doc=base, project_directory=root, document_id=document_id,
+            )
+        written = write_parser_evidence_atomic(
+            evidence_doc=evidence, output_directory=pathlib.Path(root, "output"),
+        )
+        self.assertEqual(written, pathlib.Path(root, "output", EVIDENCE_FILENAME))
+        return base, evidence
 
-            def parser_for(path, _ess):
-                parser = mock.Mock()
-                parser.parse_cartesian_hessian_lower_triangle.return_value = (
-                    [0.01] * (45 if "TS0" in path else 21)
-                )
-                return parser
+    def _sidecar_reaction_payload(self, root, base, evidence):
+        """Build the reaction payload from the written sidecar, forbidding raw parsers.
 
-            def irc_points(log_file_path, **_kwargs):
-                direction = "forward" if "forward" in log_file_path else "reverse"
-                return [{"point_number": 1, "direction": direction, "xyz": xyz,
-                         "electronic_energy_hartree": -1.62}]
+        Returns ``(sidecar_doc, sidecar_adapter, payload)``.
+        """
+        from arc.parser_evidence import (
+            EVIDENCE_FILENAME,
+            EVIDENCE_SCHEMA_NAME,
+            EVIDENCE_SCHEMA_VERSION,
+        )
 
-            producer_metadata = {1: {"electronic_energy_hartree": -1.7},
-                                 2: {"electronic_energy_hartree": -1.55}}
-            with mock.patch("arc.tckdb_evidence.determine_ess", return_value="gaussian"), \
-                 mock.patch("arc.tckdb_evidence.ess_factory", side_effect=parser_for), \
-                 mock.patch("arc.tckdb_evidence.parse_irc_path", side_effect=irc_points), \
-                 mock.patch("arc.tckdb_evidence.parse_trajectory", return_value=frames), \
-                 mock.patch("arc.tckdb_evidence.parse_gsm_stringfile_energies", return_value=[0.0, 0.0, 0.0]), \
-                 mock.patch("arc.tckdb_evidence.kabsch", return_value=0.2), \
-                 mock.patch("arc.tckdb_evidence._node_outputs", return_value=producer_metadata):
-                evidence = build_tckdb_evidence(
-                    output_doc=base, project_directory=root,
-                    document_id="0123456789abcdef0123456789abcdef",
-                )
-            write_tckdb_evidence_atomic(evidence_doc=evidence, output_directory=pathlib.Path(root, "output"))
-            sidecar_doc = copy.deepcopy(base)
-            sidecar_doc["tckdb_evidence"] = {
-                "path": "tckdb_evidence.json", "schema_name": "arc-tckdb-evidence",
-                "schema_version": "1.0", "document_id": evidence["document_id"],
-            }
-            cfg = TCKDBConfig(enabled=True, base_url="http://x", upload=False)
-            sidecar_payload = TCKDBAdapter(cfg, project_directory=root)._build_computed_reaction_payload(
+        sidecar_doc = copy.deepcopy(base)
+        sidecar_doc.pop("tckdb_evidence", None)
+        sidecar_doc["parser_evidence"] = {
+            "path": EVIDENCE_FILENAME, "schema_name": EVIDENCE_SCHEMA_NAME,
+            "schema_version": EVIDENCE_SCHEMA_VERSION, "document_id": evidence["document_id"],
+        }
+        cfg = TCKDBConfig(enabled=True, base_url="http://x", upload=False)
+        sidecar_adapter = TCKDBAdapter(cfg, project_directory=root)
+        fallback_parser_used = AssertionError("raw fallback parser used on the sidecar path")
+        with mock.patch("tckdb_arc._arc_optional.determine_ess", side_effect=fallback_parser_used), \
+             mock.patch("tckdb_arc._arc_optional.ess_factory", side_effect=fallback_parser_used), \
+             mock.patch("tckdb_arc._arc_optional.parse_irc_path", side_effect=fallback_parser_used), \
+             mock.patch("tckdb_arc._arc_optional.parse_irc_traj", side_effect=fallback_parser_used), \
+             mock.patch("tckdb_arc._arc_optional.parse_trajectory", side_effect=fallback_parser_used), \
+             mock.patch("tckdb_arc._arc_optional.parse_gsm_stringfile_energies",
+                        side_effect=fallback_parser_used):
+            payload = sidecar_adapter._build_computed_reaction_payload(
                 output_doc=sidecar_doc, reaction_record=sidecar_doc["reactions"][0],
             )
+        return sidecar_doc, sidecar_adapter, payload
 
+    def test_actual_arc_producer_to_evidence_store_matches_fallback_payload(self):
+        """Exercise ARC builders, JSON writer, EvidenceStore, and final composer together.
+
+        The producer is ARC's ``arc.parser_evidence`` (successor of the removed
+        ``arc.tckdb_evidence``). ``arc/output.py`` writes its sidecar to
+        ``output/parser_evidence.json`` and records it under the
+        ``parser_evidence`` descriptor, which is what the sidecar document
+        carries here.
+
+        The GSM run archives two ``ograd`` invocations whose gradient-file
+        geometries match no stringfile frame. The producer lists them under
+        ``ograd_invocations`` but attaches them to no point, which is the only
+        GSM shape the raw fallback can match: the fallback never index-attaches
+        archived absolute energies (see
+        ``test_gsm_absolute_energies_require_evidence_not_raw_node_indices``).
+        The two geometries differ, so neither can be left unattached merely
+        because both contest the same frame.
+        """
+        pytest.importorskip("arc")
+
+        with tempfile.TemporaryDirectory() as root:
+            # Bent H3 at 2.5 and 3.0 bohr (~1.32 and ~1.59 A) spacing: not any frame.
+            base, evidence = self._run_actual_arc_producer(root, {
+                "0000.01": (-1.7, ((0.0, 0.0, -2.5), (0.0, 0.0, 0.0), (0.6, 0.0, 2.5))),
+                "0000.02": (-1.55, ((0.0, 0.0, -3.0), (0.0, 0.0, 0.0), (0.9, 0.0, 3.0))),
+            })
+
+            # Every attempted entry must be available; an unavailable or absent
+            # entry would let both sides drop the same sub-payload and still agree.
+            statuses = {
+                (record["label"], kind): record[kind]["status"]
+                for record in evidence["records"]
+                for kind in ("freq_hessian", "irc", "gsm") if kind in record
+            }
+            self.assertEqual(statuses, {
+                ("H2", "freq_hessian"): "available",
+                ("TS0", "freq_hessian"): "available",
+                ("TS0", "irc"): "available",
+                ("TS0", "gsm"): "available",
+            })
+            gsm_value = next(r for r in evidence["records"] if r["label"] == "TS0")["gsm"]["value"]
+            self.assertEqual([item["invocation_id"] for item in gsm_value["ograd_invocations"]],
+                             ["0000.01", "0000.02"])
+            for point in gsm_value["points"]:
+                self.assertNotIn("geometry_matched_ograd_invocation_id", point)
+                self.assertNotIn("electronic_energy_hartree", point)
+
+            sidecar_doc, sidecar_adapter, sidecar_payload = self._sidecar_reaction_payload(
+                root, base, evidence,
+            )
+            for kind, label, evidence_kind in (
+                ("species", "H2", "freq_hessian"),
+                ("transition_state", "TS0", "freq_hessian"),
+                ("transition_state", "TS0", "irc"),
+                ("transition_state", "TS0", "gsm"),
+            ):
+                self.assertEqual(
+                    sidecar_adapter._evidence.lookup(sidecar_doc, kind, label, evidence_kind).state,
+                    "available", (kind, label, evidence_kind),
+                )
+
+            cfg = TCKDBConfig(enabled=True, base_url="http://x", upload=False)
             fallback_doc = copy.deepcopy(base)
             fallback_doc["schema_version"] = "1.0"
             fallback_doc.pop("tckdb_evidence", None)
-            consumer_metadata = {1: {"electronic_energy_hartree": -1.7},
-                                 2: {"electronic_energy_hartree": -1.55}}
             with mock.patch("tckdb_arc._arc_optional.determine_ess", return_value="gaussian"), \
-                 mock.patch("tckdb_arc._arc_optional.ess_factory", side_effect=parser_for), \
-                 mock.patch("tckdb_arc._arc_optional.parse_irc_path", side_effect=irc_points), \
-                 mock.patch("tckdb_arc._arc_optional.parse_trajectory", return_value=frames), \
-                 mock.patch("tckdb_arc._arc_optional.parse_gsm_stringfile_energies", return_value=[0.0, 0.0, 0.0]), \
-                 mock.patch("tckdb_arc._arc_optional.kabsch", return_value=0.2), \
-                 mock.patch("tckdb_arc.adapter._read_gsm_node_outputs", return_value=consumer_metadata):
+                 mock.patch("tckdb_arc._arc_optional.ess_factory", side_effect=self._producer_parser_for), \
+                 mock.patch("tckdb_arc._arc_optional.parse_irc_path", side_effect=self._producer_irc_points), \
+                 mock.patch("tckdb_arc._arc_optional.parse_trajectory", return_value=self._PRODUCER_FRAMES), \
+                 mock.patch("tckdb_arc._arc_optional.parse_gsm_stringfile_energies",
+                            return_value=self._PRODUCER_STRINGFILE_ENERGIES):
                 fallback_payload = TCKDBAdapter(cfg, project_directory=root)._build_computed_reaction_payload(
                     output_doc=fallback_doc, reaction_record=fallback_doc["reactions"][0],
                 )
+            # Both sides must actually carry each evidence-backed sub-payload.
+            ts_calcs = {calc["type"]: calc for calc in sidecar_payload["transition_state"]["calculations"]}
+            self.assertIn("hessian", ts_calcs["freq"])
+            self.assertEqual(ts_calcs["irc"]["irc_result"]["point_count"], 3)
+            path_points = ts_calcs["path_search"]["path_search_result"]["points"]
+            self.assertEqual(len(path_points), 3)
+            self.assertTrue(all("path_coordinate" in point for point in path_points))
+            self.assertTrue(all("relative_energy_kj_mol" in point for point in path_points))
+            self.assertTrue(all("electronic_energy_hartree" not in point for point in path_points))
+            species_hessians = [
+                calc for species in sidecar_payload["species"]
+                for calc in species["calculations"] if "hessian" in calc
+            ]
+            self.assertEqual(len(species_hessians), 2)  # H2 as reactant and as product
             self.assertEqual(sidecar_payload, fallback_payload)
             self.assertEqual(self._canonical(sidecar_payload), self._canonical(fallback_payload))
             ComputedReactionUploadRequest.model_validate(sidecar_payload)
+
+    def test_actual_arc_producer_geometry_matched_gsm_values_reach_payload(self):
+        """A gradient file whose geometry is exactly one frame carries its values to that point.
+
+        Not a parity test: the raw fallback never attaches archived energies,
+        so only the sidecar path can deliver them. The one archived invocation
+        was evaluated at frame 1's geometry (written in bohr, as xTB does).
+        """
+        pytest.importorskip("arc")
+        from arc.constants import bohr_to_angstrom
+
+        matched_index = 1
+        frame_bohr = tuple(
+            tuple(c / bohr_to_angstrom for c in atom)
+            for atom in self._PRODUCER_FRAMES[matched_index]["coords"]
+        )
+        with tempfile.TemporaryDirectory() as root:
+            base, evidence = self._run_actual_arc_producer(root, {"0000.01": (-1.7, frame_bohr)})
+            gsm_value = next(r for r in evidence["records"] if r["label"] == "TS0")["gsm"]["value"]
+            [invocation] = gsm_value["ograd_invocations"]
+            attached = [p for p in gsm_value["points"] if "geometry_matched_ograd_invocation_id" in p]
+            self.assertEqual([p["source_point_index"] for p in attached], [matched_index])
+            producer_point = attached[0]
+            self.assertEqual(producer_point["geometry_matched_ograd_invocation_id"], "0000.01")
+            self.assertEqual(producer_point["electronic_energy_hartree"],
+                             invocation["electronic_energy_hartree"])
+            self.assertEqual(producer_point["max_gradient_hartree_per_bohr"],
+                             invocation["max_gradient_hartree_per_bohr"])
+            self.assertEqual(producer_point["rms_gradient_hartree_per_bohr"],
+                             invocation["rms_gradient_hartree_per_bohr"])
+            # The literal values the helper wrote: the energy file's -1.7 and
+            # the gradient block (0, 0, +-0.02 on the end atoms).
+            self.assertEqual(producer_point["electronic_energy_hartree"], -1.7)
+            self.assertEqual(producer_point["max_gradient_hartree_per_bohr"], 0.02)
+            self.assertAlmostEqual(producer_point["rms_gradient_hartree_per_bohr"],
+                                   math.sqrt(2 * 0.02 ** 2 / 9))
+
+            sidecar_doc, sidecar_adapter, payload = self._sidecar_reaction_payload(root, base, evidence)
+            lookup = sidecar_adapter._evidence.lookup(sidecar_doc, "transition_state", "TS0", "gsm")
+            self.assertEqual(lookup.state, "available")
+            store_point = lookup.value["points"][matched_index]
+            self.assertEqual(store_point["geometry_matched_ograd_invocation_id"], "0000.01")
+
+        ts_calcs = {calc["type"]: calc for calc in payload["transition_state"]["calculations"]}
+        result = ts_calcs["path_search"]["path_search_result"]
+        points = {point["point_index"]: point for point in result["points"]}
+        self.assertEqual(points[matched_index]["electronic_energy_hartree"],
+                         producer_point["electronic_energy_hartree"])
+        self.assertEqual(points[matched_index]["max_gradient"],
+                         producer_point["max_gradient_hartree_per_bohr"])
+        self.assertEqual(points[matched_index]["rms_gradient"],
+                         producer_point["rms_gradient_hartree_per_bohr"])
+        self.assertEqual(points[matched_index]["electronic_energy_hartree"], -1.7)
+        self.assertEqual(points[matched_index]["max_gradient"], 0.02)
+        self.assertAlmostEqual(points[matched_index]["rms_gradient"], math.sqrt(2 * 0.02 ** 2 / 9))
+        self.assertEqual(result["zero_energy_reference_hartree"],
+                         producer_point["electronic_energy_hartree"])
+        self.assertEqual(result["zero_energy_reference_hartree"], -1.7)
+        self.assertEqual(points[matched_index]["relative_energy_kj_mol"], 0.0)
+        for index, point in points.items():
+            if index != matched_index:
+                self.assertNotIn("electronic_energy_hartree", point)
+        ComputedReactionUploadRequest.model_validate(payload)
+
+
+class TestSingleHartreeToKjMolConstant(unittest.TestCase):
+    """C-3: one Hartree->kJ/mol constant, not two independently-rounded ones.
+
+    ``irc_result.points[].relative_energy_kj_mol`` and
+    ``path_search_result.points[].relative_energy_kj_mol`` are identically
+    named/united fields; before this fix they were computed from two
+    different constants (an inline ``2625.4996`` vs. vendored
+    ``_vendor.E_h_kJmol == 2625.4998583629967``, relative difference
+    ~9.84e-8). Guard against either a reintroduced duplicate or a
+    re-diverged value.
+    """
+
+    def test_no_duplicate_hartree_constant_on_adapter_module(self):
+        # D5 (adversarial review): the original version of this test only
+        # checked ``not hasattr(adapter_module, "_HARTREE_TO_KJ_MOL")`` --
+        # a name-based guard a reintroduced *function-local* constant
+        # (e.g. a fresh ``2625.4996`` literal inside
+        # ``_build_irc_result_payload``, never bound to a module
+        # attribute) would sail straight past. Parse adapter.py's own
+        # source with ``ast`` instead and scan every numeric literal in
+        # the whole module -- module-level, function-local, nested,
+        # anywhere -- for one that lands suspiciously close to the
+        # Hartree->kJ/mol constant. This catches a reintroduced duplicate
+        # regardless of scope or binding.
+        import ast
+        import inspect
+        import tckdb_arc.adapter as adapter_module
+        from tckdb_arc._vendor import E_h_kJmol
+
+        self.assertFalse(
+            hasattr(adapter_module, "_HARTREE_TO_KJ_MOL"),
+            "adapter.py must not define its own Hartree->kJ/mol constant; "
+            "use tckdb_arc._vendor.E_h_kJmol so IRC and path-search "
+            "relative_energy_kj_mol agree bit-for-bit.",
+        )
+
+        source = inspect.getsource(adapter_module)
+        tree = ast.parse(source, filename=adapter_module.__file__)
+        suspects = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, float):
+                # "Near 2625.49": close enough to be a hand-typed or
+                # differently-rounded Hartree->kJ/mol constant, but not
+                # so wide a band it flags unrelated energy literals.
+                if abs(node.value - 2625.49) < 0.01:
+                    suspects.append((node.lineno, node.value))
+        self.assertEqual(
+            [], suspects,
+            f"adapter.py contains a numeric literal near the Hartree->kJ/mol "
+            f"constant ({E_h_kJmol!r}) outside _vendor.py: {suspects!r}. "
+            f"Import tckdb_arc._vendor.E_h_kJmol instead of hand-typing the "
+            f"value, at module level or locally.",
+        )
+
+    def test_vendored_constant_matches_arc_constants_definition(self):
+        # Pins the vendored value against its own documented derivation
+        # (E_h * Na / 1000) so a future edit to E_h/Na is caught here
+        # rather than silently drifting the two consuming fields apart
+        # again. Na is deliberately the pre-2019 CODATA value (see
+        # _vendor.py's module docstring) — this test is not asking for
+        # scientific accuracy, only for the two call sites to agree.
+        from tckdb_arc._vendor import E_h, E_h_kJmol, Na
+        self.assertAlmostEqual(E_h_kJmol, E_h * Na / 1000, places=12)
 
 
 class TestNeutralArcResultTranslation(unittest.TestCase):
@@ -9091,6 +10312,109 @@ class TestNeutralArcResultTranslation(unittest.TestCase):
         self.assertEqual(scan["points"][0]["point_index"], 1)
         self.assertTrue(scan["points"][0]["geometry"]["xyz_text"].startswith("2\n"))
 
+    def test_neutral_rotor_scan_index_base_omitted_defaults_to_one(self):
+        # C-2: the only reachable producer (ARC's rotor-scan writer)
+        # always emits index_base explicitly (schema-pinned `const: 1`),
+        # so this covers a hand-written/older document that omits the
+        # key. Safe on this path because rotor-scan atom indices are
+        # otherwise indistinguishable from already-1-based.
+        from tckdb_arc.adapter import _scan_entries_from_record
+
+        entries = _scan_entries_from_record({"rotor_scans": [{
+            "key": "scan_rotor_0",
+            "result": {
+                "dimension": 1,
+                "relaxed": True,
+                "coordinate": {
+                    "coordinate_type": "dihedral",
+                    "atom_indices": [1, 2, 3, 4],
+                    # index_base intentionally omitted.
+                    "unit": "degree",
+                },
+                "samples": [
+                    {"source_index": 0, "angle_degrees": 0.0},
+                ],
+            },
+        }]})
+        self.assertEqual(len(entries), 1)
+        coord = entries[0]["scan_result"]["coordinates"][0]
+        self.assertEqual(coord["atom1_index"], 1)
+        self.assertEqual(coord["atom4_index"], 4)
+
+    def test_neutral_rotor_scan_out_of_range_index_base_omits_scan(self):
+        # C-2: unlike the omitted-key default (safe today), an explicit
+        # out-of-range index_base must not be applied blindly — it would
+        # produce non-positive atom indices. Guarded the same way
+        # constraints.py guards constraints[] (index_base in (0, 1)).
+        from tckdb_arc.adapter import _scan_entries_from_record
+
+        entries = _scan_entries_from_record({"rotor_scans": [{
+            "key": "scan_rotor_0",
+            "result": {
+                "dimension": 1,
+                "relaxed": True,
+                "coordinate": {
+                    "coordinate_type": "dihedral",
+                    "atom_indices": [1, 2, 3, 4],
+                    "index_base": 7,
+                    "unit": "degree",
+                },
+                "samples": [
+                    {"source_index": 0, "angle_degrees": 0.0},
+                ],
+            },
+        }]})
+        self.assertEqual(entries, [])
+
+    def test_neutral_scan_resolution_degrees_set_for_degree_unit(self):
+        # Control case: a real (dihedral/degree) rotor scan still gets
+        # resolution_degrees, matching the pre-C-5 behavior.
+        from tckdb_arc.adapter import _neutral_scan_result_to_tckdb
+
+        scan = _neutral_scan_result_to_tckdb({
+            "dimension": 1,
+            "relaxed": True,
+            "coordinate": {
+                "coordinate_type": "dihedral",
+                "atom_indices": [1, 2, 3, 4],
+                "index_base": 1,
+                "unit": "degree",
+                "requested_step_size": 10.0,
+            },
+            "samples": [{"source_index": 0, "angle_degrees": 0.0}],
+        })
+        coord = scan["coordinates"][0]
+        self.assertEqual(coord["step_size"], 10.0)
+        self.assertEqual(coord["resolution_degrees"], 10.0)
+
+    def test_neutral_scan_resolution_degrees_omitted_for_non_degree_unit(self):
+        # C-5: a distance-kind scan's step is in Angstrom, not degrees.
+        # ``step_size`` (generic, paired with ``value_unit``) still
+        # carries it; ``resolution_degrees`` — a degree-specific field —
+        # must not. Unreachable from real ARC output (its rotor-scan
+        # writer only emits dihedral/degree scans, schema-pinned), but
+        # this function also serves hand-written/third-party
+        # output.yml, which evidence.py doesn't validate against ARC's
+        # schema.
+        from tckdb_arc.adapter import _neutral_scan_result_to_tckdb
+
+        scan = _neutral_scan_result_to_tckdb({
+            "dimension": 1,
+            "relaxed": True,
+            "coordinate": {
+                "coordinate_type": "distance",
+                "atom_indices": [1, 2],
+                "index_base": 1,
+                "unit": "angstrom",
+                "requested_step_size": 0.05,
+            },
+            "samples": [{"source_index": 0, "angle_degrees": 0.0}],
+        })
+        coord = scan["coordinates"][0]
+        self.assertEqual(coord["value_unit"], "angstrom")
+        self.assertEqual(coord["step_size"], 0.05)
+        self.assertNotIn("resolution_degrees", coord)
+
     def test_neutral_corrections_map_to_tckdb_schemes(self):
         from tckdb_arc.adapter import _correction_records_from_record
 
@@ -9107,6 +10431,52 @@ class TestNeutralArcResultTranslation(unittest.TestCase):
         self.assertEqual(records[0]["scheme"]["atom_params"], [
             {"element": "H", "value": -0.5},
         ])
+        self.assertEqual(records[0]["value_unit"], "hartree")
+
+    # ---------------- C-6: unit is read, never guessed
+    def test_neutral_correction_missing_unit_is_omitted_not_defaulted(self):
+        # Real ARC output always sets total.unit (ARC's correction script
+        # hardcodes 'hartree'/'kcal_mol' — see
+        # arc/scripts/get_species_corrections.py); this covers a
+        # hand-written/third-party output.yml that omits it. Before the
+        # fix, an atom_energy correction with no unit silently defaulted
+        # to 'hartree' and a bond_additivity correction to 'kcal_mol' —
+        # right most of the time by ARC convention, but never verified
+        # against what this particular record actually reported.
+        from tckdb_arc.adapter import _correction_records_from_record
+
+        records = _correction_records_from_record({"energy_corrections": [
+            {
+                "correction_type": "atom_energy",
+                "model": "arkane_atom_energy",
+                "total": {"value": -0.02},  # no "unit" key
+                "components": [],
+            },
+            {
+                "correction_type": "bond_additivity",
+                "model": "petersson",
+                "total": {"value": -0.69, "unit": ""},  # falsy unit
+                "components": [],
+            },
+        ]})
+        self.assertEqual(records, [])
+
+    def test_neutral_correction_bac_unit_read_from_total_not_guessed(self):
+        # Control: when the unit IS present, it's read verbatim rather
+        # than reconstructed from correction_type — guards against a
+        # regression that goes back to guessing whenever the reported
+        # unit happens to match the guess.
+        from tckdb_arc.adapter import _correction_records_from_record
+
+        records = _correction_records_from_record({"energy_corrections": [{
+            "correction_type": "bond_additivity",
+            "model": "melius",
+            "total": {"value": -0.056, "unit": "kcal_mol"},
+            "components": [],
+        }]})
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["value_unit"], "kcal_mol")
+        self.assertEqual(records[0]["scheme"]["units"], "kcal_mol")
 
 
 if __name__ == "__main__":

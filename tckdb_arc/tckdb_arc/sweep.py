@@ -20,7 +20,7 @@ Reads ``<project>/output/output.yml`` and dispatches per
   TSs are skipped, mirroring the species-sweep eligibility gate.
 
 Lives in its own module so both the post-``execute()`` hook in
-``ARC.py`` and the standalone CLI (``arc/tckdb/cli.py``) can call the
+``ARC.py`` and the standalone CLI (``tckdb_arc/cli.py``) can call the
 same code path. Functions take ``project_directory`` directly rather
 than the live ARC object — output.yml is the contract.
 """

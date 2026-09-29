@@ -23,12 +23,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install the shared layer (pinned tags)
+      - name: Install the shared layer (tested source revision)
         run: |
           python -m pip install --upgrade pip
           pip install \
-            "tckdb-client @ git+https://github.com/calvinp0/tckdbv2.git@tckdb-client-v0.27.1#subdirectory=clients/python" \
-            "tckdb-schemas @ git+https://github.com/calvinp0/tckdbv2.git@tckdb-schemas-v0.8.0#subdirectory=schemas/python/tckdb-schemas"
+            "tckdb-client @ git+https://github.com/calvinp0/tckdbv2.git@adceeff5c0470c37483d16c4d6b46a005c076dfe#subdirectory=clients/python" \
+            "tckdb-schemas @ git+https://github.com/calvinp0/tckdbv2.git@adceeff5c0470c37483d16c4d6b46a005c076dfe#subdirectory=schemas/python/tckdb-schemas"
 
       - name: Install tckdb-arc (base + test extra)
         run: pip install -e ".[test]"
