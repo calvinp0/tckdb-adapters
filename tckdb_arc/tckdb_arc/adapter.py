@@ -1078,6 +1078,8 @@ class TCKDBAdapter:
             target_model="ThermoInBundle",
             warnings=warnings,
             energy_level=_thermo_energy_level(output_doc),
+            header_corrections_level=output_doc.get("arkane_level_of_theory"),
+            element_symbols=_species_element_symbols(species_record),
         )
         if thermo_block is not None:
             bundle["thermo"] = thermo_block
@@ -2506,6 +2508,8 @@ class TCKDBAdapter:
             warnings=warnings,
             warning_field=f"species[{actor_key}].thermo",
             energy_level=_thermo_energy_level(output_doc),
+            header_corrections_level=output_doc.get("arkane_level_of_theory"),
+            element_symbols=_species_element_symbols(species_record),
         )
         if thermo_block is not None:
             species_block["thermo"] = thermo_block
@@ -5118,7 +5122,7 @@ _DISPERSION_SUFFIX_RE = re.compile(r"g?d[234](\(?bj\)?)?$")
 # B3LYP + GD3BJ, gas-phase ones to SMD).
 _LEVEL_FIELDS_ARC_MATCHING_IGNORES = ("dispersion", "solvation_method")
 
-# Magnitude backstop, and the only check for thermo whose flag is null or
+# Magnitude backstop, and the first check for thermo whose flag is null or
 # absent (pre-1.2 output, species Arkane loaded from its own YAML). Raw
 # absolute energies are about -1e5 kJ/mol per heavy atom, while the largest
 # real |ΔHf| are O(10^3-10^4) kJ/mol, so anything beyond this bound cannot
@@ -5126,6 +5130,27 @@ _LEVEL_FIELDS_ARC_MATCHING_IGNORES = ("dispersion", "solvation_method")
 # is below about 7.6 hartree (2e4 kJ/mol): H, H2, He, the Li atom.
 _FORMATION_ENTHALPY_MAX_ABS_KJ_MOL = 2.0e4
 _W_ENTHALPY_NOT_FORMATION_MAGNITUDE = "enthalpy_not_formation_magnitude"
+
+# Interim checks for a null or absent flag, until every run writes output.yml
+# 1.2's ``atom_corrections_applied`` (ARC PR #1059), which supersedes them:
+#
+# * The magnitude guard's blind spot. A species whose raw (uncorrected)
+#   total energy is below the bound looks like a formation enthalpy either
+#   way, so its enthalpy cannot be verified without the flag. The raw
+#   magnitude is estimated from the composition as a sum of approximate
+#   atomic total energies (hartree). Only H, He and Li are listed: any
+#   heavier atom alone (Be is about 14.7 hartree) puts the species past
+#   the bound, where the magnitude guard decides.
+# * The header ``arkane_level_of_theory``, which ARC 1.1 writes from the
+#   level it ran Arkane's atom corrections at (the user's setting, else
+#   ``composite_method``, else ``sp_level``; null when none is resolved).
+#   It must be the energy level; a null header cannot be checked.
+# * Dispersion and solvation fields, as for a true flag: ARC's Arkane
+#   matching ignores them, so the plain gas-phase method's atom energies
+#   were applied.
+_LIGHT_ATOM_TOTAL_ENERGY_HARTREE = {"H": 0.50, "He": 2.90, "Li": 7.43}
+_W_ENTHALPY_FORMATION_UNVERIFIABLE_LIGHT_SPECIES = "enthalpy_formation_unverifiable_light_species"
+_HEADER_CORRECTIONS_LEVEL_SOURCE = "output_header.arkane_level_of_theory"
 _GAS_CONSTANT_J_MOL_K = 8.314462618
 _T298_K = 298.15
 
@@ -5237,18 +5262,131 @@ def _describe_level(level: Any) -> str:
     return "/".join([method, *([str(level["basis"])] if level.get("basis") else [])])
 
 
+def _xyz_element_symbols(xyz: Any) -> tuple[str, ...] | None:
+    """Return the element symbol of every atom in an output.yml ``xyz`` string.
+
+    Accepts ARC's atom-only lines (``xyz_to_str``) with or without an XYZ
+    count/comment header. ``None`` when the geometry is missing or a line
+    does not start with an element symbol.
+    """
+    if not isinstance(xyz, str):
+        return None
+    lines = [line for line in xyz.strip().splitlines() if line.strip()]
+    if lines and lines[0].strip().isdigit():
+        lines = [line for line in xyz.strip().splitlines()[2:] if line.strip()]
+    symbols = tuple(line.split()[0].capitalize() for line in lines)
+    if not symbols or not all(symbol.isalpha() for symbol in symbols):
+        return None
+    return symbols
+
+
+_FORMULA_TERM_RE = re.compile(r"([A-Z][a-z]?)(\d*)")
+
+
+def _formula_element_symbols(formula: Any) -> tuple[str, ...] | None:
+    """Expand a plain ``formula`` (``H``, ``H2``, ``C2H5O``) to one symbol per atom.
+
+    ``None`` for anything else (charges, parentheses, isotopes), like
+    ``_xyz_element_symbols``.
+    """
+    if not isinstance(formula, str) or not formula:
+        return None
+    terms = _FORMULA_TERM_RE.findall(formula)
+    if "".join(symbol + count for symbol, count in terms) != formula:
+        return None
+    symbols: list[str] = []
+    for symbol, count in terms:
+        if count.startswith("0"):
+            return None
+        symbols.extend([symbol] * int(count or 1))
+    return tuple(symbols)
+
+
+def _species_element_symbols(record: Mapping[str, Any]) -> tuple[str, ...] | None:
+    """A species record's composition: its xyz, else its ``formula``.
+
+    ARC before c8240195 (output.yml 1.0) writes ``xyz: null`` for monoatomic
+    species, which skip opt, while still recording ``formula``.
+    """
+    symbols = _xyz_element_symbols(record.get("xyz"))
+    if symbols is None:
+        symbols = _formula_element_symbols(record.get("formula"))
+    return symbols
+
+
+def _light_species_raw_energy_kj_mol(element_symbols: Any) -> float | None:
+    """Estimate a light species' raw total energy magnitude (kJ/mol).
+
+    ``None`` when the composition is unknown or holds any atom heavier than
+    Li, whose raw energy alone passes ``_FORMATION_ENTHALPY_MAX_ABS_KJ_MOL``.
+    """
+    from tckdb_arc._vendor import E_h_kJmol
+
+    if not element_symbols:
+        return None
+    hartree = 0.0
+    for symbol in element_symbols:
+        atom_hartree = _LIGHT_ATOM_TOTAL_ENERGY_HARTREE.get(symbol)
+        if atom_hartree is None:
+            return None
+        hartree += atom_hartree
+    return hartree * E_h_kJmol
+
+
+def _formula(element_symbols: Any) -> str:
+    counts: dict[str, int] = {}
+    for symbol in element_symbols:
+        counts[symbol] = counts.get(symbol, 0) + 1
+    return "".join(f"{s}{n if n > 1 else ''}" for s, n in sorted(counts.items()))
+
+
+def _level_field_unverifiable_error(
+    sides: tuple[tuple[str, Any], ...],
+    matched: str,
+) -> tuple[str, str] | None:
+    """Refuse a level that sets a field ARC's atom-energy matching ignores.
+
+    ``sides`` names each level checked; ``matched`` says which level the
+    atom energies were matched to, for the message.
+    """
+    for side, level in sides:
+        if not isinstance(level, Mapping):
+            continue
+        for field in _LEVEL_FIELDS_ARC_MATCHING_IGNORES:
+            if level.get(field):
+                return (
+                    _W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_UNVERIFIABLE,
+                    f"The {side} {_describe_level(level)} sets "
+                    f"{field}={level[field]!r}, which ARC's atom-energy matching "
+                    f"ignores, so {matched} does not show that the "
+                    f"subtracted atom energies carried it.",
+                )
+    return None
+
+
 def _enthalpy_validity_error(
     block: Mapping[str, Any],
     thermo_record: Mapping[str, Any],
     energy_level: Mapping[str, Any] | None,
-) -> tuple[str, str] | None:
+    header_corrections_level: Any = None,
+    element_symbols: Any = None,
+) -> tuple[str, str, dict[str, str]] | None:
     """Return why the block's enthalpies are not formation_298k, or ``None``.
 
-    Reads ARC's recorded atom-correction switch and level first; a null or
-    absent switch leaves only the non-finite and magnitude checks. A switch
-    that was on still needs ``atom_corrections_level`` to be the energy
-    level (``_level_identity``), and a match cannot be verified when either
-    level sets a dispersion or solvation field ARC's matching ignores.
+    Returns ``(code, message, extra warning context)``. Reads ARC's recorded
+    atom-correction switch and level first. A switch that was on still
+    needs ``atom_corrections_level`` to be the energy level
+    (``_level_identity``), and a match cannot be verified when either level
+    sets a dispersion or solvation field ARC's matching ignores; the
+    non-finite and magnitude checks follow.
+
+    A null or absent switch runs, first failure wins: non-finite, magnitude,
+    the header ``arkane_level_of_theory`` against the energy level
+    (mismatch; skipped when the header is null or has no method),
+    dispersion/solvation on either level (unverifiable), and a light
+    species the magnitude guard cannot catch. Refusals from the last three
+    carry ``atom_corrections_applied: not_recorded`` and whether the header
+    level was checked in their context.
     """
     applied = thermo_record.get("atom_corrections_applied")
     if applied is False:
@@ -5257,6 +5395,7 @@ def _enthalpy_validity_error(
             "ARC recorded atom_corrections_applied=false: Arkane subtracted no "
             "atom energies, so H298, the NASA fit and point H/G are raw absolute "
             "energies, not formation enthalpies.",
+            {},
         )
     if applied is True:
         corrections_level = thermo_record.get("atom_corrections_level")
@@ -5268,18 +5407,14 @@ def _enthalpy_validity_error(
                 f"{_describe_level(corrections_level)} from energies computed at "
                 f"{_describe_level(energy_level)}, so the enthalpies mix two levels "
                 f"and are not formation enthalpies.",
+                {},
             )
-        for side, level in (("energy level", energy_level),
-                            ("atom_corrections_level", corrections_level)):
-            for field in _LEVEL_FIELDS_ARC_MATCHING_IGNORES:
-                if level.get(field):
-                    return (
-                        _W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_UNVERIFIABLE,
-                        f"The {side} {_describe_level(level)} sets "
-                        f"{field}={level[field]!r}, which ARC's atom-energy matching "
-                        f"ignores, so a matching level does not show that the "
-                        f"subtracted atom energies carried it.",
-                    )
+        unverifiable = _level_field_unverifiable_error(
+            (("energy level", energy_level), ("atom_corrections_level", corrections_level)),
+            matched="a matching level",
+        )
+        if unverifiable is not None:
+            return (*unverifiable, {})
     values = [block.get("h298_kj_mol"), *block.get("nasa", {}).values()]
     values += [p.get(key) for p in block.get("points", ()) for key in ("h_kj_mol", "g_kj_mol")]
     if any(v is not None and not math.isfinite(v) for v in values):
@@ -5287,8 +5422,59 @@ def _enthalpy_validity_error(
             _W_ENTHALPY_NOT_FINITE,
             "An enthalpy value (H298, NASA coefficient or bound, point H or G) "
             "is not finite.",
+            {},
         )
-    return _enthalpy_magnitude_error(block)
+    magnitude = _enthalpy_magnitude_error(block)
+    if magnitude is not None:
+        return (*magnitude, {})
+    if applied is True:
+        return None
+    return _unflagged_enthalpy_error(energy_level, header_corrections_level, element_symbols)
+
+
+def _unflagged_enthalpy_error(
+    energy_level: Mapping[str, Any] | None,
+    header_corrections_level: Any,
+    element_symbols: Any,
+) -> tuple[str, str, dict[str, str]] | None:
+    """The interim checks for a null or absent ``atom_corrections_applied``.
+
+    See ``_LIGHT_ATOM_TOTAL_ENERGY_HARTREE`` for why each exists.
+    """
+    header_key = _level_identity(header_corrections_level)
+    context = {
+        "atom_corrections_applied": "not_recorded",
+        "corrections_level_source": (
+            _HEADER_CORRECTIONS_LEVEL_SOURCE if header_key is not None else "not_recorded"
+        ),
+    }
+    if header_key is not None and header_key != _level_identity(energy_level):
+        return (
+            _W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_MISMATCH,
+            f"ARC ran Arkane's atom corrections at arkane_level_of_theory "
+            f"{_describe_level(header_corrections_level)}, but the energies were "
+            f"computed at {_describe_level(energy_level)}, so the enthalpies mix "
+            f"two levels and are not formation enthalpies.",
+            context,
+        )
+    unverifiable = _level_field_unverifiable_error(
+        (("energy level", energy_level), ("arkane_level_of_theory", header_corrections_level)),
+        matched="the recorded level",
+    )
+    if unverifiable is not None:
+        return (*unverifiable, context)
+    raw_kj_mol = _light_species_raw_energy_kj_mol(element_symbols)
+    if raw_kj_mol is not None and raw_kj_mol < _FORMATION_ENTHALPY_MAX_ABS_KJ_MOL:
+        return (
+            _W_ENTHALPY_FORMATION_UNVERIFIABLE_LIGHT_SPECIES,
+            f"ARC did not record whether Arkane applied atom-energy corrections, "
+            f"and this {_formula(element_symbols)} species' raw total energy "
+            f"(about {raw_kj_mol:.3g} kJ/mol) is within the "
+            f"{_FORMATION_ENTHALPY_MAX_ABS_KJ_MOL:.6g} kJ/mol magnitude bound, so "
+            f"an uncorrected enthalpy would pass as a formation enthalpy.",
+            context,
+        )
+    return None
 
 
 def _has_enthalpy_content(block: Mapping[str, Any]) -> bool:
@@ -5348,6 +5534,8 @@ def _build_thermo_block(
     warnings: list[dict[str, Any]] | None = None,
     warning_field: str = "thermo",
     energy_level: Mapping[str, Any] | None = None,
+    header_corrections_level: Any = None,
+    element_symbols: Any = None,
 ) -> dict[str, Any] | None:
     """Build a ``target_model``-shaped thermo dict from ``output.yml`` thermo data.
 
@@ -5372,7 +5560,10 @@ def _build_thermo_block(
     Enthalpy content (h298, NASA, point H or G) is first checked by
     ``_enthalpy_validity_error`` against ARC's recorded atom-correction
     switch and level (``energy_level`` is the species' energy level, see
-    ``_thermo_energy_level``). Enthalpy that is not a formation enthalpy is
+    ``_thermo_energy_level``); without that switch, against the document's
+    ``arkane_level_of_theory`` (``header_corrections_level``) and the
+    species' composition (``element_symbols``, see
+    ``_species_element_symbols``). Enthalpy that is not a formation enthalpy is
     stripped, keeping S298, point S and Cp; the refusal is appended to
     ``warnings`` under ``warning_field`` with action
     ``thermo_enthalpy_omitted`` (``thermo_omitted`` when nothing is left).
@@ -5455,10 +5646,12 @@ def _build_thermo_block(
         # Server would 422 us; nothing usable here.
         return None
 
-    # Refusals as (code, message), reported once the block's fate is known.
-    refusals: list[tuple[str, str]] = []
+    # Refusals as (code, message, extra context), reported once the block's
+    # fate is known.
+    refusals: list[tuple[str, str, dict[str, str]]] = []
     if _has_enthalpy_content(block):
-        enthalpy_refusal = _enthalpy_validity_error(block, thermo_record, energy_level)
+        enthalpy_refusal = _enthalpy_validity_error(
+            block, thermo_record, energy_level, header_corrections_level, element_symbols)
         if enthalpy_refusal is not None:
             refusals.append(enthalpy_refusal)
             _strip_enthalpy_content(block)
@@ -5496,10 +5689,10 @@ def _build_thermo_block(
     if keep:
         shared_refusal = enthalpy_reference_error(block)
         if shared_refusal is not None:
-            refusals.append(shared_refusal)
+            refusals.append((*shared_refusal, {}))
             keep = False
     action = "thermo_enthalpy_omitted" if keep else "thermo_omitted"
-    for code, message in refusals:
+    for code, message, extra_context in refusals:
         logger.warning(
             "TCKDB thermo %s: producer self-check refused %s (%s): %s",
             warning_field, "its enthalpy" if keep else "it", code, message,
@@ -5509,7 +5702,8 @@ def _build_thermo_block(
                 "code": code,
                 "message": message,
                 "field": warning_field,
-                "context": {"source": "tckdb_arc_self_check", "action": action},
+                "context": {"source": "tckdb_arc_self_check", "action": action,
+                            **extra_context},
             })
     return block if keep else None
 

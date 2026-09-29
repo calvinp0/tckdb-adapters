@@ -201,9 +201,16 @@ def test_shared_rule_accepts_every_thermo_block_in_the_corpus(tmp_path):
     # Non-vacuous: golden H2 (species + both reaction slots), the synthetic
     # species, and all four synthetic reaction participants.
     assert len(blocks) == 8
+    # Golden H2 (schema 1.1, no atom-correction flag) is a light species
+    # whose enthalpy cannot be verified: its three blocks keep only S/Cp.
+    declared = [block for block in blocks if "h298_kj_mol" in block]
+    assert len(declared) == 5
     for block in blocks:
         assert enthalpy_reference_error(block) is None, block
-        assert block["enthalpy_reference_kind"] == "formation_298k"
+        if "h298_kj_mol" in block:
+            assert block["enthalpy_reference_kind"] == "formation_298k"
+        else:
+            assert "enthalpy_reference_kind" not in block and "nasa" not in block
         assert block["reference_pressure_bar"] == 1.01325
     for model, payload in payloads:
         if model is ComputedSpeciesUploadRequest or model is ComputedReactionUploadRequest:
