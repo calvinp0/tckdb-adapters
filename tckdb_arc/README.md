@@ -4,7 +4,7 @@ Convert ARC `output/output.yml` and portable parser evidence into TCKDB
 species, reaction, and transition-state uploads. Payloads and upload metadata
 are written locally before any network request, allowing inspection and replay.
 
-Requires Python 3.11+, `tckdb-client` 0.93.x and `tckdb-schemas` 0.51.x.
+Requires Python 3.11+, `tckdb-client` 0.95.x and `tckdb-schemas` 0.52.x.
 For development with sibling checkouts:
 
 ```bash
@@ -28,12 +28,39 @@ the older `tckdb_evidence.json` contract is also supported. Keep the evidence
 file beside `output.yml`. ARC itself is optional: raw-log reparsing requires
 ARC on `PYTHONPATH`, whereas portable sidecars work in the base installation.
 
+TCKDB decides what it accepts, and tckdb-schemas 0.52 ships that as a
+producer contract generated from TCKDB's routes and models: read it with
+`python -m tckdb_schemas.contract --print` (and `--since <version>` for what
+moved) before changing a mapping. The test suite validates every payload the
+adapter builds against the contract's JSON Schema for its route and pins the
+tckdb-schemas line it ran against (`tests/_contract.py`).
+
+Adapter 0.6.0 conforms to that contract where ARC does not state a value:
+it omits `reference_pressure_bar` without a recorded pressure (below), omits
+`path_search_result.converged` (ARC's TS-guess `success` means only that the
+output file exists), GSM `is_climbing_image` (an NEB-CI flag the contract
+says string methods ignore), `freq_scale_factor.scale_kind` and
+`species_entry.electronic_state_kind` (ARC states neither; TCKDB applies its
+own default), and refuses an IRC result when any log's direction is unstated
+(`irc_direction_not_stated`, action `irc_result_omitted`; the `irc`
+calculation is still sent) instead of claiming `both`. A species or TS record
+without a usable integer `charge` or `multiplicity` is refused (the upload is
+not built; the sweep reports it) instead of becoming charge 0 or a singlet.
+ARC does not export `irc_level`, so the IRC calculation keeps `opt_level` and
+every one reports `irc_level_assumed_opt_level`. Kinetics `tunneling_model` is
+sent as the contract's lowercase token (`eckart`, unknown methods `other`),
+the value TCKDB stored anyway.
+
 Thermo blocks with enthalpy content declare `enthalpy_reference_kind:
 formation_298k` (Arkane's H298 and NASA are formation enthalpies at
 298.15 K) only when that holds. Blocks with entropy content carry
-`reference_pressure_bar`: ARC's recorded `standard_state_pressure_pa` when it
-is a number in Pa between 0.5 and 2 bar, otherwise 1.01325 bar, the 1 atm RMG
-hard-codes.
+`reference_pressure_bar` only when ARC recorded the standard-state pressure:
+`thermo.standard_state_pressure_pa` converted to bar, when it is a number in
+Pa between 0.5 and 2 bar. Otherwise the field is omitted, never defaulted
+(TCKDB stores the pressure as not stated), and the omission is reported as
+`thermo_reference_pressure_not_stated` with action
+`reference_pressure_omitted`; the rest of the block is still sent. Before
+adapter 0.6.0 a missing pressure was filled with 1.01325 bar.
 
 ARC output.yml 1.2 records whether Arkane applied atom-energy corrections
 (`thermo.atom_corrections_applied`) and whose atom energies it subtracted
@@ -55,8 +82,13 @@ and G) is stripped from the block, keeping S298 and point S/Cp, when:
   H(298.15 K) exceeds ±2.0e4 kJ/mol (`enthalpy_not_formation_magnitude`).
 
 Pre-1.2 output and thermo Arkane loaded from its own YAML record no switch
-(`null` or absent). Since adapter 0.5.0 their enthalpy is then stripped, after
-the non-finite and magnitude checks and in this order, when:
+(`null` or absent). Declaring `formation_298k` on such output is a
+deliberate, maintainer-approved interpretation ("option (d)"), not a filled-in
+default: Arkane's corrected H298 is a formation enthalpy by construction. The
+magnitude check and the checks below are heuristics that make an uncorrected
+or wrong-level enthalpy very unlikely to pass; they are not proof that the
+corrections were applied at the right level. Since adapter 0.5.0 their enthalpy is stripped, after the non-finite
+and magnitude checks and in this order, when:
 
 - the header `arkane_level_of_theory` (the level ARC ran Arkane's atom
   corrections at) is not the energy level, compared as above; a null header

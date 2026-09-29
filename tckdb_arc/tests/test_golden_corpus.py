@@ -30,6 +30,7 @@ from unittest import mock
 
 import yaml
 
+from _contract import contract_validate
 from tckdb_arc.adapter import TCKDBAdapter, _build_nasa_block
 from tckdb_arc.config import TCKDBConfig
 
@@ -132,7 +133,7 @@ class TestGoldenCorpus(unittest.TestCase):
                 species_record=_full_record(),
             )
         payload = self._built_payload(outcome)
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
         _assert_no_forbidden_keys(self, payload, "computed_species")
 
     # --- computed reaction ------------------------------------------------
@@ -144,7 +145,7 @@ class TestGoldenCorpus(unittest.TestCase):
                 reaction_record=_reaction_record(),
             )
         payload = self._built_payload(outcome)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
         _assert_no_forbidden_keys(self, payload, "computed_reaction")
 
     def test_computed_reaction_with_irc_payload_validates(self):
@@ -155,7 +156,7 @@ class TestGoldenCorpus(unittest.TestCase):
                 reaction_record=_reaction_record(),
             )
         payload = self._built_payload(outcome)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
         _assert_no_forbidden_keys(self, payload, "computed_reaction+irc")
 
     def test_computed_reaction_with_per_species_thermo_payload_validates(self):
@@ -218,13 +219,13 @@ class TestGoldenCorpus(unittest.TestCase):
                 self.assertTrue(all(s["calculation_key"] in own_keys for s in sources))
 
         # The real validation: the full payload, real model.
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
         _assert_no_forbidden_keys(self, payload, "computed_reaction+thermo")
 
     # --- standalone transition state --------------------------------------
     def test_transition_state_request_validates(self):
         _doc, _ts, _rxn, payload = _compose()
-        TransitionStateUploadRequest(**payload)
+        contract_validate(TransitionStateUploadRequest, payload)
         _assert_no_forbidden_keys(self, payload, "transition_state")
 
     # --- fragment-level validation (representative, from the TS payload) --
@@ -233,17 +234,17 @@ class TestGoldenCorpus(unittest.TestCase):
 
         # CalculationWithResultsPayload — the primary opt calc.
         primary_opt = copy.deepcopy(payload["primary_opt"])
-        CalculationWithResultsPayload.model_validate(primary_opt)
+        contract_validate(CalculationWithResultsPayload, primary_opt)
 
         # GeometryPayload — pulled from the opt calc's output geometry.
         output_geometries = primary_opt.get("output_geometries") or []
         self.assertTrue(output_geometries, "primary_opt must carry output_geometries")
         geometry = output_geometries[0]["geometry"]
-        GeometryPayload.model_validate(geometry)
+        contract_validate(GeometryPayload, geometry)
 
         # SpeciesEntryIdentityPayload — a reactant's species_entry.
         species_entry = payload["reaction"]["reactants"][0]["species_entry"]
-        SpeciesEntryIdentityPayload.model_validate(species_entry)
+        contract_validate(SpeciesEntryIdentityPayload, species_entry)
 
     def test_phase3_disk_corpus_builds_all_payloads_from_sidecar(self):
         output_doc = self._phase3_corpus()
@@ -259,22 +260,28 @@ class TestGoldenCorpus(unittest.TestCase):
                     output_doc=output_doc, species_record=output_doc["species"][0],
                 )
             )
-            reaction = self._built_payload(
-                adapter.submit_computed_reaction_from_output(
-                    output_doc=output_doc, reaction_record=output_doc["reactions"][0],
-                )
+            reaction_outcome = adapter.submit_computed_reaction_from_output(
+                output_doc=output_doc, reaction_record=output_doc["reactions"][0],
             )
-            transition_state = self._built_payload(
-                adapter.submit_computed_ts_from_output(
-                    output_doc=output_doc,
-                    ts_record=output_doc["transition_states"][0],
-                    reaction_record=output_doc["reactions"][0],
-                )
+            reaction = self._built_payload(reaction_outcome)
+            ts_outcome = adapter.submit_computed_ts_from_output(
+                output_doc=output_doc,
+                ts_record=output_doc["transition_states"][0],
+                reaction_record=output_doc["reactions"][0],
             )
+            transition_state = self._built_payload(ts_outcome)
 
-        ComputedSpeciesUploadRequest.model_validate(species)
-        ComputedReactionUploadRequest.model_validate(reaction)
-        TransitionStateUploadRequest(**transition_state)
+        # TS0 has an IRC; ARC does not export irc_level, so both TS routes
+        # report that the IRC calculation's level is assumed to be opt_level.
+        for outcome in (reaction_outcome, ts_outcome):
+            codes = [w["code"] for w in outcome.warnings]
+            self.assertEqual(codes.count("irc_level_assumed_opt_level"), 1)
+            self.assertEqual(
+                json.loads(outcome.sidecar_path.read_text())["warnings"], outcome.warnings)
+
+        contract_validate(ComputedSpeciesUploadRequest, species)
+        contract_validate(ComputedReactionUploadRequest, reaction)
+        contract_validate(TransitionStateUploadRequest, transition_state)
         for label, payload in (
             ("computed_species", species),
             ("computed_reaction", reaction),
@@ -398,6 +405,122 @@ class TestGoldenCorpus(unittest.TestCase):
         # and reference_pressure_bar. H carries no thermo. Restoring exactly
         # those fields from the fixture reproduces the previous snapshots below,
         # so no other leaf changed.
+        #
+        # All three changed for adapter 0.6.0 (tckdb-schemas 0.52, the producer
+        # contract). First, by the maintainer's decision, identity/provenance
+        # defaults ARC does not state are no longer sent:
+        # ``species_entry.electronic_state_kind="ground"`` (every species
+        # entry, including the standalone TS payload's reaction participants)
+        # and ``freq_scale_factor.scale_kind="fundamental"`` (every
+        # frequency-scale-factor reference; this fixture has none, so only
+        # the species entries move). Putting exactly those back
+        # reproduces the intermediate snapshots checked next.
+        self.assertEqual(
+            {
+                "computed_species": "09c2c0d739d49c0964e9aa7ffe492cb6a3803f2ea6c5290955e26bf37365112b",
+                "computed_reaction": "bd6912d7437b8cd93b927320e4d848b71d7f28458d19a56320523e2f95db06c0",
+                "transition_state": "dd1d10f4f00a844cc37f1731b89d4d5e1d59d0059792a239762ffff7249d6ce3",
+            },
+            {
+                "computed_species": self._canonical_sha256(species),
+                "computed_reaction": self._canonical_sha256(reaction),
+                "transition_state": self._canonical_sha256(transition_state),
+            },
+        )
+
+        def with_identity_defaults_restored(payload, *, species_entries, scale_factors):
+            restored = copy.deepcopy(payload)
+            entries, factors = [], []
+
+            def collect(obj):
+                if isinstance(obj, dict):
+                    if isinstance(obj.get("species_entry"), dict):
+                        entries.append(obj["species_entry"])
+                    if isinstance(obj.get("freq_scale_factor"), dict):
+                        factors.append(obj["freq_scale_factor"])
+                    for value in obj.values():
+                        collect(value)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        collect(item)
+
+            collect(restored)
+            self.assertEqual((len(entries), len(factors)), (species_entries, scale_factors))
+            for entry in entries:
+                self.assertNotIn("electronic_state_kind", entry)
+                entry["electronic_state_kind"] = "ground"
+            for factor in factors:
+                self.assertNotIn("scale_kind", factor)
+                factor["scale_kind"] = "fundamental"
+            return restored
+
+        species = with_identity_defaults_restored(species, species_entries=1, scale_factors=0)
+        reaction = with_identity_defaults_restored(reaction, species_entries=4, scale_factors=0)
+        transition_state = with_identity_defaults_restored(
+            transition_state, species_entries=4, scale_factors=0)
+
+        # Second, for two reasons and no others:
+        #   - this fixture records no ``standard_state_pressure_pa``, so the
+        #     three H2 thermo blocks (species bundle, r0_H2, p1_H2) no longer
+        #     carry ``reference_pressure_bar``: it is omitted, never
+        #     defaulted to RMG's 1 atm, and reported as
+        #     ``thermo_reference_pressure_not_stated`` (transition_state has
+        #     no thermo, so this part does not touch it);
+        #   - ``path_search_result.converged`` is omitted: ARC's TS-guess
+        #     ``success`` means only that the output file exists, not that
+        #     the string converged. TS0's GSM path search appears on the
+        #     reaction route's TS block and in the standalone TS payload,
+        #     not in computed_species.
+        # Putting back exactly ``reference_pressure_bar=1.01325`` on each H2
+        # block and ``converged=True`` on each path-search result reproduces
+        # the previous snapshots, so no other leaf changed.
+        self.assertEqual(
+            {
+                "computed_species": "19a51cab7db268f8b5fcef78411c89df77ad8cbe7d9547318fd9865002ba0525",
+                "computed_reaction": "6eef7980088c2075f7cb5f7fc6491c13921c0aa07329b8e8b1a9dfa05d60aad1",
+                "transition_state": "5da87ad131e86d99b028fe06661fa323322c15b86bb91c98c36c4bf6850e2336",
+            },
+            {
+                "computed_species": self._canonical_sha256(species),
+                "computed_reaction": self._canonical_sha256(reaction),
+                "transition_state": self._canonical_sha256(transition_state),
+            },
+        )
+
+        def with_0_5_claims_restored(payload, *, thermo_blocks, path_searches):
+            restored = copy.deepcopy(payload)
+            blocks = [restored.get("thermo")] + [
+                sp.get("thermo") for sp in restored.get("species") or []
+            ]
+            blocks = [block for block in blocks if block is not None]
+            self.assertEqual(len(blocks), thermo_blocks)
+            for block in blocks:
+                self.assertNotIn("reference_pressure_bar", block)
+                self.assertIn("s298_j_mol_k", block)
+                block["reference_pressure_bar"] = 1.01325
+            results = []
+
+            def collect(obj):
+                if isinstance(obj, dict):
+                    if isinstance(obj.get("path_search_result"), dict):
+                        results.append(obj["path_search_result"])
+                    for value in obj.values():
+                        collect(value)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        collect(item)
+
+            collect(restored)
+            self.assertEqual(len(results), path_searches)
+            for result in results:
+                self.assertNotIn("converged", result)
+                result["converged"] = True
+            return restored
+
+        species = with_0_5_claims_restored(species, thermo_blocks=1, path_searches=0)
+        reaction = with_0_5_claims_restored(reaction, thermo_blocks=2, path_searches=1)
+        transition_state = with_0_5_claims_restored(
+            transition_state, thermo_blocks=0, path_searches=1)
         self.assertEqual(
             {
                 "computed_species": "194f02a5e8a6069ec06c8ef0f4424878aa98e86de11f29f3d862db258c13cfb7",

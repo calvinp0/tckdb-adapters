@@ -13,6 +13,7 @@ import json
 import os
 from unittest import mock
 
+from _contract import contract_validate
 import pytest
 
 from tckdb_arc.adapter import (
@@ -52,8 +53,11 @@ XYZ = {
     "H16": "\n".join(f"H 0.0 0.0 {i}.0" for i in range(16)),
 }
 # Formation-magnitude thermo, as ARC 1.1 writes it (no correction flags).
+# It records the standard-state pressure, so these tests see only the
+# enthalpy findings (the pressure omission is tested on its own).
 THERMO = {
     "h298_kj_mol": -74.6, "s298_j_mol_k": 186.3, "tmin_k": 100.0, "tmax_k": 5000.0,
+    "standard_state_pressure_pa": 101325.0,
     "nasa_low": {"tmin_k": 100.0, "tmax_k": 1000.0,
                  "coeffs": [4.1, -1e-3, 2e-6, -1e-9, 4e-13, -9000.0, 1.0]},
     "nasa_high": {"tmin_k": 1000.0, "tmax_k": 5000.0,
@@ -97,8 +101,8 @@ def _warning(code, level_source="not_recorded", field="thermo"):
 def _assert_stripped(block):
     assert block == STRIPPED
     assert enthalpy_reference_error(block) is None
-    ThermoInBundle.model_validate(block)
-    BundleThermoIn.model_validate(block)
+    contract_validate(ThermoInBundle, block)
+    contract_validate(BundleThermoIn, block)
 
 
 def _assert_declared(block, warnings):
@@ -331,7 +335,7 @@ def _submit_species(tmp_path, doc, record):
         outcome = _adapter(tmp_path).submit_computed_species_from_output(
             output_doc=doc, species_record=record)
     payload = json.loads(outcome.payload_path.read_text())
-    ComputedSpeciesUploadRequest.model_validate(payload)
+    contract_validate(ComputedSpeciesUploadRequest, payload)
     assert json.loads(outcome.sidecar_path.read_text())["warnings"] == outcome.warnings
     return payload["thermo"], outcome.warnings
 
@@ -369,7 +373,7 @@ def _submit_reaction(tmp_path, doc):
         outcome = _adapter(tmp_path).submit_computed_reaction_from_output(
             output_doc=doc, reaction_record=_reaction_record())
     payload = json.loads(outcome.payload_path.read_text())
-    ComputedReactionUploadRequest.model_validate(payload)
+    contract_validate(ComputedReactionUploadRequest, payload)
     return payload, outcome.warnings
 
 

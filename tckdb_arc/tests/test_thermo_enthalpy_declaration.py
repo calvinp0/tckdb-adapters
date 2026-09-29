@@ -2,9 +2,10 @@
 
 TCKDB #520 refuses thermo that carries enthalpy content without
 ``enthalpy_reference_kind`` (and a declaration without content); TCKDB #529
-never defaults ``reference_pressure_bar``. The adapter declares both from
-ARC's conventions and checks every block with the shared
-``enthalpy_reference_error`` rule before emitting it.
+never defaults ``reference_pressure_bar``. The adapter declares the
+enthalpy basis from ARC's conventions, states the pressure only when ARC
+recorded it (omitting it, with a warning, otherwise), and checks every
+block with the shared ``enthalpy_reference_error`` rule before emitting it.
 """
 
 import copy
@@ -14,6 +15,7 @@ from pathlib import Path
 import shutil
 from unittest import mock
 
+from _contract import contract_validate
 import pytest
 import yaml
 
@@ -49,7 +51,18 @@ NASA = {
 }
 
 
+# The standard-state pressure current ARC records (RMG's 1 atm, in Pa).
+P_ATM_PA = 101325.0
+
+
 def _build(record, target="ThermoInBundle", **kwargs):
+    """Build a block from ``record`` as current ARC writes it.
+
+    Current ARC records ``standard_state_pressure_pa``; a record that sets
+    the key itself (including to ``None``) keeps its own value.
+    """
+    if isinstance(record, dict):
+        record = {"standard_state_pressure_pa": P_ATM_PA, **record}
     return _build_thermo_block(record, calc_keys_by_role={}, target_model=target, **kwargs)
 
 
@@ -78,7 +91,7 @@ def test_enthalpy_and_entropy_content_is_declared(record, target, model):
     assert block["enthalpy_reference_kind"] == "formation_298k"
     assert block["reference_pressure_bar"] == 1.01325
     assert enthalpy_reference_error(block) is None
-    model.model_validate(block)
+    contract_validate(model, block)
 
 
 @pytest.mark.parametrize("target,model", TARGETS)
@@ -88,7 +101,7 @@ def test_cp_only_block_declares_nothing(target, model):
     assert "enthalpy_reference_kind" not in block
     assert "reference_pressure_bar" not in block
     assert enthalpy_reference_error(block) is None
-    model.model_validate(block)
+    contract_validate(model, block)
 
 
 def test_point_gibbs_without_enthalpy_is_declared():
@@ -98,7 +111,7 @@ def test_point_gibbs_without_enthalpy_is_declared():
     assert block["enthalpy_reference_kind"] == "formation_298k"
     assert block["reference_pressure_bar"] == 1.01325
     assert enthalpy_reference_error(block) is None
-    ThermoInBundle.model_validate(block)
+    contract_validate(ThermoInBundle, block)
 
 
 def test_entropy_only_block_carries_pressure_but_no_declaration():
@@ -112,23 +125,96 @@ def test_entropy_only_block_carries_pressure_but_no_declaration():
 @pytest.mark.parametrize("recorded,expected", [
     (101325.0, 1.01325),   # current ARC: RMG's P0, recovered from its partition function
     (100000.0, 1.0),       # a recorded 1 bar is honored, never overwritten
-    (None, 1.01325),       # older output.yml: RMG's hard-coded 1 atm
-    ("junk", 1.01325),
-    (-5.0, 1.01325),
-    (True, 1.01325),       # a YAML boolean is not a pressure (float(True) / 1e5 = 1e-5 bar)
-    (1.01325, 1.01325),    # written in bar, not Pa: 1e-5 bar is outside the window
-    (float("nan"), 1.01325),
+    (150000, 1.5),         # an integer Pa value converts like a float
 ])
-def test_reference_pressure_prefers_recorded_standard_state(recorded, expected):
-    block = _build({"s298_j_mol_k": 282.6, "standard_state_pressure_pa": recorded})
+def test_recorded_standard_state_is_converted_to_bar(recorded, expected):
+    warnings = []
+    block = _build({"s298_j_mol_k": 282.6, "standard_state_pressure_pa": recorded},
+                   warnings=warnings)
     assert block["reference_pressure_bar"] == expected
+    assert warnings == []
+
+
+def _pressure_warning(reason, field="thermo"):
+    return {"code": "thermo_reference_pressure_not_stated", "field": field,
+            "context": {"source": "tckdb_arc_self_check",
+                        "action": "reference_pressure_omitted",
+                        "standard_state_pressure_pa": reason}}
+
+
+@pytest.mark.parametrize("target,model", TARGETS)
+@pytest.mark.parametrize("record,reason", [
+    ({"s298_j_mol_k": 282.6}, "not_recorded"),   # older output.yml has no key
+    ({"s298_j_mol_k": 282.6, "standard_state_pressure_pa": None}, "not_recorded"),
+    ({"s298_j_mol_k": 282.6, "standard_state_pressure_pa": "junk"}, "malformed"),
+    ({"s298_j_mol_k": 282.6, "standard_state_pressure_pa": -5.0}, "malformed"),
+    # A YAML boolean is not a pressure (float(True) / 1e5 = 1e-5 bar).
+    ({"s298_j_mol_k": 282.6, "standard_state_pressure_pa": True}, "malformed"),
+    # Written in bar, not Pa: 1e-5 bar is outside the plausibility window.
+    ({"s298_j_mol_k": 282.6, "standard_state_pressure_pa": 1.01325}, "malformed"),
+    ({"s298_j_mol_k": 282.6, "standard_state_pressure_pa": 1e7}, "malformed"),
+    ({"s298_j_mol_k": 282.6, "standard_state_pressure_pa": "101325"}, "malformed"),
+    ({"s298_j_mol_k": 282.6, "standard_state_pressure_pa": float("nan")}, "malformed"),
+    ({"thermo_points": [{"temperature_k": 300.0, "g_kj_mol": -315.9}]}, "not_recorded"),
+    (dict(NASA), "not_recorded"),
+], ids=["absent", "null", "junk", "negative", "bool", "bar", "huge", "string", "nan",
+        "point_g", "nasa"])
+def test_unstated_pressure_is_omitted_never_defaulted(record, reason, target, model):
+    # The contract never defaults reference_pressure_bar and asks a producer
+    # to leave it out when the source does not state it; the block (its
+    # entropy included) is still sent, and the omission is reported.
+    warnings = []
+    block = _build_thermo_block(record, calc_keys_by_role={}, target_model=target,
+                                warnings=warnings)
+    assert "reference_pressure_bar" not in block
+    assert block.get("s298_j_mol_k") == record.get("s298_j_mol_k")
+    assert [{k: w[k] for k in ("code", "field", "context")} for w in warnings] == [
+        _pressure_warning(reason)]
+    assert "standard-state pressure" in warnings[0]["message"]
+    contract_validate(model, block)
 
 
 @pytest.mark.parametrize("recorded", [True, 1.01325, 1e7, "101325"])
-def test_implausible_recorded_pressure_warns_and_falls_back(recorded, caplog):
+def test_implausible_recorded_pressure_is_logged(recorded, caplog):
     block = _build({"s298_j_mol_k": 282.6, "standard_state_pressure_pa": recorded})
-    assert block["reference_pressure_bar"] == 1.01325
+    assert "reference_pressure_bar" not in block
     assert "malformed standard_state_pressure_pa" in caplog.text
+
+
+def test_no_pressure_warning_without_entropy_content():
+    # A Cp-only block states no entropy, so it needs no standard state.
+    warnings = []
+    block = _build_thermo_block(
+        {"thermo_points": [{"temperature_k": 300.0, "cp_j_mol_k": 33.6}]},
+        calc_keys_by_role={}, target_model="ThermoInBundle", warnings=warnings)
+    assert "reference_pressure_bar" not in block
+    assert warnings == []
+
+
+def test_pressure_warning_follows_enthalpy_refusals():
+    warnings = []
+    block = _build_thermo_block(
+        {"h298_kj_mol": -235.1 - 106_330.0, "s298_j_mol_k": 186.3},
+        calc_keys_by_role={}, target_model="ThermoInBundle", warnings=warnings)
+    assert block == {"s298_j_mol_k": 186.3}
+    assert [w["code"] for w in warnings] == [
+        "enthalpy_not_formation_magnitude", "thermo_reference_pressure_not_stated"]
+
+
+def test_species_bundle_without_recorded_pressure_surfaces_the_omission(tmp_path):
+    record = _full_record()
+    del record["thermo"]["standard_state_pressure_pa"]
+    with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+        outcome = _adapter(tmp_path).submit_computed_species_from_output(
+            output_doc=_fake_output_doc(), species_record=record)
+    payload = json.loads(outcome.payload_path.read_text())
+    contract_validate(ComputedSpeciesUploadRequest, payload)
+    assert "reference_pressure_bar" not in payload["thermo"]
+    assert payload["thermo"]["s298_j_mol_k"] == record["thermo"]["s298_j_mol_k"]
+    assert payload["thermo"]["enthalpy_reference_kind"] == "formation_298k"
+    assert [{k: w[k] for k in ("code", "field", "context")} for w in outcome.warnings] == [
+        _pressure_warning("not_recorded")]
+    assert json.loads(outcome.sidecar_path.read_text())["warnings"] == outcome.warnings
 
 
 def _adapter(tmp_path, *, upload=False, client=None, mode="all"):
@@ -209,14 +295,18 @@ def test_shared_rule_accepts_every_thermo_block_in_the_corpus(tmp_path):
         assert enthalpy_reference_error(block) is None, block
         if "h298_kj_mol" in block:
             assert block["enthalpy_reference_kind"] == "formation_298k"
+            # The synthetic records carry current ARC's recorded 1 atm.
+            assert block["reference_pressure_bar"] == 1.01325
         else:
             assert "enthalpy_reference_kind" not in block and "nasa" not in block
-        assert block["reference_pressure_bar"] == 1.01325
+            # Golden H2 (schema 1.1) records no standard-state pressure, so
+            # its entropy's pressure is left unstated, never defaulted.
+            assert "reference_pressure_bar" not in block
     for model, payload in payloads:
         if model is ComputedSpeciesUploadRequest or model is ComputedReactionUploadRequest:
-            model.model_validate(payload)
+            contract_validate(model, payload)
         elif model is not None:
-            model.model_validate(payload["thermo"])
+            contract_validate(model, payload["thermo"])
 
 
 @pytest.fixture
@@ -233,7 +323,7 @@ def test_refused_species_thermo_is_omitted_and_surfaced(tmp_path, refused_declar
     payload = json.loads(outcome.payload_path.read_text())
     sidecar = json.loads(outcome.sidecar_path.read_text())
     assert "thermo" not in payload
-    ComputedSpeciesUploadRequest.model_validate(payload)
+    contract_validate(ComputedSpeciesUploadRequest, payload)
     expected = [{
         "code": "enthalpy_reference_kind_unrecognized",
         "message": enthalpy_reference_error({"enthalpy_reference_kind": "Formation_298K"})[1],
@@ -255,7 +345,7 @@ def test_refused_reaction_thermo_is_omitted_and_never_sent(tmp_path, refused_dec
     posted = [call["json"] for call in client.calls if call["path"] != "/readyz"]
     assert len(posted) == 1
     assert list(_thermo_blocks(posted[0])) == []
-    ComputedReactionUploadRequest.model_validate(posted[0])
+    contract_validate(ComputedReactionUploadRequest, posted[0])
     species_keys = [sp["key"] for sp in posted[0]["species"]]
     producer = [w for w in outcome.warnings if w.get("context", {}).get("source") == "tckdb_arc_self_check"]
     assert [w["field"] for w in producer] == [f"species[{key}].thermo" for key in species_keys]
@@ -320,7 +410,7 @@ def test_uncorrected_species_thermo_enthalpy_is_stripped_and_surfaced(tmp_path):
         outcome = _adapter(tmp_path).submit_computed_species_from_output(
             output_doc=_fake_output_doc(), species_record=record)
     payload = json.loads(outcome.payload_path.read_text())
-    ComputedSpeciesUploadRequest.model_validate(payload)
+    contract_validate(ComputedSpeciesUploadRequest, payload)
     # Only the enthalpy goes: S298, point S/Cp, bounds and provenance stay.
     thermo = record["thermo"]
     assert payload["thermo"] == {

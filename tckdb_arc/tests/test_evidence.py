@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from _contract import contract_validate
 import pytest
 
 from tckdb_arc.evidence import EvidenceStore, validate_output_schema
@@ -311,13 +312,13 @@ def test_real_current_arc_fixture_flows_into_scientific_payloads(tmp_path):
         adapter, output_doc=output, species_record=output['species'][0],
         geometry_xyz_text='deliberately different conformer frame',
     )
-    HessianPayload.model_validate(result)
+    contract_validate(HessianPayload, result)
     assert result['geometry']['xyz_text'] == hessian.value['geometry_xyz_text']
     assert result['lower_triangle_hartree_bohr2'] == hessian.value['lower_triangle']
     assert hessian.value['frame'] == 'orca_hess_atoms'
     trajectories = TCKDBAdapter._parse_irc_trajectories(adapter, output, output['transition_states'][0])
     irc_result = _build_irc_result_payload(trajectories)
-    IRCResultPayload.model_validate(irc_result)
+    contract_validate(IRCResultPayload, irc_result)
     source_points = [point for trajectory in irc.value['trajectories'] for point in trajectory['points']]
     assert len(irc_result['points']) == len(source_points)
     assert {point['direction'] for point in irc_result['points']} == {'forward', 'reverse'}
@@ -334,7 +335,7 @@ def test_real_current_arc_fixture_flows_into_scientific_payloads(tmp_path):
     path = _build_path_search_result_payload(
         method='gsm', log_path=None, fallback_xyz_text=None, gsm_evidence=gsm.value,
     )
-    PathSearchResultPayload.model_validate(path)
+    contract_validate(PathSearchResultPayload, path)
     assert len(path['points']) == len(gsm.value['points'])
     for actual, source in zip(path['points'], gsm.value['points']):
         assert actual['geometry']['xyz_text'] == source['geometry_xyz_text']
@@ -386,7 +387,7 @@ def test_unmatched_gsm_invocations_never_become_point_energies(tmp_path):
     payload = _build_path_search_result_payload(
         method='gsm', log_path=None, fallback_xyz_text=None, gsm_evidence=lookup.value,
     )
-    PathSearchResultPayload.model_validate(payload)
+    contract_validate(PathSearchResultPayload, payload)
     assert 'zero_energy_reference_hartree' not in payload
     assert all('electronic_energy_hartree' not in point for point in payload['points'])
 
@@ -408,7 +409,7 @@ def test_gsm_relative_energies_follow_source_indices_not_list_offsets(tmp_path):
     payload = _build_path_search_result_payload(
         method='gsm', log_path=None, fallback_xyz_text=None, gsm_evidence=lookup.value,
     )
-    PathSearchResultPayload.model_validate(payload)
+    contract_validate(PathSearchResultPayload, payload)
     assert [point['relative_energy_kj_mol'] for point in payload['points']] == pytest.approx([0.0, 12.552])
     assert payload['selected_ts_point_index'] == 20
 
@@ -471,7 +472,7 @@ def test_raw_hessian_uses_parser_frame_without_conformer_geometry(tmp_path, ess,
             adapter, output_doc={'schema_version': '1.0'}, species_record={'label': 'H2', 'freq_log': 'freq.log'},
             geometry_xyz_text=None,
         )
-    HessianPayload.model_validate(result)
+    contract_validate(HessianPayload, result)
     assert [float(value) for value in result['geometry']['xyz_text'].splitlines()[2].split()[1:]] == [1., 2., 3.]
 
 
@@ -488,7 +489,7 @@ def test_raw_gsm_ignores_indexed_node_outputs_and_preserves_relative_profile(cap
         result = _build_path_search_result_payload(
             method='gsm', log_path='stringfile.xyz0000', fallback_xyz_text=None, node_outputs_dir='nodes',
         )
-    PathSearchResultPayload.model_validate(result)
+    contract_validate(PathSearchResultPayload, result)
     assert len(result['points']) == 3
     assert [point['relative_energy_kj_mol'] for point in result['points']] == pytest.approx([0., 8.368, 4.184])
     assert 'zero_energy_reference_hartree' not in result

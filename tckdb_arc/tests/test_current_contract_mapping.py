@@ -2,6 +2,7 @@
 
 import copy
 
+from _contract import contract_validate
 import pytest
 
 import test_adapter as fixtures
@@ -60,7 +61,7 @@ def test_ts_scan_survives_reaction_bundle_with_distinct_namespace(adapter):
     species_keys = {c["key"] for c in payload["species"][0]["calculations"]}
     assert "r0_scan_rotor_0" in species_keys
     assert ts_scan["key"] not in species_keys
-    ComputedReactionUploadRequest.model_validate(payload)
+    contract_validate(ComputedReactionUploadRequest, payload)
 
 
 def test_standalone_ts_reports_unsupported_scan_without_rejecting_ts(adapter, caplog):
@@ -71,7 +72,7 @@ def test_standalone_ts_reports_unsupported_scan_without_rejecting_ts(adapter, ca
     )
     assert all(c["type"] != "scan" for c in payload["additional_calculations"])
     assert "use computed_reaction mode to retain them" in caplog.text
-    TransitionStateUploadRequest.model_validate(payload)
+    contract_validate(TransitionStateUploadRequest, payload)
 
 
 def test_reaction_thermo_and_coarse_opt_link_to_own_participant(adapter):
@@ -90,7 +91,7 @@ def test_reaction_thermo_and_coarse_opt_link_to_own_participant(adapter):
     assert coarse["conformer_key"] == participant["conformers"][0]["key"]
     assert "geometry_key" not in coarse
     assert "1.1" in coarse["output_geometries"][0]["geometry"]["xyz_text"]
-    ComputedReactionUploadRequest.model_validate(payload)
+    contract_validate(ComputedReactionUploadRequest, payload)
 
 
 @pytest.mark.parametrize("version", [None, "legacy-2024"])
@@ -102,7 +103,7 @@ def test_legacy_correction_scheme_validates_without_removed_version(version):
     assert "version" not in result["scheme"]
     if version:
         assert version in result["scheme"]["note"]
-    EnergyCorrectionSchemeRef.model_validate(result["scheme"])
+    contract_validate(EnergyCorrectionSchemeRef, result["scheme"])
     assert record == original
 
 
@@ -145,11 +146,11 @@ def test_freq_hessian_method_is_a_typed_parameter_in_both_roots(adapter):
     freq = next(c for c in payload["transition_state"]["calculations"] if c["type"] == "freq")
     assert freq["parameters"][0]["canonical_key"] == "freq.hessian_method"
     assert freq["parameters"][0]["canonical_value"] == "finite_difference_gradient"
-    ComputedReactionUploadRequest.model_validate(payload)
+    contract_validate(ComputedReactionUploadRequest, payload)
     standalone = adapter._compose_transition_state_request(
         output_doc=doc, ts_record=doc["transition_states"][0], reaction_record=doc["reactions"][0],
     )
-    TransitionStateUploadRequest.model_validate(standalone)
+    contract_validate(TransitionStateUploadRequest, standalone)
 
 
 def test_unknown_hessian_method_is_not_invented():
@@ -212,6 +213,85 @@ def test_scan_uses_distinct_explicit_level_and_software(adapter, mode):
     assert scan["software_release"] == {"name": "orca"}
 
 
+def _build_with_torsion_scan(adapter, mode, scan_level):
+    """Build ``mode``'s payload for a record whose torsion names its exported scan.
+
+    Returns ``(payload, warnings, scan calcs of the scan's owner, species statmech)``;
+    in ``ts`` mode the owner is the transition state, which also exports the
+    scan (a TS has no torsion slot, so only the scan calc itself is checked).
+    """
+    doc = _scan_doc()
+    doc["scan_level"] = scan_level
+    record = doc["species"][0]
+    record["rotor_scans"] = [_neutral_scan()]
+    record["statmech"] = {"torsions": [{
+        "symmetry_number": 3, "treatment": "hindered_rotor",
+        "source_scan_key": "scan_rotor_0",
+    }]}
+    for rec in [record, doc["transition_states"][0]]:
+        rec["ess_software"] = {"opt": "gaussian"}  # ARC never records ess_software['scan']
+    warnings = []
+    if mode == "species":
+        payload = adapter._build_computed_species_payload(
+            output_doc=doc, species_record=record, conformer_key="conf0", warnings=warnings,
+        )
+        calculations = payload["conformers"][0]["additional_calculations"]
+        statmech = payload["statmech"]
+    else:
+        payload = adapter._build_computed_reaction_payload(
+            output_doc=doc, reaction_record=doc["reactions"][0], warnings=warnings,
+        )
+        owner = payload["transition_state"] if mode == "ts" else payload["species"][0]
+        calculations = owner["calculations"]
+        statmech = payload["species"][0]["statmech"]
+        if mode == "ts":
+            # The standalone TS request is built too; the conftest hook
+            # validates it (it carries no scans or torsions).
+            adapter._compose_transition_state_request(
+                output_doc=doc, ts_record=doc["transition_states"][0],
+                reaction_record=doc["reactions"][0],
+            )
+    return payload, warnings, [c for c in calculations if c["type"] == "scan"], statmech
+
+
+@pytest.mark.parametrize("mode", ["species", "reaction", "ts"])
+def test_scan_level_without_software_drops_the_torsion_link_with_a_warning(adapter, mode):
+    # Reachable from real ARC: Level.as_dict() carries no software for e.g.
+    # b2plyp-d4/def2tzvp, and ARC never records ess_software['scan'], so the
+    # scan calc cannot be built. The torsion must not keep naming it (TCKDB
+    # would refuse the whole upload); the conftest hook validates the payload.
+    payload, warnings, scans, statmech = _build_with_torsion_scan(
+        adapter, mode, {"method": "b2plyp-d4", "basis": "def2tzvp", "method_type": "dft"})
+    assert scans == []
+    torsion = statmech["torsions"][0]
+    assert torsion["symmetry_number"] == 3
+    assert "source_scan_calculation_key" not in torsion
+    dropped = [w for w in warnings if w["code"] == "torsion_scan_not_built"]
+    # The species' torsion lost its link, whichever route carried it.
+    assert len(dropped) == 1
+    [warning] = dropped
+    assert warning["field"] == ("statmech" if mode == "species" else "species[r0_CHO].statmech")
+    assert warning["context"]["action"] == "torsion_scan_link_omitted"
+    assert warning["context"]["scan_key"] == "scan_rotor_0"
+    assert "missing software" in warning["context"]["reason"]
+
+
+@pytest.mark.parametrize("mode", ["species", "reaction", "ts"])
+def test_scan_level_with_software_builds_and_links_the_scan(adapter, mode):
+    payload, warnings, scans, statmech = _build_with_torsion_scan(
+        adapter, mode, {"method": "b2plyp-d4", "basis": "def2tzvp", "method_type": "dft",
+                        "software": "gaussian"})
+    [scan] = scans
+    assert scan["software_release"]["name"] == "gaussian"
+    expected = {"species": "scan_rotor_0", "reaction": "r0_scan_rotor_0",
+                "ts": "ts_scan_rotor_0"}[mode]
+    assert scan["key"] == expected
+    linked = statmech["torsions"][0]["source_scan_calculation_key"]
+    assert linked == ("scan_rotor_0" if mode == "species" else "r0_scan_rotor_0")
+    assert not [w for w in warnings if w["code"] == "torsion_scan_not_built"]
+
+
+@pytest.mark.payload_refused_by_contract
 def test_missing_scan_provenance_does_not_hide_unknown_torsion_reference(adapter):
     doc = _scan_doc()
     doc.pop("scan_level", None)
