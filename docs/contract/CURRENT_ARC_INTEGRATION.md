@@ -27,9 +27,9 @@ exercise current ARC's checked-in evidence. They do not establish successful
 database persistence or production-server compatibility. No upload, deployment,
 commit, or push was performed.
 
-Final base-suite result: **774 passed, 16 skipped, 37 subtests passed**.
-The skips require the optional ARC environment. `pip check` and
-`git diff --check` pass.
+Final result, run in `arc_env` (ARC importable): **830 passed, 3 skipped,
+37 subtests passed**. The three skips need a real GSM stringfile
+(`ARC_GSM_STRINGFILE_FIXTURE`). `pip check` and `git diff --check` pass.
 
 ## Verified mapping and corrections
 
@@ -40,7 +40,7 @@ The skips require the optional ARC environment. `pip check` and
 | Hessian matrix and frame geometry | Hessian with its own geometry | Portable evidence retains the matrix's coordinate frame instead of substituting the conformer frame |
 | GSM geometry-matched invocation values | Path points and gradients | Current coordinate name supported; unmatched invocations never attached by numeric node identity; sparse indices retain the right relative energies |
 | Reaction participant thermo/NASA/points | Participant `thermo` | Source-calculation links restored for the current schema, scoped to each participant |
-| Thermo enthalpy basis and standard-state pressure | `enthalpy_reference_kind`, `reference_pressure_bar` on every thermo block | Enthalpy content (H298, NASA, point H or G) declares `formation_298k` (TCKDB #520). Entropy content (S298, NASA, point S or G) carries `thermo.standard_state_pressure_pa` / 1e5 when ARC recorded it, else `_ARC_THERMO_REFERENCE_PRESSURE_BAR = 1.01325` (RMG's hard-coded 1 atm; TCKDB #529 never defaults it). Cp-only blocks carry neither. Each block is checked with `tckdb_schemas.enthalpy_reference.enthalpy_reference_error`; a refused block is omitted and recorded as a producer warning in the sidecar and outcome |
+| Thermo enthalpy basis and standard-state pressure | `enthalpy_reference_kind`, `reference_pressure_bar` on every thermo block | Enthalpy content (H298, NASA, point H or G) declares `formation_298k` (TCKDB #520). Entropy content (S298, NASA, point S or G) carries `thermo.standard_state_pressure_pa` / 1e5 when ARC recorded it as a number within 0.5–2 bar, else `_ARC_THERMO_REFERENCE_PRESSURE_BAR = 1.01325` (RMG's hard-coded 1 atm; TCKDB #529 never defaults it). Cp-only blocks carry neither. Each block is checked with `tckdb_schemas.enthalpy_reference.enthalpy_reference_error` and with an interim magnitude guard (`enthalpy_not_formation_magnitude`: H298, point H, or NASA H(298.15 K) beyond ±2.0e4 kJ/mol cannot be a formation enthalpy); a refused block is omitted and recorded as a producer warning in the sidecar and outcome |
 | Correction scheme metadata | Applied energy corrections | Removed obsolete `scheme.version`; nonempty legacy version preserved in scheme note |
 | `ess_software` / `ess_versions` | Calculation software release | Observed software used per job; no borrowing another program's version |
 | `scf_reference` | Level-of-theory spin treatment | Actual freq/SP references retained only on their respective jobs |
@@ -75,6 +75,7 @@ a rate law with unknown normalization.
 | Execution environment and effective calculation settings | ARC export is incomplete, especially beyond coarse/fine optimization settings. Do not invent runtime metadata from requested input settings. |
 | NEB portable evidence, alternative TS guesses, multidimensional rotor scans | Producer evidence/export work; current portable sidecar covers Hessian/IRC/GSM, successful 1D rotors and the chosen guess. |
 | Deposit rights | Requires explicit depositor information/configuration; no license or consent is inferred. |
+| Whether Arkane applied atom-energy corrections | ARC must export it (for example `thermo.atom_corrections_applied`). Without corrections, H298/NASA/point H and G are raw absolute energies, yet `output.yml` at `db0934d5` cannot say so: an `energy_corrections[]` `atom_energy` row proves corrections were applied, but its absence proves nothing. Until then the adapter omits thermo whose enthalpy exceeds ±2.0e4 kJ/mol (`_FORMATION_ENTHALPY_MAX_ABS_KJ_MOL`), which misses H/H2-only species. |
 
 TCKDB workflow checks extend beyond schema validation: source calculations
 must belong to the right species and scientific role; SP/optimization geometry

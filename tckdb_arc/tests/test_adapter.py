@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-"""Unit tests for arc.tckdb.adapter.
+"""Unit tests for tckdb_arc.adapter.
 
 These tests do not require a live TCKDB server. The TCKDBClient is
 replaced by a stub via the adapter's ``client_factory`` parameter.
@@ -543,7 +543,7 @@ class TestAdapterPayloadAndUpload(unittest.TestCase):
         )
         # The exact CLI command, with the real project dir + upload mode.
         self.assertIn(
-            "python -m arc.tckdb.cli /proj/run7/input.yml "
+            "tckdb-arc-upload /proj/run7/input.yml "
             f"-p /proj/run7 --upload-mode {self.cfg.upload_mode}",
             blob,
         )
@@ -8018,7 +8018,7 @@ class TestCalculationConstraints(unittest.TestCase):
 
 
 class TestCalculationConstraintsSerializer(unittest.TestCase):
-    """Direct tests for arc.tckdb.constraints.serialize_constraints."""
+    """Direct tests for tckdb_arc.constraints.serialize_constraints."""
 
     def test_indices_start_at_one_and_are_deterministic(self):
         from tckdb_arc.constraints import serialize_constraints
@@ -9923,6 +9923,119 @@ class TestPhase3EvidenceParity(unittest.TestCase):
             self.assertEqual(actual["geometry"], expected["geometry"])
         PathSearchResultPayload(**sidecar)
 
+    # Scaffolding for the live-ARC-producer tests below: the golden project's
+    # logs, mocked ESS parsers, and distinct bent H3 stringfile frames, so the
+    # real ``kabsch`` gives a non-trivial path coordinate.
+    _PRODUCER_XYZ = {"symbols": ("H", "H", "H"), "isotopes": (1, 1, 1),
+                     "coords": ((0.0, 0.0, -0.8), (0.0, 0.0, 0.0), (0.0, 0.0, 0.8))}
+    _PRODUCER_H2_XYZ = {"symbols": ("H", "H"), "isotopes": (1, 1),
+                        "coords": ((0.0, 0.0, 0.0), (0.0, 0.0, 0.74))}
+    _PRODUCER_FRAMES = [
+        {"symbols": ("H", "H", "H"), "isotopes": (1, 1, 1),
+         "coords": ((0.0, 0.0, -d), (0.0, 0.0, 0.0), (0.3, 0.0, d))}
+        for d in (0.7, 0.8, 0.9)
+    ]
+    _PRODUCER_STRINGFILE_ENERGIES = [0.0, 3.0, 1.0]
+
+    @classmethod
+    def _producer_parser_for(cls, path, _ess):
+        is_ts = "TS0" in path
+        parser = mock.Mock()
+        parser.parse_cartesian_hessian_lower_triangle.return_value = [0.01] * (45 if is_ts else 21)
+        parser.parse_cartesian_hessian_geometry.return_value = (
+            cls._PRODUCER_XYZ if is_ts else cls._PRODUCER_H2_XYZ, "gaussian_input_orientation",
+        )
+        return parser
+
+    @classmethod
+    def _producer_irc_points(cls, log_file_path, **_kwargs):
+        direction = "forward" if "forward" in log_file_path else "reverse"
+        return [{"point_number": 1, "direction": direction, "xyz": cls._PRODUCER_XYZ,
+                 "electronic_energy_hartree": -1.62}]
+
+    def _run_actual_arc_producer(self, root, gradients):
+        """Write the golden project under ``root`` and run ARC's real producer.
+
+        ``gradients`` maps each archived ``ograd`` invocation id to its
+        ``(energy_hartree, H3 coordinates in bohr)``. Returns ``(base, evidence)``
+        after writing the sidecar with ``write_parser_evidence_atomic``.
+        """
+        import yaml
+        from arc.parser_evidence import (
+            EVIDENCE_FILENAME,
+            build_parser_evidence,
+            write_parser_evidence_atomic,
+        )
+
+        fixture = pathlib.Path(__file__).parent / "fixtures" / "golden" / "phase3_output.yml"
+        base = yaml.safe_load(fixture.read_text())
+        for record in (base["species"][0], base["transition_states"][0]):
+            for field in ("freq_log", "gsm_log"):
+                if record.get(field):
+                    path = pathlib.Path(root, record[field]); path.parent.mkdir(parents=True, exist_ok=True); path.write_text("x")
+                    if field == "gsm_log":
+                        node_outputs = path.parent / "gsm_node_outputs"
+                        node_outputs.mkdir()
+                        for invocation_id, (energy, coords_bohr) in gradients.items():
+                            (node_outputs / f"{invocation_id}.energy").write_text(
+                                f"$energy\n 1 {energy} 0 0\n$end\n"
+                            )
+                            atoms = "".join(f"   {x!r}  {y!r}  {z!r}   h\n" for x, y, z in coords_bohr)
+                            (node_outputs / f"{invocation_id}.gradient").write_text(
+                                f"$grad\n  cycle =      1    SCF energy =    {energy}\n{atoms}"
+                                "   0.0  0.0  0.02\n   0.0  0.0  0.0\n   0.0  0.0  -0.02\n$end\n"
+                            )
+            for relative in record.get("irc_logs") or []:
+                path = pathlib.Path(root, relative); path.parent.mkdir(parents=True, exist_ok=True); path.write_text("x")
+
+        document_id = "0123456789abcdef0123456789abcdef"
+        with mock.patch("arc.parser_evidence.determine_ess", return_value="gaussian"), \
+             mock.patch("arc.parser_evidence.ess_factory", side_effect=self._producer_parser_for), \
+             mock.patch("arc.parser_evidence.parse_irc_path", side_effect=self._producer_irc_points), \
+             mock.patch("arc.parser_evidence.parse_trajectory", return_value=self._PRODUCER_FRAMES), \
+             mock.patch("arc.parser_evidence.parse_gsm_stringfile_energies",
+                        return_value=self._PRODUCER_STRINGFILE_ENERGIES):
+            evidence = build_parser_evidence(
+                output_doc=base, project_directory=root, document_id=document_id,
+            )
+        written = write_parser_evidence_atomic(
+            evidence_doc=evidence, output_directory=pathlib.Path(root, "output"),
+        )
+        self.assertEqual(written, pathlib.Path(root, "output", EVIDENCE_FILENAME))
+        return base, evidence
+
+    def _sidecar_reaction_payload(self, root, base, evidence):
+        """Build the reaction payload from the written sidecar, forbidding raw parsers.
+
+        Returns ``(sidecar_doc, sidecar_adapter, payload)``.
+        """
+        from arc.parser_evidence import (
+            EVIDENCE_FILENAME,
+            EVIDENCE_SCHEMA_NAME,
+            EVIDENCE_SCHEMA_VERSION,
+        )
+
+        sidecar_doc = copy.deepcopy(base)
+        sidecar_doc.pop("tckdb_evidence", None)
+        sidecar_doc["parser_evidence"] = {
+            "path": EVIDENCE_FILENAME, "schema_name": EVIDENCE_SCHEMA_NAME,
+            "schema_version": EVIDENCE_SCHEMA_VERSION, "document_id": evidence["document_id"],
+        }
+        cfg = TCKDBConfig(enabled=True, base_url="http://x", upload=False)
+        sidecar_adapter = TCKDBAdapter(cfg, project_directory=root)
+        fallback_parser_used = AssertionError("raw fallback parser used on the sidecar path")
+        with mock.patch("tckdb_arc._arc_optional.determine_ess", side_effect=fallback_parser_used), \
+             mock.patch("tckdb_arc._arc_optional.ess_factory", side_effect=fallback_parser_used), \
+             mock.patch("tckdb_arc._arc_optional.parse_irc_path", side_effect=fallback_parser_used), \
+             mock.patch("tckdb_arc._arc_optional.parse_irc_traj", side_effect=fallback_parser_used), \
+             mock.patch("tckdb_arc._arc_optional.parse_trajectory", side_effect=fallback_parser_used), \
+             mock.patch("tckdb_arc._arc_optional.parse_gsm_stringfile_energies",
+                        side_effect=fallback_parser_used):
+            payload = sidecar_adapter._build_computed_reaction_payload(
+                output_doc=sidecar_doc, reaction_record=sidecar_doc["reactions"][0],
+            )
+        return sidecar_doc, sidecar_adapter, payload
+
     def test_actual_arc_producer_to_evidence_store_matches_fallback_payload(self):
         """Exercise ARC builders, JSON writer, EvidenceStore, and final composer together.
 
@@ -9938,81 +10051,17 @@ class TestPhase3EvidenceParity(unittest.TestCase):
         GSM shape the raw fallback can match: the fallback never index-attaches
         archived absolute energies (see
         ``test_gsm_absolute_energies_require_evidence_not_raw_node_indices``).
+        The two geometries differ, so neither can be left unattached merely
+        because both contest the same frame.
         """
-        import yaml
         pytest.importorskip("arc")
-        from arc.parser_evidence import (
-            EVIDENCE_FILENAME,
-            EVIDENCE_SCHEMA_NAME,
-            EVIDENCE_SCHEMA_VERSION,
-            build_parser_evidence,
-            write_parser_evidence_atomic,
-        )
-
-        fixture = pathlib.Path(__file__).parent / "fixtures" / "golden" / "phase3_output.yml"
-        base = yaml.safe_load(fixture.read_text())
-        xyz = {"symbols": ("H", "H", "H"), "isotopes": (1, 1, 1),
-               "coords": ((0.0, 0.0, -0.8), (0.0, 0.0, 0.0), (0.0, 0.0, 0.8))}
-        h2_xyz = {"symbols": ("H", "H"), "isotopes": (1, 1),
-                  "coords": ((0.0, 0.0, 0.0), (0.0, 0.0, 0.74))}
-        # Distinct bent frames, so the real ``kabsch`` gives a non-trivial path
-        # coordinate and the linear gradient geometries below genuinely match none.
-        frames = [
-            {"symbols": ("H", "H", "H"), "isotopes": (1, 1, 1),
-             "coords": ((0.0, 0.0, -d), (0.0, 0.0, 0.0), (0.3, 0.0, d))}
-            for d in (0.7, 0.8, 0.9)
-        ]
-        stringfile_energies = [0.0, 3.0, 1.0]
 
         with tempfile.TemporaryDirectory() as root:
-            for record in (base["species"][0], base["transition_states"][0]):
-                for field in ("freq_log", "gsm_log"):
-                    if record.get(field):
-                        path = pathlib.Path(root, record[field]); path.parent.mkdir(parents=True, exist_ok=True); path.write_text("x")
-                        if field == "gsm_log":
-                            node_outputs = path.parent / "gsm_node_outputs"
-                            node_outputs.mkdir()
-                            for invocation_id, energy in (("0000.01", -1.7), ("0000.02", -1.55)):
-                                (node_outputs / f"{invocation_id}.energy").write_text(
-                                    f"$energy\n 1 {energy} 0 0\n$end\n"
-                                )
-                                # A bent H3 at 2.5 bohr (~1.32 A) spacing: not any frame.
-                                (node_outputs / f"{invocation_id}.gradient").write_text(
-                                    f"$grad\n  cycle =      1    SCF energy =    {energy}\n"
-                                    "   0.0  0.0  -2.5   h\n   0.0  0.0  0.0   h\n   0.6  0.0  2.5   h\n"
-                                    "   0.0  0.0  0.02\n   0.0  0.0  0.0\n   0.0  0.0  -0.02\n$end\n"
-                                )
-                for relative in record.get("irc_logs") or []:
-                    path = pathlib.Path(root, relative); path.parent.mkdir(parents=True, exist_ok=True); path.write_text("x")
-
-            def parser_for(path, _ess):
-                is_ts = "TS0" in path
-                parser = mock.Mock()
-                parser.parse_cartesian_hessian_lower_triangle.return_value = [0.01] * (45 if is_ts else 21)
-                parser.parse_cartesian_hessian_geometry.return_value = (
-                    xyz if is_ts else h2_xyz, "gaussian_input_orientation",
-                )
-                return parser
-
-            def irc_points(log_file_path, **_kwargs):
-                direction = "forward" if "forward" in log_file_path else "reverse"
-                return [{"point_number": 1, "direction": direction, "xyz": xyz,
-                         "electronic_energy_hartree": -1.62}]
-
-            document_id = "0123456789abcdef0123456789abcdef"
-            with mock.patch("arc.parser_evidence.determine_ess", return_value="gaussian"), \
-                 mock.patch("arc.parser_evidence.ess_factory", side_effect=parser_for), \
-                 mock.patch("arc.parser_evidence.parse_irc_path", side_effect=irc_points), \
-                 mock.patch("arc.parser_evidence.parse_trajectory", return_value=frames), \
-                 mock.patch("arc.parser_evidence.parse_gsm_stringfile_energies",
-                            return_value=stringfile_energies):
-                evidence = build_parser_evidence(
-                    output_doc=base, project_directory=root, document_id=document_id,
-                )
-            written = write_parser_evidence_atomic(
-                evidence_doc=evidence, output_directory=pathlib.Path(root, "output"),
-            )
-            self.assertEqual(written, pathlib.Path(root, "output", EVIDENCE_FILENAME))
+            # Bent H3 at 2.5 and 3.0 bohr (~1.32 and ~1.59 A) spacing: not any frame.
+            base, evidence = self._run_actual_arc_producer(root, {
+                "0000.01": (-1.7, ((0.0, 0.0, -2.5), (0.0, 0.0, 0.0), (0.6, 0.0, 2.5))),
+                "0000.02": (-1.55, ((0.0, 0.0, -3.0), (0.0, 0.0, 0.0), (0.9, 0.0, 3.0))),
+            })
 
             # Every attempted entry must be available; an unavailable or absent
             # entry would let both sides drop the same sub-payload and still agree.
@@ -10034,25 +10083,9 @@ class TestPhase3EvidenceParity(unittest.TestCase):
                 self.assertNotIn("geometry_matched_ograd_invocation_id", point)
                 self.assertNotIn("electronic_energy_hartree", point)
 
-            sidecar_doc = copy.deepcopy(base)
-            sidecar_doc.pop("tckdb_evidence", None)
-            sidecar_doc["parser_evidence"] = {
-                "path": EVIDENCE_FILENAME, "schema_name": EVIDENCE_SCHEMA_NAME,
-                "schema_version": EVIDENCE_SCHEMA_VERSION, "document_id": evidence["document_id"],
-            }
-            cfg = TCKDBConfig(enabled=True, base_url="http://x", upload=False)
-            sidecar_adapter = TCKDBAdapter(cfg, project_directory=root)
-            fallback_parser_used = AssertionError("raw fallback parser used on the sidecar path")
-            with mock.patch("tckdb_arc._arc_optional.determine_ess", side_effect=fallback_parser_used), \
-                 mock.patch("tckdb_arc._arc_optional.ess_factory", side_effect=fallback_parser_used), \
-                 mock.patch("tckdb_arc._arc_optional.parse_irc_path", side_effect=fallback_parser_used), \
-                 mock.patch("tckdb_arc._arc_optional.parse_irc_traj", side_effect=fallback_parser_used), \
-                 mock.patch("tckdb_arc._arc_optional.parse_trajectory", side_effect=fallback_parser_used), \
-                 mock.patch("tckdb_arc._arc_optional.parse_gsm_stringfile_energies",
-                            side_effect=fallback_parser_used):
-                sidecar_payload = sidecar_adapter._build_computed_reaction_payload(
-                    output_doc=sidecar_doc, reaction_record=sidecar_doc["reactions"][0],
-                )
+            sidecar_doc, sidecar_adapter, sidecar_payload = self._sidecar_reaction_payload(
+                root, base, evidence,
+            )
             for kind, label, evidence_kind in (
                 ("species", "H2", "freq_hessian"),
                 ("transition_state", "TS0", "freq_hessian"),
@@ -10064,15 +10097,16 @@ class TestPhase3EvidenceParity(unittest.TestCase):
                     "available", (kind, label, evidence_kind),
                 )
 
+            cfg = TCKDBConfig(enabled=True, base_url="http://x", upload=False)
             fallback_doc = copy.deepcopy(base)
             fallback_doc["schema_version"] = "1.0"
             fallback_doc.pop("tckdb_evidence", None)
             with mock.patch("tckdb_arc._arc_optional.determine_ess", return_value="gaussian"), \
-                 mock.patch("tckdb_arc._arc_optional.ess_factory", side_effect=parser_for), \
-                 mock.patch("tckdb_arc._arc_optional.parse_irc_path", side_effect=irc_points), \
-                 mock.patch("tckdb_arc._arc_optional.parse_trajectory", return_value=frames), \
+                 mock.patch("tckdb_arc._arc_optional.ess_factory", side_effect=self._producer_parser_for), \
+                 mock.patch("tckdb_arc._arc_optional.parse_irc_path", side_effect=self._producer_irc_points), \
+                 mock.patch("tckdb_arc._arc_optional.parse_trajectory", return_value=self._PRODUCER_FRAMES), \
                  mock.patch("tckdb_arc._arc_optional.parse_gsm_stringfile_energies",
-                            return_value=stringfile_energies):
+                            return_value=self._PRODUCER_STRINGFILE_ENERGIES):
                 fallback_payload = TCKDBAdapter(cfg, project_directory=root)._build_computed_reaction_payload(
                     output_doc=fallback_doc, reaction_record=fallback_doc["reactions"][0],
                 )
@@ -10093,6 +10127,55 @@ class TestPhase3EvidenceParity(unittest.TestCase):
             self.assertEqual(sidecar_payload, fallback_payload)
             self.assertEqual(self._canonical(sidecar_payload), self._canonical(fallback_payload))
             ComputedReactionUploadRequest.model_validate(sidecar_payload)
+
+    def test_actual_arc_producer_geometry_matched_gsm_values_reach_payload(self):
+        """A gradient file whose geometry is exactly one frame carries its values to that point.
+
+        Not a parity test: the raw fallback never attaches archived energies,
+        so only the sidecar path can deliver them. The one archived invocation
+        was evaluated at frame 1's geometry (written in bohr, as xTB does).
+        """
+        pytest.importorskip("arc")
+        from arc.constants import bohr_to_angstrom
+
+        matched_index = 1
+        frame_bohr = tuple(
+            tuple(c / bohr_to_angstrom for c in atom)
+            for atom in self._PRODUCER_FRAMES[matched_index]["coords"]
+        )
+        with tempfile.TemporaryDirectory() as root:
+            base, evidence = self._run_actual_arc_producer(root, {"0000.01": (-1.7, frame_bohr)})
+            gsm_value = next(r for r in evidence["records"] if r["label"] == "TS0")["gsm"]["value"]
+            [invocation] = gsm_value["ograd_invocations"]
+            attached = [p for p in gsm_value["points"] if "geometry_matched_ograd_invocation_id" in p]
+            self.assertEqual([p["source_point_index"] for p in attached], [matched_index])
+            producer_point = attached[0]
+            self.assertEqual(producer_point["geometry_matched_ograd_invocation_id"], "0000.01")
+            self.assertEqual(producer_point["electronic_energy_hartree"],
+                             invocation["electronic_energy_hartree"])
+            self.assertEqual(producer_point["max_gradient_hartree_per_bohr"],
+                             invocation["max_gradient_hartree_per_bohr"])
+
+            sidecar_doc, sidecar_adapter, payload = self._sidecar_reaction_payload(root, base, evidence)
+            lookup = sidecar_adapter._evidence.lookup(sidecar_doc, "transition_state", "TS0", "gsm")
+            self.assertEqual(lookup.state, "available")
+            store_point = lookup.value["points"][matched_index]
+            self.assertEqual(store_point["geometry_matched_ograd_invocation_id"], "0000.01")
+
+        ts_calcs = {calc["type"]: calc for calc in payload["transition_state"]["calculations"]}
+        result = ts_calcs["path_search"]["path_search_result"]
+        points = {point["point_index"]: point for point in result["points"]}
+        self.assertEqual(points[matched_index]["electronic_energy_hartree"],
+                         producer_point["electronic_energy_hartree"])
+        self.assertEqual(points[matched_index]["max_gradient"],
+                         producer_point["max_gradient_hartree_per_bohr"])
+        self.assertEqual(result["zero_energy_reference_hartree"],
+                         producer_point["electronic_energy_hartree"])
+        self.assertEqual(points[matched_index]["relative_energy_kj_mol"], 0.0)
+        for index, point in points.items():
+            if index != matched_index:
+                self.assertNotIn("electronic_energy_hartree", point)
+        ComputedReactionUploadRequest.model_validate(payload)
 
 
 class TestSingleHartreeToKjMolConstant(unittest.TestCase):

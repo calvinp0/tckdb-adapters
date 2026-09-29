@@ -31,6 +31,11 @@ ARC on `PYTHONPATH`, whereas portable sidecars work in the base installation.
 Thermo blocks with enthalpy content declare `enthalpy_reference_kind:
 formation_298k` (Arkane's H298 and NASA are formation enthalpies at
 298.15 K). Blocks with entropy content carry `reference_pressure_bar`: ARC's
-recorded `standard_state_pressure_pa` when present, otherwise 1.01325 bar,
-the 1 atm RMG hard-codes. A block the shared TCKDB enthalpy rule would refuse
-is omitted and reported in the sidecar and outcome `warnings`.
+recorded `standard_state_pressure_pa` when it is a number in Pa between 0.5 and
+2 bar, otherwise 1.01325 bar, the 1 atm RMG hard-codes. A block the shared
+TCKDB enthalpy rule would refuse is omitted and reported in the sidecar and
+outcome `warnings`. So is a block with an H298, point H, or NASA H(298.15 K)
+beyond ±2.0e4 kJ/mol (`enthalpy_not_formation_magnitude`): that is a raw
+absolute energy from Arkane run without atom-energy corrections, not a
+formation enthalpy. This interim guard misses H/H2-only species; it stays until
+ARC exports whether atom corrections were applied.

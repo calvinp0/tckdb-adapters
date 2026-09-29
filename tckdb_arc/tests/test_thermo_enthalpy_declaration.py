@@ -115,10 +115,20 @@ def test_entropy_only_block_carries_pressure_but_no_declaration():
     (None, 1.01325),       # older output.yml: RMG's hard-coded 1 atm
     ("junk", 1.01325),
     (-5.0, 1.01325),
+    (True, 1.01325),       # a YAML boolean is not a pressure (float(True) / 1e5 = 1e-5 bar)
+    (1.01325, 1.01325),    # written in bar, not Pa: 1e-5 bar is outside the window
+    (float("nan"), 1.01325),
 ])
 def test_reference_pressure_prefers_recorded_standard_state(recorded, expected):
     block = _build({"s298_j_mol_k": 282.6, "standard_state_pressure_pa": recorded})
     assert block["reference_pressure_bar"] == expected
+
+
+@pytest.mark.parametrize("recorded", [True, 1.01325, 1e7, "101325"])
+def test_implausible_recorded_pressure_warns_and_falls_back(recorded, caplog):
+    block = _build({"s298_j_mol_k": 282.6, "standard_state_pressure_pa": recorded})
+    assert block["reference_pressure_bar"] == 1.01325
+    assert "malformed standard_state_pressure_pa" in caplog.text
 
 
 def _adapter(tmp_path, *, upload=False, client=None, mode="all"):
@@ -251,3 +261,95 @@ def test_refused_reaction_thermo_is_omitted_and_never_sent(tmp_path, refused_dec
 def test_refused_block_with_no_sink_is_still_omitted(refused_declaration, caplog):
     assert _build({"h298_kj_mol": -235.1}) is None
     assert "enthalpy_reference_kind_unrecognized" in caplog.text
+
+
+def test_failed_upload_keeps_producer_warnings(tmp_path, refused_declaration):
+    client = _StubClient(raise_exc=RuntimeError("server unreachable"))
+    with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+        outcome = _adapter(tmp_path, upload=True, client=client).submit_computed_species_from_output(
+            output_doc=_fake_output_doc(), species_record=_full_record())
+    assert outcome.status == "failed"
+    assert [call for call in client.calls if call["path"] != "/readyz"]
+    expected = [{
+        "code": "enthalpy_reference_kind_unrecognized",
+        "message": enthalpy_reference_error({"enthalpy_reference_kind": "Formation_298K"})[1],
+        "field": "thermo",
+        "context": {"source": "tckdb_arc_self_check", "action": "thermo_omitted"},
+    }]
+    assert outcome.warnings == expected
+    assert json.loads(outcome.sidecar_path.read_text())["warnings"] == expected
+
+
+# CH4 without atom corrections: Arkane's H298 is the raw absolute energy
+# (about -40.5 Hartree, i.e. -1.06e5 kJ/mol) plus the thermal increment.
+_UNCORRECTED_SHIFT_KJ_MOL = -106_330.0
+_R = 8.314462618
+
+
+def _uncorrected(thermo):
+    """Shift every enthalpy in an ARC thermo record by a raw electronic energy."""
+    thermo = copy.deepcopy(thermo)
+    if "h298_kj_mol" in thermo:
+        thermo["h298_kj_mol"] += _UNCORRECTED_SHIFT_KJ_MOL
+    for point in thermo.get("thermo_points", ()):
+        for key in ("h_kj_mol", "g_kj_mol"):
+            if key in point:
+                point[key] += _UNCORRECTED_SHIFT_KJ_MOL
+    for nasa_key in ("nasa_low", "nasa_high"):
+        if nasa_key in thermo:
+            thermo[nasa_key]["coeffs"][5] += _UNCORRECTED_SHIFT_KJ_MOL * 1000.0 / _R
+    return thermo
+
+
+def _magnitude_warning(field="thermo"):
+    return {"code": "enthalpy_not_formation_magnitude", "field": field,
+            "context": {"source": "tckdb_arc_self_check", "action": "thermo_omitted"}}
+
+
+def test_uncorrected_species_thermo_is_omitted_and_surfaced(tmp_path):
+    record = _full_record()
+    record["thermo"] = _uncorrected(record["thermo"])
+    with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+        outcome = _adapter(tmp_path).submit_computed_species_from_output(
+            output_doc=_fake_output_doc(), species_record=record)
+    payload = json.loads(outcome.payload_path.read_text())
+    assert "thermo" not in payload
+    ComputedSpeciesUploadRequest.model_validate(payload)
+    [warning] = outcome.warnings
+    assert {k: warning[k] for k in ("code", "field", "context")} == _magnitude_warning()
+    assert "atom-energy corrections" in warning["message"]
+    assert "20000 kJ/mol" in warning["message"]
+    assert json.loads(outcome.sidecar_path.read_text())["warnings"] == outcome.warnings
+
+
+@pytest.mark.parametrize("record", [
+    {"h298_kj_mol": -235.1 + _UNCORRECTED_SHIFT_KJ_MOL, "s298_j_mol_k": 186.3},
+    {"thermo_points": [{"temperature_k": 300.0, "cp_j_mol_k": 35.7,
+                        "h_kj_mol": -74.8 + _UNCORRECTED_SHIFT_KJ_MOL}]},
+    _uncorrected(NASA),
+], ids=["h298", "point_h", "nasa_only"])
+def test_uncorrected_enthalpy_is_refused_from_every_source(record):
+    warnings = []
+    assert _build(record, warnings=warnings) is None
+    assert [{k: w[k] for k in ("code", "field", "context")} for w in warnings] == [
+        _magnitude_warning()]
+
+
+def test_formation_magnitude_enthalpy_passes():
+    block = _build({"h298_kj_mol": -74.9, "s298_j_mol_k": 186.3,
+                    "thermo_points": [{"temperature_k": 300.0, "h_kj_mol": -74.8}]})
+    assert block["h298_kj_mol"] == -74.9
+    assert block["enthalpy_reference_kind"] == "formation_298k"
+
+
+@pytest.mark.parametrize("h298,refused", [
+    (2.0e4, False), (-2.0e4, False), (2.0e4 + 1e-6, True), (-2.0e4 - 1e-6, True),
+])
+def test_formation_magnitude_bound_is_inclusive(h298, refused):
+    for record in ({"h298_kj_mol": h298},
+                   {"thermo_points": [{"temperature_k": 300.0, "h_kj_mol": h298}]}):
+        warnings = []
+        block = _build(record, warnings=warnings)
+        assert (block is None) is refused
+        assert [w["code"] for w in warnings] == (
+            ["enthalpy_not_formation_magnitude"] if refused else [])

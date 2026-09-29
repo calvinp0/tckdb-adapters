@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-"""Unit tests for arc.tckdb.idempotency."""
+"""Unit tests for tckdb_arc.idempotency."""
 
 import re
 import unittest

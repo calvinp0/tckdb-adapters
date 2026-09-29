@@ -79,7 +79,7 @@ def _serialize_calc_constraints(source) -> list[dict]:
     ``source`` is whatever ``arc/output.py`` attached to the record (a
     list of parser dicts) or what the caller passed explicitly. Empty /
     None / unrecognised input produces ``[]``. Wraps
-    ``arc.tckdb.constraints.serialize_constraints`` so per-calc parse
+    ``tckdb_arc.constraints.serialize_constraints`` so per-calc parse
     failures never bubble up into payload generation.
     """
     if not source:
@@ -1029,7 +1029,7 @@ class TCKDBAdapter:
         bundle-specific surface is the conformer wrapper, dependency
         edges (declared by local calc keys), inline artifacts, and the
         optional thermo block. Producer-side omissions (a thermo block the
-        shared enthalpy rule refuses) are appended to ``warnings``.
+        producer self-check refuses) are appended to ``warnings``.
         """
         included_keys, conformer_block = self._build_conformer_block(
             output_doc=output_doc,
@@ -3695,14 +3695,14 @@ class TCKDBAdapter:
         if project_dir is not None:
             input_ref = f"{project_dir}/input.yml"
             recovery_cmd = (
-                f"python -m arc.tckdb.cli {input_ref} "
+                f"tckdb-arc-upload {input_ref} "
                 f"-p {project_dir} --upload-mode {mode}"
             )
         else:
             # No project directory in scope — give the invariant shape with
             # a clear placeholder rather than a wrong absolute path.
             recovery_cmd = (
-                f"python -m arc.tckdb.cli <input.yml> --upload-mode {mode}"
+                f"tckdb-arc-upload <input.yml> --upload-mode {mode}"
             )
         logger.warning(
             "TCKDB server was not ready after %d attempts; payloads were "
@@ -4144,7 +4144,7 @@ def _preflight_sleep(seconds: float) -> None:
     """Sleep between readiness-probe retries.
 
     Thin indirection over :func:`time.sleep` so tests can patch out the
-    real backoff wait (``mock.patch('arc.tckdb.adapter._preflight_sleep')``)
+    real backoff wait (``mock.patch('tckdb_arc.adapter._preflight_sleep')``)
     and run instantly without changing the retry logic.
     """
     time.sleep(seconds)
@@ -5084,6 +5084,19 @@ _THERMO_FIELDS_BY_TARGET: dict[str, frozenset[str]] = {
 # 298.15 K, which is exactly ``formation_298k``.
 _THERMO_ENTHALPY_REFERENCE_KIND = "formation_298k"
 
+# That holds only when Arkane applied atom-energy corrections. With none
+# for the level of theory, ARC runs Arkane with useAtomCorrections=False
+# and every enthalpy (H298, NASA a6/b6, point H/G) is the raw absolute
+# energy, O(10^5) kJ/mol per heavy atom. The largest real |ΔHf| are
+# O(10^3-10^4) kJ/mol, so anything beyond this bound cannot be a
+# formation enthalpy. Interim: it misses H/H2-only species (raw energies
+# O(10^3) kJ/mol) and stands until ARC exports whether atom corrections
+# were applied.
+_FORMATION_ENTHALPY_MAX_ABS_KJ_MOL = 2.0e4
+_W_ENTHALPY_NOT_FORMATION_MAGNITUDE = "enthalpy_not_formation_magnitude"
+_GAS_CONSTANT_J_MOL_K = 8.314462618
+_T298_K = 298.15
+
 # TCKDB #529: the server never defaults ``reference_pressure_bar``. RMG's
 # ``IdealGasTranslation`` partition function hard-codes P0 = 1 atm
 # (101325 Pa), so every ARC/Arkane entropy (S298, NASA a7/b7, point S/G)
@@ -5091,26 +5104,68 @@ _THERMO_ENTHALPY_REFERENCE_KIND = "formation_298k"
 # ``thermo.standard_state_pressure_pa`` (older ARC output).
 _ARC_THERMO_REFERENCE_PRESSURE_BAR = 1.01325
 
+# Plausible standard-state pressures, in bar. Every real convention (1 bar,
+# 1 atm) sits well inside; a value in bar mistaken for Pa (1.01325 ->
+# 1e-5 bar) or a YAML boolean (True -> 1e-5 bar) falls far outside.
+_THERMO_REFERENCE_PRESSURE_WINDOW_BAR = (0.5, 2.0)
+
 
 def _thermo_reference_pressure_bar(thermo_record: Mapping[str, Any]) -> float:
     """Return the standard-state pressure (bar) ARC's entropies stand at.
 
     Current ARC records the pressure RMG applied as
-    ``standard_state_pressure_pa``; prefer it, else RMG's hard-coded 1 atm.
+    ``standard_state_pressure_pa``; prefer it when it is a real number in
+    Pa that lands inside ``_THERMO_REFERENCE_PRESSURE_WINDOW_BAR``, else
+    RMG's hard-coded 1 atm.
     """
     recorded = thermo_record.get("standard_state_pressure_pa")
     if recorded is not None:
-        try:
+        pressure_bar = math.nan
+        if isinstance(recorded, (int, float)) and not isinstance(recorded, bool):
             pressure_bar = float(recorded) / 1e5
-        except (TypeError, ValueError):
-            pressure_bar = math.nan
-        if math.isfinite(pressure_bar) and pressure_bar > 0:
+        low, high = _THERMO_REFERENCE_PRESSURE_WINDOW_BAR
+        if low <= pressure_bar <= high:
             return pressure_bar
         logger.warning(
             "TCKDB thermo: malformed standard_state_pressure_pa=%r; "
             "using RMG's hard-coded 1 atm.", recorded,
         )
     return _ARC_THERMO_REFERENCE_PRESSURE_BAR
+
+
+def _nasa_h298_kj_mol(nasa: Mapping[str, float]) -> float:
+    """Evaluate a NASA-7 block's H at 298.15 K (kJ/mol)."""
+    prefix = "a" if _T298_K <= nasa["t_mid"] else "b"
+    c = [nasa[f"{prefix}{i}"] for i in range(1, 8)]
+    t = _T298_K
+    h_rt = c[0] + c[1] * t / 2 + c[2] * t**2 / 3 + c[3] * t**3 / 4 + c[4] * t**4 / 5 + c[5] / t
+    return h_rt * _GAS_CONSTANT_J_MOL_K * t / 1000.0
+
+
+def _enthalpy_magnitude_error(block: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Refuse a block whose enthalpy is too large to be a formation enthalpy.
+
+    Checks ``h298_kj_mol``, every point ``h_kj_mol``, and the NASA fit's
+    H at 298.15 K (the only enthalpy a NASA-only block carries).
+    """
+    enthalpies = [("h298_kj_mol", block.get("h298_kj_mol"))]
+    enthalpies += [
+        (f"points[T={p['temperature_k']}].h_kj_mol", p.get("h_kj_mol"))
+        for p in block.get("points", ())
+    ]
+    if "nasa" in block:
+        enthalpies.append(("nasa H(298.15 K)", _nasa_h298_kj_mol(block["nasa"])))
+    for name, value in enthalpies:
+        if value is not None and abs(value) > _FORMATION_ENTHALPY_MAX_ABS_KJ_MOL:
+            return (
+                _W_ENTHALPY_NOT_FORMATION_MAGNITUDE,
+                f"{name}={value:.6g} kJ/mol exceeds the "
+                f"{_FORMATION_ENTHALPY_MAX_ABS_KJ_MOL:.6g} kJ/mol bound on any "
+                f"formation enthalpy, so it cannot be formation_298k. Arkane "
+                f"most likely ran without atom-energy corrections for this "
+                f"level of theory, leaving raw absolute energies.",
+            )
+    return None
 
 
 def _build_thermo_block(
@@ -5145,7 +5200,8 @@ def _build_thermo_block(
     ``enthalpy_reference_kind="formation_298k"``; entropy content (s298,
     NASA, point S or G) adds ``reference_pressure_bar``. Neither is set on
     a Cp-only block. The finished block is checked with the shared
-    ``enthalpy_reference_error`` rule; a refused block is never emitted:
+    ``enthalpy_reference_error`` rule and ``_enthalpy_magnitude_error``
+    (uncorrected Arkane energies); a refused block is never emitted:
     ``None`` is returned and the refusal is appended to ``warnings`` under
     ``warning_field``.
 
@@ -5246,14 +5302,15 @@ def _build_thermo_block(
         )
 
     # TCKDB refuses the whole upload over an incoherent enthalpy
-    # declaration. Never send a block the shared rule would refuse: drop
-    # only the thermo block (the enclosing payload stays valid without
-    # it) and record why, next to the server's own warnings.
-    refusal = enthalpy_reference_error(block)
+    # declaration. Never send a block the shared rule would refuse, nor
+    # one whose enthalpy cannot be the formation enthalpy it declares:
+    # drop only the thermo block (the enclosing payload stays valid
+    # without it) and record why, next to the server's own warnings.
+    refusal = enthalpy_reference_error(block) or _enthalpy_magnitude_error(block)
     if refusal is not None:
         code, message = refusal
         logger.warning(
-            "TCKDB thermo omitted from %s: shared enthalpy rule refused it (%s): %s",
+            "TCKDB thermo omitted from %s: producer self-check refused it (%s): %s",
             warning_field, code, message,
         )
         if warnings is not None:
