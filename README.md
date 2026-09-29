@@ -74,3 +74,10 @@ The primary path is ARC's `parser_evidence` descriptor and matching
 `parser_evidence.json` beside `output.yml`. The legacy `tckdb_evidence`
 descriptor/file remains supported. Valid sidecars supply all three evidence
 types without installing ARC or retaining raw calculation logs.
+
+### Live integration gate
+
+`tckdb_arc/tests/integration/` uploads the offline corpora to a TCKDB backend
+running on this machine and checks what it stored. It is skipped unless
+`TCKDB_INTEGRATION_URL` is set, and refuses any host other than loopback. See
+[docs/contract/INTEGRATION_GATE.md](docs/contract/INTEGRATION_GATE.md).
