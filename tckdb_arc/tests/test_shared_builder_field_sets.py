@@ -11,6 +11,7 @@ import unittest
 
 from pydantic import ValidationError as PydanticValidationError
 
+from _contract import contract_validate
 from tckdb_arc.adapter import (
     _REACTION_FLAT_RESULT_FIELDS,
     _REACTION_MODE_FIELDS_HANDLED,
@@ -178,7 +179,7 @@ class TestBuilderOutputValidatesAgainstItsOwnTargetModel(unittest.TestCase):
         )
         self.assertIsNotNone(block)
         self.assertIn("source_calculations", block, "fixture should exercise this field")
-        ThermoInBundle.model_validate(block)  # must not raise
+        contract_validate(ThermoInBundle, block)  # must not raise
 
     def test_thermo_builder_for_reaction_root_validates_as_BundleThermoIn(self):
         # The reaction root must retain links in its participant namespace.
@@ -192,7 +193,7 @@ class TestBuilderOutputValidatesAgainstItsOwnTargetModel(unittest.TestCase):
             [entry["calculation_key"] for entry in block["source_calculations"]],
             ["r0_opt", "r0_freq", "r0_sp"],
         )
-        BundleThermoIn.model_validate(block)  # must not raise
+        contract_validate(BundleThermoIn, block)  # must not raise
 
     # ---- statmech -------------------------------------------------------
 
@@ -211,7 +212,7 @@ class TestBuilderOutputValidatesAgainstItsOwnTargetModel(unittest.TestCase):
         # Exercise the maximal surface this builder can currently produce.
         for field in _STATMECH_FIELDS_BY_TARGET["StatmechInBundle"]:
             self.assertIn(field, block, f"fixture should exercise {field!r}")
-        StatmechInBundle.model_validate(block)  # must not raise
+        contract_validate(StatmechInBundle, block)  # must not raise
 
     def test_statmech_builder_for_reaction_root_validates_as_BundleStatmechIn(self):
         block = _build_statmech_block_for_species(
@@ -224,7 +225,7 @@ class TestBuilderOutputValidatesAgainstItsOwnTargetModel(unittest.TestCase):
         self.assertIsNotNone(block)
         for field in _STATMECH_FIELDS_BY_TARGET["BundleStatmechIn"]:
             self.assertIn(field, block, f"fixture should exercise {field!r}")
-        BundleStatmechIn.model_validate(block)  # must not raise
+        contract_validate(BundleStatmechIn, block)  # must not raise
 
 
 class TestCurrentThermoRootParity(unittest.TestCase):
@@ -236,7 +237,7 @@ class TestCurrentThermoRootParity(unittest.TestCase):
                 calc_keys_by_role={"opt": "r0_opt", "freq": "r0_freq", "sp": "r0_sp"},
                 target_model=target,
             )
-            result = model.model_validate(block)
+            result = contract_validate(model, block)
             self.assertEqual(len(result.source_calculations), 3)
 
 
@@ -393,7 +394,7 @@ class TestReactionResultFlatteningCompletenessGuard(unittest.TestCase):
         _flatten_result_fields(calc)
         self.assertNotIn("opt_result", calc)
         self.assertEqual(calc["opt_converged"], True)
-        ComputedReactionCalculationIn.model_validate(calc)  # must not raise
+        contract_validate(ComputedReactionCalculationIn, calc)  # must not raise
 
     def test_sp_result_builder_output_flattens_and_validates(self):
         result = _sp_result_payload(_SP_RECORD)
@@ -402,7 +403,7 @@ class TestReactionResultFlatteningCompletenessGuard(unittest.TestCase):
         calc["sp_result"] = dict(result)
         _flatten_result_fields(calc)
         self.assertNotIn("sp_result", calc)
-        ComputedReactionCalculationIn.model_validate(calc)  # must not raise
+        contract_validate(ComputedReactionCalculationIn, calc)  # must not raise
 
     def test_freq_result_builder_output_flattens_and_validates(self):
         """Maximal freq surface: two imaginary modes, a designated
@@ -426,7 +427,7 @@ class TestReactionResultFlatteningCompletenessGuard(unittest.TestCase):
         self.assertIn("freq_frequencies_cm1", calc)
         self.assertIn("freq_reaction_coordinate_mode_index", calc)
         self.assertIn("freq_imaginary_dispositions", calc)
-        ComputedReactionCalculationIn.model_validate(calc)  # must not raise
+        contract_validate(ComputedReactionCalculationIn, calc)  # must not raise
 
 
 class TestTorsionSubBlockSharedAcrossTargets(unittest.TestCase):
@@ -458,8 +459,8 @@ class TestTorsionSubBlockSharedAcrossTargets(unittest.TestCase):
         torsions = _build_slim_torsions(_STATMECH_INPUT["torsions"])
         self.assertTrue(torsions, "fixture should exercise at least one torsion")
         for entry in torsions:
-            StatmechTorsionInBundle.model_validate(entry)  # must not raise
-            BundleStatmechTorsionIn.model_validate(entry)  # must not raise
+            contract_validate(StatmechTorsionInBundle, entry)  # must not raise
+            contract_validate(BundleStatmechTorsionIn, entry)  # must not raise
 
 
 if __name__ == "__main__":

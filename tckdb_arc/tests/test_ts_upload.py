@@ -5,34 +5,19 @@
 (``TCKDBAdapter.submit_computed_ts_from_output`` +
 ``_compose_transition_state_request``, POST ``/uploads/transition-states``).
 
-The authoritative request schema (``TransitionStateUploadRequest``) lives
-backend-side in ``app.schemas.workflows.transition_state_upload`` and is
-not (yet) published in the standalone ``tckdb_schemas`` distribution the
-way ``computed_species_upload`` / ``computed_reaction_upload`` are. So the
-outer request wrapper is reconstructed here **on the real fragment
-schemas** imported from ``tckdb_schemas`` — ``CalculationWithResultsPayload``,
-``GeometryPayload``, and ``SpeciesEntryIdentityPayload`` — which carry all
-the load-bearing validation (calc result/type consistency, XYZ text,
-identity shape, ``tckdb_origin`` enum). The three thin outer classes below
-mirror the backend source verbatim (verified against
-``/uploads/transition-states``'s ``TransitionStateUploadRequest`` on the
-TCKDB Pi); update them if the backend contract changes. No network POST is
-performed — validation is purely against the pydantic schema.
+Every composed request is validated against the published
+``tckdb_schemas.workflows.transition_state_upload.TransitionStateUploadRequest``
+and against the producer contract's JSON Schema for the route (see
+``_contract.py``). No network POST is performed.
 """
 
 import copy
 import unittest
 from unittest import mock
 
-from typing import Self
-
-from pydantic import Field, model_validator
-from tckdb_schemas.common import SchemaBase
+from _contract import contract_validate
 from tckdb_schemas.enums import CalculationType
-from tckdb_schemas.fragments.calculation import CalculationWithResultsPayload
-from tckdb_schemas.fragments.geometry import GeometryPayload
-from tckdb_schemas.fragments.identity import SpeciesEntryIdentityPayload
-from tckdb_schemas.reaction_family import find_canonical_reaction_family
+from tckdb_schemas.workflows.transition_state_upload import TransitionStateUploadRequest
 
 from tckdb_arc.adapter import (
     TCKDBAdapter,
@@ -41,80 +26,6 @@ from tckdb_arc.adapter import (
 )
 from test_adapter import _aec_record, _mbac_record, _reaction_output_doc
 from tckdb_arc.config import TCKDBArtifactConfig, TCKDBConfig
-
-
-# ---------------------------------------------------------------------------
-# Reconstructed outer request schema (mirrors the backend source; the
-# fragments are the real ones from tckdb_schemas).
-# ---------------------------------------------------------------------------
-
-
-class TSReactionParticipantUpload(SchemaBase):
-    species_entry: SpeciesEntryIdentityPayload
-    note: str | None = None
-
-
-class TSReactionUpload(SchemaBase):
-    reversible: bool
-    reaction_family: str | None = None
-    reaction_family_source_note: str | None = None
-    reactants: list[TSReactionParticipantUpload] = Field(min_length=1)
-    products: list[TSReactionParticipantUpload] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def validate_reaction_family(self) -> Self:
-        if self.reaction_family is None:
-            if self.reaction_family_source_note is not None:
-                raise ValueError("reaction_family_source_note requires reaction_family.")
-            return self
-        if find_canonical_reaction_family(self.reaction_family) is None:
-            if self.reaction_family_source_note is None:
-                raise ValueError(
-                    "reaction_family_source_note is required when reaction_family "
-                    "is not a supported canonical family."
-                )
-        return self
-
-
-_ALLOWED_ADDITIONAL_TYPES = frozenset(
-    {
-        CalculationType.freq,
-        CalculationType.sp,
-        CalculationType.irc,
-        CalculationType.path_search,
-    }
-)
-
-
-class TransitionStateUploadRequest(SchemaBase):
-    reaction: TSReactionUpload
-    charge: int
-    multiplicity: int = Field(ge=1)
-    unmapped_smiles: str | None = None
-    geometry: GeometryPayload
-    primary_opt: CalculationWithResultsPayload
-    additional_calculations: list[CalculationWithResultsPayload] = Field(
-        default_factory=list
-    )
-    label: str | None = None
-    note: str | None = None
-
-    @model_validator(mode="after")
-    def validate_primary_opt_is_opt(self) -> Self:
-        if self.primary_opt.type != CalculationType.opt:
-            raise ValueError(
-                f"primary_opt must have type 'opt', got '{self.primary_opt.type.value}'."
-            )
-        return self
-
-    @model_validator(mode="after")
-    def validate_additional_calculation_types(self) -> Self:
-        for calc in self.additional_calculations:
-            if calc.type not in _ALLOWED_ADDITIONAL_TYPES:
-                raise ValueError(
-                    f"Additional calculation type '{calc.type.value}' is not allowed."
-                )
-        return self
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +68,7 @@ class TestComposeTransitionStateRequest(unittest.TestCase):
         _, _, _, payload = _compose()
         # The load-bearing assertion: the full request (real fragments)
         # validates without a network POST.
-        obj = TransitionStateUploadRequest(**payload)
+        obj = contract_validate(TransitionStateUploadRequest, payload)
         self.assertEqual(obj.primary_opt.type, CalculationType.opt)
 
     def test_primary_opt_required_and_is_opt(self):
@@ -184,7 +95,7 @@ class TestComposeTransitionStateRequest(unittest.TestCase):
         types = [c["type"] for c in payload["additional_calculations"]]
         self.assertIn("irc", types)
         # Still validates with the IRC calc attached.
-        TransitionStateUploadRequest(**payload)
+        contract_validate(TransitionStateUploadRequest, payload)
 
     def test_reaction_embedded_from_reactants_products(self):
         _, _, _, payload = _compose()
@@ -222,7 +133,7 @@ class TestComposeTransitionStateRequest(unittest.TestCase):
         )
         self.assertNotIn("reaction_family", payload["reaction"])
         self.assertNotIn("reaction_family_source_note", payload["reaction"])
-        TransitionStateUploadRequest(**payload)
+        contract_validate(TransitionStateUploadRequest, payload)
 
     def test_missing_reactant_raises(self):
         doc = copy.deepcopy(_reaction_output_doc())
@@ -250,7 +161,7 @@ class TestComposeTransitionStateRequest(unittest.TestCase):
         )
         self.assertNotIn("reaction_family", payload["reaction"])
         self.assertNotIn("reaction_family_source_note", payload["reaction"])
-        TransitionStateUploadRequest(**payload)
+        contract_validate(TransitionStateUploadRequest, payload)
 
     def test_family_whitespace_padding_stripped(self):
         # A real family with surrounding whitespace is stripped (not
@@ -264,7 +175,7 @@ class TestComposeTransitionStateRequest(unittest.TestCase):
             reaction_record=doc["reactions"][0],
         )
         self.assertEqual(payload["reaction"]["reaction_family"], "H_Abstraction")
-        TransitionStateUploadRequest(**payload)
+        contract_validate(TransitionStateUploadRequest, payload)
 
 
 class TestTSArtifactShortCircuit(unittest.TestCase):
@@ -381,7 +292,7 @@ class TestTSAppliedEnergyCorrections(unittest.TestCase):
         ]
         self.assertEqual(len(aec_debug), 1)
         # Still a valid request without the corrections.
-        TransitionStateUploadRequest(**payload)
+        contract_validate(TransitionStateUploadRequest, payload)
 
 
 class TestTSOriginKind(unittest.TestCase):
@@ -407,7 +318,7 @@ class TestTSOriginKind(unittest.TestCase):
         # The CalculationWithResultsPayload validator also runs
         # CalculationOriginMetadata.model_validate on any tckdb_origin, so
         # a full-request validation is an independent enum check.
-        TransitionStateUploadRequest(**payload)
+        contract_validate(TransitionStateUploadRequest, payload)
 
 
 class TestTSIdempotency(unittest.TestCase):
@@ -480,7 +391,7 @@ class TestTSUploadWiring(unittest.TestCase):
         # Payload lands under the transition_state subdir.
         self.assertIn("transition_state", str(outcome.payload_path))
         written = json.loads(outcome.payload_path.read_text())
-        TransitionStateUploadRequest(**written)
+        contract_validate(TransitionStateUploadRequest, written)
         # Sidecar records the standalone endpoint + kind.
         sidecar = json.loads(outcome.sidecar_path.read_text())
         self.assertEqual(sidecar["endpoint"], TRANSITION_STATE_ENDPOINT)

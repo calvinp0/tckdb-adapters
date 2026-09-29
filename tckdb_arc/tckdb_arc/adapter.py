@@ -37,6 +37,7 @@ from typing import Any, Literal
 from tckdb_client import TCKDBClient
 from tckdb_client.errors import TCKDBError
 from tckdb_schemas.enthalpy_reference import enthalpy_reference_error
+from tckdb_schemas.utils import normalize_tunneling_model
 
 from tckdb_arc._logging import get_logger
 from tckdb_arc.config import (
@@ -1031,10 +1032,14 @@ class TCKDBAdapter:
         optional thermo block. Producer-side omissions (a thermo block the
         producer self-check refuses) are appended to ``warnings``.
         """
+        # Scans ARC exported that could not be built, key -> reason; the
+        # statmech builder drops torsion links to them (``torsion_scan_not_built``).
+        unbuilt_scans: dict[str, str] = {}
         included_keys, conformer_block = self._build_conformer_block(
             output_doc=output_doc,
             species_record=species_record,
             conformer_key=conformer_key,
+            unbuilt_scans=unbuilt_scans,
         )
 
         # Additional screened conformers, if ARC surfaced them in the
@@ -1112,6 +1117,9 @@ class TCKDBAdapter:
             # This bundle's root is ComputedSpeciesUploadRequest, whose
             # statmech field is ``StatmechInBundle``.
             target_model="StatmechInBundle",
+            unbuilt_scans=unbuilt_scans,
+            warnings=warnings,
+            warning_field="statmech",
         )
         if statmech_block is not None:
             bundle["statmech"] = statmech_block
@@ -1124,8 +1132,12 @@ class TCKDBAdapter:
         output_doc: Mapping[str, Any],
         species_record: Mapping[str, Any],
         conformer_key: str,
+        unbuilt_scans: dict[str, str] | None = None,
     ) -> tuple[list[str], dict[str, Any]]:
         """Build one ConformerInBundle and return (included_calc_keys, block).
+
+        A rotor scan that cannot be built is skipped with a warning and, when
+        ``unbuilt_scans`` is given, recorded there as ``key -> reason``.
 
         The keys list is what's actually present in the bundle's calc
         namespace, used to drive thermo's source_calculations links.
@@ -1277,6 +1289,8 @@ class TCKDBAdapter:
                     "TCKDB computed-species: scan calculation %s skipped for label=%s: %s",
                     scan_key, species_record.get("label"), exc,
                 )
+                if unbuilt_scans is not None:
+                    unbuilt_scans[scan_key] = str(exc)
 
         block: dict[str, Any] = {
             "key": conformer_key,
@@ -2232,6 +2246,7 @@ class TCKDBAdapter:
                     reaction_record=reaction_record,
                     species_index=species_index,
                 ),
+                warnings=warnings,
             )
 
         # Kinetics. ARC produces at most one fit per reaction today.
@@ -2450,6 +2465,7 @@ class TCKDBAdapter:
         #    bundles must point at the conformer geometry (same reason
         #    freq/sp set it above).
         scan_key_renames: dict[str, str] = {}
+        unbuilt_scans: dict[str, str] = {}
         for scan_entry in _scan_entries_from_record(species_record):
             if not isinstance(scan_entry, Mapping):
                 continue
@@ -2487,6 +2503,7 @@ class TCKDBAdapter:
                     "TCKDB computed-reaction: %s scan calculation %s skipped: %s",
                     actor_key, original_scan_key, exc,
                 )
+                unbuilt_scans[original_scan_key] = str(exc)
 
         species_block: dict[str, Any] = {
             "key": actor_key,
@@ -2554,6 +2571,9 @@ class TCKDBAdapter:
             workflow_tool_release=_arc_workflow_tool_release(output_doc),
             target_model="BundleStatmechIn",
             scan_key_renames=scan_key_renames or None,
+            unbuilt_scans=unbuilt_scans,
+            warnings=warnings,
+            warning_field=f"species[{actor_key}].statmech",
         )
         if species_statmech is not None:
             species_block["statmech"] = species_statmech
@@ -2569,6 +2589,7 @@ class TCKDBAdapter:
         reaction_multiplicity: int | None,
         unmapped_smiles: str | None = None,
         include_artifacts: bool = True,
+        warnings: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, str]]:
         """Build one ``BundleTransitionStateIn`` dict + a calc-role → key map.
 
@@ -2794,7 +2815,12 @@ class TCKDBAdapter:
                     calc_key=ts_irc_key,
                     calc_role=_CALC_KEY_IRC,
                     calc_type="irc",
-                    level_kind="opt",  # ARC runs IRC at the opt level
+                    # ARC runs IRC at ``irc_level`` (arc/scheduler.py
+                    # ``run_irc_job``), which output.yml does not export.
+                    # Pending that export (BRIDGE_ROADMAP B3) the level is
+                    # assumed to be ``opt_level`` and every such calc is
+                    # reported (``irc_level_assumed_opt_level``, below).
+                    level_kind="opt",
                     ess_job_key="opt",
                     result_field=None,
                     result_payload=None,
@@ -2837,11 +2863,13 @@ class TCKDBAdapter:
                         irc_parsed,
                         zero_energy_reference_hartree=zero_ref,
                         ts_marker=ts_marker,
+                        warnings=warnings,
                     )
                     if irc_result is not None:
                         irc_calc["irc_result"] = irc_result
                 additional.append(irc_calc)
                 calc_keys[_CALC_KEY_IRC] = ts_irc_key
+                _warn_irc_level_assumed(warnings, irc_calc["level_of_theory"])
             except ValueError as exc:
                 logger.debug("TCKDB computed-reaction: ts irc calc skipped: %s", exc)
 
@@ -2880,6 +2908,10 @@ class TCKDBAdapter:
         # TS multiplicity: the TS record's own field is authoritative;
         # fall back to the reaction's multiplicity when missing (some
         # ARC runs only carry it on the reaction).
+        # ARC creates the TS species with the reaction's multiplicity
+        # (arc/scheduler.py ``ARCSpecies(is_ts=True, multiplicity=
+        # rxn.multiplicity, ...)``), so the reaction's value is ARC's own
+        # statement, not a default.
         ts_mult = ts_record.get("multiplicity")
         if ts_mult is None:
             ts_mult = reaction_multiplicity
@@ -2888,10 +2920,12 @@ class TCKDBAdapter:
                 f"transition state {ts_label!r} has no multiplicity and the "
                 "reaction record has none either; cannot build TS block."
             )
+        ts_mult_record = {"multiplicity": ts_mult}
 
         ts_block: dict[str, Any] = {
-            "charge": int(ts_record.get("charge", 0) or 0),
-            "multiplicity": int(ts_mult),
+            "charge": _stated_integer(ts_record, "charge", f"transition state {ts_label!r}"),
+            "multiplicity": _stated_integer(
+                ts_mult_record, "multiplicity", f"transition state {ts_label!r}", minimum=1),
             "geometry": {"key": ts_geom_key, "xyz_text": conformer_xyz_text},
             "calculation": primary_calc,
             "calculations": additional,
@@ -2949,10 +2983,12 @@ class TCKDBAdapter:
         )
         project_label = self._config.project_label or output_doc.get("project")
 
+        build_warnings: list[dict[str, Any]] = []
         payload = self._compose_transition_state_request(
             output_doc=output_doc,
             ts_record=ts_record,
             reaction_record=reaction_record,
+            warnings=build_warnings,
         )
 
         idempotency_inputs = IdempotencyInputs.from_payload(
@@ -2977,6 +3013,7 @@ class TCKDBAdapter:
             payload_kind=TRANSITION_STATE_KIND,
             base_url=self._config.base_url,
             subdir=PayloadWriter.TRANSITION_STATE_SUBDIR,
+            warnings=build_warnings,
         )
         logger.info(
             "TCKDB transition-state payload written: %s (key=%s)",
@@ -2995,8 +3032,12 @@ class TCKDBAdapter:
         output_doc: Mapping[str, Any],
         ts_record: Mapping[str, Any],
         reaction_record: Mapping[str, Any],
+        warnings: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Compose one ``TransitionStateUploadRequest`` dict.
+
+        Producer-side omissions (an IRC result whose direction ARC does not
+        state) are appended to ``warnings``.
 
         Reuses :meth:`_build_ts_block` — the same TS composer the
         computed-reaction bundle uses — for the saddle geometry and the
@@ -3061,6 +3102,7 @@ class TCKDBAdapter:
             # The standalone TS endpoint has no artifact slot — skip the
             # (potentially multi-MB) read+base64 rather than build+strip.
             include_artifacts=False,
+            warnings=warnings,
         )
 
         # Applied energy corrections travel on the TS block for the
@@ -3145,7 +3187,11 @@ class TCKDBAdapter:
         ``reversible`` is required by the schema (no default): ARC has no
         first-class per-reaction ``reversible`` attribute yet, so this
         falls back to True (the same default the computed-reaction schema
-        applies) unless the record carries an explicit value.
+        applies) unless the record carries an explicit value. Kept by
+        maintainer decision (adapter 0.6.0): refusing would block every
+        standalone TS upload, since ARC never states it. TCKDB issue
+        https://github.com/TCKDB/TCKDB/issues/583 asks the transition-state
+        route to default it like the computed-reaction route does.
         """
         reactant_labels = list(reaction_record.get("reactant_labels") or [])
         product_labels = list(reaction_record.get("product_labels") or [])
@@ -3240,26 +3286,26 @@ class TCKDBAdapter:
                 f"record rather than emit an invalid enum value or "
                 f"silently reclassify it as a minimum."
             )
-        # ARC has no excited-state workflow, so every uploaded species_entry
-        # is asserted as the electronic ground state. Sending this explicitly
-        # (rather than relying on the server's column default) keeps the
-        # payload self-describing for replay tooling and protects against
-        # silent server-default drift. The other identity-disambiguation
-        # fields (stereo_label, electronic_state_label, term_symbol[_raw],
-        # isotopologue_label) are intentionally left null: ARC has no
-        # reliable source for them, the TCKDB backend derives stereo_label
+        # ``electronic_state_kind`` is not sent (adapter 0.6.0, maintainer
+        # decision). ARC does not state it: it computes the multiplicity it
+        # was given, which need not be the ground state (singlet O2 or
+        # CH2). The field is optional, so TCKDB applies its own default
+        # rather than the adapter asserting one. The other identity-
+        # disambiguation fields (stereo_label, electronic_state_label,
+        # term_symbol[_raw], isotopologue_label) are likewise left null:
+        # ARC has no reliable source for them, the TCKDB backend derives stereo_label
         # from the uploaded 3D geometry when applicable, and the dedupe
         # uniqueness key uses ``nulls_not_distinct`` so paired nulls collapse
         # to the same row rather than fragmenting it.
         entry: dict[str, Any] = {
             "molecule_kind": "molecule",
             "smiles": smiles_text,
-            "charge": int(record.get("charge", 0) or 0),
-            "multiplicity": int(record.get("multiplicity", 1) or 1),
+            "charge": _stated_integer(record, "charge", f"species {record.get('label')!r}"),
+            "multiplicity": _stated_integer(
+                record, "multiplicity", f"species {record.get('label')!r}", minimum=1),
             # is_ts is always False here now — the raise above refuses
             # any is_ts=True record before this point.
             "species_entry_kind": "minimum",
-            "electronic_state_kind": "ground",
         }
         # Optional ``unmapped_smiles``: TCKDB carries a free-form
         # alternate identity string for cases where the primary
@@ -4384,6 +4430,38 @@ def _screened_conformer_origin() -> dict[str, Any]:
     }
 
 
+def _stated_integer(
+    record: Mapping[str, Any],
+    field: str,
+    subject: str,
+    *,
+    minimum: int | None = None,
+) -> int:
+    """Return ARC's own integer ``record[field]``, or refuse the upload.
+
+    Charge and multiplicity are required identity fields with no TCKDB
+    default, and ARC writes both for every species and TS
+    (arc/output.py ``_spc_to_dict``). A record without a usable value is
+    malformed; before adapter 0.6.0 it silently became charge 0 or a
+    singlet, which is a different species identity (a radical deposited as
+    a singlet). Raise ``ValueError`` instead: the per-record build fails
+    and the sweep reports it, like every other unbuildable record.
+    """
+    value = record.get(field)
+    usable = (
+        not isinstance(value, bool)
+        and (isinstance(value, int) or (isinstance(value, float) and value.is_integer()))
+        and (minimum is None or value >= minimum)
+    )
+    if not usable:
+        raise ValueError(
+            f"{subject}: ARC's record states no usable {field} ({value!r}). "
+            f"TCKDB requires {field} and the adapter does not default it; "
+            f"refusing to build this upload."
+        )
+    return int(value)
+
+
 def _resolve_level(
     output_doc: Mapping[str, Any], job_kind: str
 ) -> Mapping[str, Any] | None:
@@ -4397,6 +4475,16 @@ def _resolve_level(
     when the job-specific level is absent. Scans require their own level;
     ARC can run them at a different method from optimization. A present-but-distinct
     ``freq_level`` / ``sp_level`` is treated as authoritative.
+
+    The fallback follows ARC's own semantics (kept in adapter 0.6.0 by
+    maintainer decision): ARC itself sets ``freq_level = opt_level`` when a
+    frequency job is requested without one (arc/main.py
+    ``set_levels_of_theory``), and a null ``sp_level`` means no sp job was
+    requested, so ARC parses the species' electronic energy from the
+    optimization log (arc/scheduler.py: ``parse_opt_e_elect`` is called
+    when ``not self.job_types['sp']``); an ``sp_level`` equal to
+    ``opt_level`` likewise reuses the optimization output (``run_sp_job``).
+    output.yml's ``sp_energy_hartree`` is that ``e_elect``.
     """
     if job_kind in {"opt", "scan"}:
         level = output_doc.get(f"{job_kind}_level")
@@ -5132,7 +5220,20 @@ _FORMATION_ENTHALPY_MAX_ABS_KJ_MOL = 2.0e4
 _W_ENTHALPY_NOT_FORMATION_MAGNITUDE = "enthalpy_not_formation_magnitude"
 
 # Interim checks for a null or absent flag, until every run writes output.yml
-# 1.2's ``atom_corrections_applied`` (ARC PR #1059), which supersedes them:
+# 1.2's ``atom_corrections_applied`` (ARC PR #1059), which supersedes them.
+#
+# Declaring ``formation_298k`` on output without the 1.2 flags is a
+# deliberate, maintainer-approved interpretation ("option (d)"), not a
+# default filled in for a convention ARC left unstated. Arkane's corrected
+# H298 (and the NASA fit and point H/G built from it) is a formation
+# enthalpy by construction: Arkane subtracts the atom energies of the level
+# of theory and adds the elements' experimental formation enthalpies. What
+# pre-1.2 output does not record is whether that correction ran, and at
+# which level. The non-finite check is exact; the magnitude, light-species,
+# header-level and dispersion/solvation checks are heuristics that make an
+# uncorrected (or wrong-level) enthalpy very unlikely to pass, not proof that
+# the correction ran at the right level. A block failing any of them loses
+# its enthalpy content. When ARC writes the 1.2 flags, they decide instead.
 #
 # * The magnitude guard's blind spot. A species whose raw (uncorrected)
 #   total energy is below the bound looks like a formation enthalpy either
@@ -5154,40 +5255,48 @@ _HEADER_CORRECTIONS_LEVEL_SOURCE = "output_header.arkane_level_of_theory"
 _GAS_CONSTANT_J_MOL_K = 8.314462618
 _T298_K = 298.15
 
-# TCKDB #529: the server never defaults ``reference_pressure_bar``. RMG's
-# ``IdealGasTranslation`` partition function hard-codes P0 = 1 atm
-# (101325 Pa), so every ARC/Arkane entropy (S298, NASA a7/b7, point S/G)
-# stands at 1.01325 bar, never 1 bar. Used when output.yml does not record
-# ``thermo.standard_state_pressure_pa`` (older ARC output).
-_ARC_THERMO_REFERENCE_PRESSURE_BAR = 1.01325
+# TCKDB #529 and the producer contract: ``reference_pressure_bar`` is never
+# defaulted, and "if your source does not say which convention a number
+# follows, leave the field out". ARC states the standard-state pressure only
+# as ``thermo.standard_state_pressure_pa`` (arc/output.py
+# ``_thermo_to_dict``; ``None`` when the thermo did not come from a statmech
+# run that recorded one). When it is absent or unusable the adapter omits
+# ``reference_pressure_bar`` (TCKDB stores "not stated") and reports
+# ``thermo_reference_pressure_not_stated``; it never fills RMG's 1 atm in.
+_W_THERMO_REFERENCE_PRESSURE_NOT_STATED = "thermo_reference_pressure_not_stated"
 
-# Plausible standard-state pressures, in bar. Every real convention (1 bar,
-# 1 atm) sits well inside; a value in bar mistaken for Pa (1.01325 ->
-# 1e-5 bar) or a YAML boolean (True -> 1e-5 bar) falls far outside.
+# Plausible standard-state pressures, in bar: a validity check on the value
+# ARC recorded, never a source of one. Every real convention (1 bar, 1 atm)
+# sits well inside; a value in bar mistaken for Pa (1.01325 -> 1e-5 bar) or
+# a YAML boolean (True -> 1e-5 bar) falls far outside.
 _THERMO_REFERENCE_PRESSURE_WINDOW_BAR = (0.5, 2.0)
 
 
-def _thermo_reference_pressure_bar(thermo_record: Mapping[str, Any]) -> float:
-    """Return the standard-state pressure (bar) ARC's entropies stand at.
+def _thermo_reference_pressure_bar(
+    thermo_record: Mapping[str, Any],
+) -> tuple[float | None, str | None]:
+    """Return ``(pressure_bar, None)`` or ``(None, why it is not stated)``.
 
-    Current ARC records the pressure RMG applied as
-    ``standard_state_pressure_pa``; prefer it when it is a real number in
-    Pa that lands inside ``_THERMO_REFERENCE_PRESSURE_WINDOW_BAR``, else
-    RMG's hard-coded 1 atm.
+    The pressure is ARC's recorded ``standard_state_pressure_pa`` converted
+    to bar, when it is a real number in Pa inside
+    ``_THERMO_REFERENCE_PRESSURE_WINDOW_BAR``. Otherwise there is no
+    pressure, and the second item says whether ARC recorded none
+    (``not_recorded``) or an unusable one (``malformed``).
     """
     recorded = thermo_record.get("standard_state_pressure_pa")
-    if recorded is not None:
-        pressure_bar = math.nan
-        if isinstance(recorded, (int, float)) and not isinstance(recorded, bool):
-            pressure_bar = float(recorded) / 1e5
-        low, high = _THERMO_REFERENCE_PRESSURE_WINDOW_BAR
-        if low <= pressure_bar <= high:
-            return pressure_bar
-        logger.warning(
-            "TCKDB thermo: malformed standard_state_pressure_pa=%r; "
-            "using RMG's hard-coded 1 atm.", recorded,
-        )
-    return _ARC_THERMO_REFERENCE_PRESSURE_BAR
+    if recorded is None:
+        return None, "not_recorded"
+    pressure_bar = math.nan
+    if isinstance(recorded, (int, float)) and not isinstance(recorded, bool):
+        pressure_bar = float(recorded) / 1e5
+    low, high = _THERMO_REFERENCE_PRESSURE_WINDOW_BAR
+    if low <= pressure_bar <= high:
+        return pressure_bar, None
+    logger.warning(
+        "TCKDB thermo: malformed standard_state_pressure_pa=%r; "
+        "omitting reference_pressure_bar.", recorded,
+    )
+    return None, "malformed"
 
 
 def _nasa_h298_kj_mol(nasa: Mapping[str, float]) -> float:
@@ -5570,11 +5679,15 @@ def _build_thermo_block(
 
     Remaining enthalpy content adds
     ``enthalpy_reference_kind="formation_298k"``; entropy content (s298,
-    NASA, point S or G) adds ``reference_pressure_bar``. Neither is set on
-    a Cp-only block. The finished block is checked with the shared
-    ``enthalpy_reference_error`` rule; a refused block is never emitted:
-    ``None`` is returned and the refusal is appended to ``warnings`` with
-    action ``thermo_omitted``.
+    NASA, point S or G) adds ``reference_pressure_bar`` when ARC recorded
+    a usable ``standard_state_pressure_pa`` (see
+    ``_thermo_reference_pressure_bar``). Without one the field is omitted,
+    never defaulted, and ``thermo_reference_pressure_not_stated`` is
+    appended to ``warnings`` with action ``reference_pressure_omitted``;
+    the block is still sent. Neither field is set on a Cp-only block. The
+    finished block is checked with the shared ``enthalpy_reference_error``
+    rule; a refused block is never emitted: ``None`` is returned and the
+    refusal is appended to ``warnings`` with action ``thermo_omitted``.
 
     ``calc_keys_by_role`` maps roles to the actual bundle-local keys.
     Both roots accept source links; reaction participants use their own
@@ -5657,6 +5770,8 @@ def _build_thermo_block(
             _strip_enthalpy_content(block)
     keep = has_content()
 
+    # Why the entropy's standard state is not stated, when it is not.
+    pressure_unstated: str | None = None
     if keep:
         points_out = block.get("points", ())
         if _has_enthalpy_content(block):
@@ -5665,7 +5780,9 @@ def _build_thermo_block(
         if "s298_j_mol_k" in block or "nasa" in block or any(
             "s_j_mol_k" in p or "g_kj_mol" in p for p in points_out
         ):
-            block["reference_pressure_bar"] = _thermo_reference_pressure_bar(thermo_record)
+            pressure_bar, pressure_unstated = _thermo_reference_pressure_bar(thermo_record)
+            if pressure_bar is not None:
+                block["reference_pressure_bar"] = pressure_bar
 
     # Belt-and-suspenders: this is the exact bug class that motivated
     # ``target_model`` in the first place (see
@@ -5704,6 +5821,27 @@ def _build_thermo_block(
                 "field": warning_field,
                 "context": {"source": "tckdb_arc_self_check", "action": action,
                             **extra_context},
+            })
+    if keep and pressure_unstated is not None:
+        message = (
+            "ARC did not record the standard-state pressure its entropies were "
+            "computed at (thermo.standard_state_pressure_pa is "
+            + ("absent" if pressure_unstated == "not_recorded" else "not a usable pressure in Pa")
+            + "), so reference_pressure_bar is omitted and TCKDB stores it as not "
+            "stated rather than a guessed 1 atm."
+        )
+        logger.warning(
+            "TCKDB thermo %s: %s: %s",
+            warning_field, _W_THERMO_REFERENCE_PRESSURE_NOT_STATED, message,
+        )
+        if warnings is not None:
+            warnings.append({
+                "code": _W_THERMO_REFERENCE_PRESSURE_NOT_STATED,
+                "message": message,
+                "field": warning_field,
+                "context": {"source": "tckdb_arc_self_check",
+                            "action": "reference_pressure_omitted",
+                            "standard_state_pressure_pa": pressure_unstated},
             })
     return block if keep else None
 
@@ -5986,9 +6124,11 @@ def _build_freq_scale_factor_ref(
       falling back to ``arkane_level_of_theory`` when freq_level is
       absent (common single-LOT runs).
     * ``software`` ← ``freq_level.software`` (or fallback chain to opt).
-    * ``scale_kind`` ← ``"fundamental"``. ARC doesn't distinguish
-      ZPE/enthalpy/entropy/Cp scale factors today; ``fundamental`` is
-      the ``FrequencyScaleKind`` default.
+    * ``scale_kind`` ← not sent (adapter 0.6.0, maintainer decision).
+      ARC does not state what kind of factor it applied: its
+      ``data/freq_scale_factors.yml`` mixes CCCBDB fundamental factors
+      and ZPE x 1.014 harmonic ones. The field is optional, so TCKDB
+      applies its own default instead of the adapter claiming one.
     * ``note`` ← ``freq_scale_factor_source`` when present (it's a bare
       citation/URL string, not structured literature).
     * ``source_literature`` ← always ``None``. The schema explicitly
@@ -6034,7 +6174,6 @@ def _build_freq_scale_factor_ref(
 
     ref: dict[str, Any] = {
         "level_of_theory": level_of_theory,
-        "scale_kind": "fundamental",
         "value": value_f,
     }
 
@@ -6123,6 +6262,9 @@ _STATMECH_FIELDS_BY_TARGET: dict[str, frozenset[str]] = {
 }
 
 
+_W_TORSION_SCAN_NOT_BUILT = "torsion_scan_not_built"
+
+
 def _build_statmech_block_for_species(
     *,
     output_doc: Mapping[str, Any],
@@ -6131,8 +6273,20 @@ def _build_statmech_block_for_species(
     workflow_tool_release: Mapping[str, Any] | None,
     target_model: Literal["StatmechInBundle", "BundleStatmechIn"],
     scan_key_renames: Mapping[str, str] | None = None,
+    unbuilt_scans: Mapping[str, str] | None = None,
+    warnings: list[dict[str, Any]] | None = None,
+    warning_field: str = "statmech",
 ) -> dict[str, Any] | None:
     """Build a ``target_model``-shaped statmech dict, or ``None``.
+
+    ``unbuilt_scans`` maps each scan ARC exported (``rotor_scans``) that the
+    caller could not build to the reason. A torsion naming one keeps its
+    summary but loses ``source_scan_calculation_key``, which would dangle
+    and make TCKDB refuse the whole upload; each dropped link is appended
+    to ``warnings`` as ``torsion_scan_not_built``. Without the map (a
+    direct call), scans are assumed unbuilt only when the run records no
+    ``scan_level``. A reference to a scan ARC never exported is left as is,
+    so it still reaches validation.
 
     Pulls per-species statmech metadata from
     ``species_record['statmech']`` (the dict that ``arc/output.py::
@@ -6196,21 +6350,45 @@ def _build_statmech_block_for_species(
         # this adapter cannot represent, so classifying from ARC's raw input
         # can claim a rotor-aware treatment the payload has no torsions to
         # support -- which TCKDB refuses as self-contradictory.
-        # Only remove links to well-formed scans deliberately omitted for
-        # missing provenance. Unknown/malformed references still reach schema
-        # validation, rather than being silently repaired.
-        omitted_scan_keys = set()
-        if _resolve_level(output_doc, "scan") is None and isinstance(species_record, Mapping):
-            omitted_scan_keys = {
-                entry["key"] for entry in _scan_entries_from_record(species_record)
-                if entry.get("type") == _CALC_KEY_SCAN
-                and isinstance(entry.get("key"), str) and entry["key"]
-                and isinstance(entry.get("scan_result"), Mapping)
-            }
+        # Only remove links to well-formed exported scans that were not
+        # built (for any reason: no scan_level, a level without software,
+        # ...). Unknown/malformed references still reach schema validation,
+        # rather than being silently repaired.
+        exported_scan_keys = {
+            entry["key"] for entry in _scan_entries_from_record(species_record)
+            if entry.get("type") == _CALC_KEY_SCAN
+            and isinstance(entry.get("key"), str) and entry["key"]
+            and isinstance(entry.get("scan_result"), Mapping)
+        } if isinstance(species_record, Mapping) else set()
+        if unbuilt_scans is None:
+            unbuilt_scans = (
+                {key: "no scan_level recorded" for key in exported_scan_keys}
+                if _resolve_level(output_doc, "scan") is None else {}
+            )
+        omitted_scan_keys = {k: v for k, v in unbuilt_scans.items() if k in exported_scan_keys}
+        dropped_links: list[tuple[int, str]] = []
         slim_torsions = _build_slim_torsions(
             torsions_input, scan_key_renames=scan_key_renames,
-            omitted_scan_keys=omitted_scan_keys,
+            omitted_scan_keys=set(omitted_scan_keys), dropped_links=dropped_links,
         )
+        for position, scan_key in dropped_links:
+            reason = omitted_scan_keys[scan_key]
+            message = (
+                f"Torsion #{position} names scan {scan_key!r}, which ARC exported "
+                f"but the adapter could not build ({reason}); the torsion is kept "
+                f"without source_scan_calculation_key, which would otherwise name "
+                f"an undeclared calculation and refuse the whole upload."
+            )
+            logger.warning("TCKDB %s: %s: %s", warning_field, _W_TORSION_SCAN_NOT_BUILT, message)
+            if warnings is not None:
+                warnings.append({
+                    "code": _W_TORSION_SCAN_NOT_BUILT,
+                    "message": message,
+                    "field": warning_field,
+                    "context": {"source": "tckdb_arc_self_check",
+                                "action": "torsion_scan_link_omitted",
+                                "scan_key": scan_key, "reason": reason},
+                })
         treatment = _classify_statmech_treatment(
             torsions_input, emitted_torsions=slim_torsions,
         )
@@ -6353,6 +6531,7 @@ def _build_slim_torsions(
     *,
     scan_key_renames: Mapping[str, str] | None = None,
     omitted_scan_keys: set[str] | None = None,
+    dropped_links: list[tuple[int, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Build ``BundleStatmechTorsionIn`` entries, with coordinate quartets when available.
 
@@ -6466,7 +6645,10 @@ def _build_slim_torsions(
         # bundles have a single species and pass ``None``: the original
         # un-prefixed key is already unique.
         scan_key = entry.get("source_scan_key") or entry.get("source_scan_calculation_key")
-        if isinstance(scan_key, str) and scan_key and scan_key not in (omitted_scan_keys or set()):
+        if isinstance(scan_key, str) and scan_key and scan_key in (omitted_scan_keys or set()):
+            if dropped_links is not None:
+                dropped_links.append((position, scan_key))
+        elif isinstance(scan_key, str) and scan_key:
             if scan_key_renames is not None:
                 scan_key = scan_key_renames.get(scan_key, scan_key)
             slim["source_scan_calculation_key"] = scan_key
@@ -6984,7 +7166,13 @@ def _build_kinetics_block(
             logger.warning("TCKDB kinetics: malformed n=%r (%s)", n, exc)
 
     # RMG/Arkane fits A * (T/T0)**n; TCKDB evaluates a * T**n.
-    # Older exports omitted T0 entirely and used the 1 K convention.
+    # Older exports omitted T0 entirely and used the 1 K convention: their
+    # rates come from Arkane's ``Arrhenius().fit_to_data(...)``
+    # (RMG-Py arkane/kinetics.py), called without T0, whose default is
+    # T0=1 K (rmgpy/kinetics/arrhenius.pyx ``fit_to_data(..., double T0=1)``,
+    # stored as ``self.T0 = (T0, "K")``; ``Arrhenius.__init__`` also defaults
+    # T0=(1.0, "K")). Current output always writes ``T0_k``. Kept by
+    # maintainer decision (adapter 0.6.0) for pre-contract output only.
     # An explicit null/invalid T0 is unknown, not evidence for 1 K.
     if "a" in block:
         try:
@@ -7124,8 +7312,14 @@ def _build_kinetics_block(
     # Tunneling method ARC applied to the fit (currently always Eckart;
     # surfaced through output.yml so the adapter doesn't have to hardcode
     # the constant alongside the producer template). Absent → omit the
-    # field for backward compat with older output.yml versions.
-    tunneling_label = _stringify_tunneling_model(kinetics_record.get("tunneling"))
+    # field for backward compat with older output.yml versions. The
+    # contract's ``TunnelingModel`` enum holds lowercase tokens; send the
+    # token the server's own ``normalize_tunneling_model`` would store
+    # (ARC's "Eckart" is ``eckart``, an unknown label ``other``), so the
+    # payload matches the shipped JSON Schema, not just the lenient model.
+    tunneling_label = normalize_tunneling_model(
+        _stringify_tunneling_model(kinetics_record.get("tunneling"))
+    )
     if tunneling_label:
         block["tunneling_model"] = tunneling_label
 
@@ -7252,10 +7446,47 @@ def _detect_irc_direction(log_path: str) -> str | None:
     return None
 
 
+_W_IRC_DIRECTION_NOT_STATED = "irc_direction_not_stated"
+
+# ARC runs every IRC job at ``irc_level`` (arc/scheduler.py ``run_irc_job``),
+# default ``default_levels_of_theory['irc']`` (arc/main.py), and output.yml
+# does not export it. The adapter labels the IRC calculation with
+# ``opt_level``, which is right in ARC's default configuration (opt and irc
+# are both wb97xd/def2tzvp, arc/settings/settings.py) and wrong when a user
+# set ``opt_level`` without ``irc_level``. Kept, and reported on every IRC
+# calculation, until ARC exports the IRC level (BRIDGE_ROADMAP B3).
+_W_IRC_LEVEL_ASSUMED_OPT_LEVEL = "irc_level_assumed_opt_level"
+
+
+def _warn_irc_level_assumed(
+    warnings: list[dict[str, Any]] | None,
+    level_of_theory: Mapping[str, Any],
+) -> None:
+    message = (
+        "ARC does not export irc_level, so the IRC calculation is labelled with "
+        f"opt_level ({level_of_theory.get('method')}"
+        f"{'/' + str(level_of_theory['basis']) if level_of_theory.get('basis') else ''}). "
+        "That is ARC's default (opt = irc = wb97xd/def2tzvp) and is wrong when "
+        "the run set opt_level without irc_level."
+    )
+    logger.warning("TCKDB %s: %s", _W_IRC_LEVEL_ASSUMED_OPT_LEVEL, message)
+    if warnings is not None:
+        warnings.append({
+            "code": _W_IRC_LEVEL_ASSUMED_OPT_LEVEL,
+            "message": message,
+            "field": "transition_state.irc.level_of_theory",
+            "context": {"source": "tckdb_arc_self_check",
+                        "action": "level_of_theory_assumed"},
+        })
+
+
 def _build_irc_result_payload(
     trajectories: list[dict[str, Any]],
     zero_energy_reference_hartree: float | None = None,
     ts_marker: Mapping[str, Any] | None = None,
+    *,
+    warnings: list[dict[str, Any]] | None = None,
+    warning_field: str = "transition_state.irc_result",
 ) -> dict[str, Any] | None:
     """Build a TCKDB ``IRCResultPayload``-shaped dict from parsed trajectories.
 
@@ -7299,6 +7530,13 @@ def _build_irc_result_payload(
     Ordering: the marker is *appended* rather than inserted between
     branches, so existing trajectory indices stay stable and ARC's
     ESS-emitted trajectory order is not reshuffled.
+
+    ``direction`` is required by ``IRCResultPayload``. When any point's
+    direction is unknown (no ``irc_log_directions`` entry, no per-point
+    direction from the parser, no filename naming one), ARC's output does
+    not state the run mode, so no result is built: ``None`` is returned and
+    ``irc_direction_not_stated`` is appended to ``warnings`` under
+    ``warning_field`` (the caller keeps the ``irc`` calculation itself).
     """
     if not trajectories:
         return None
@@ -7312,6 +7550,8 @@ def _build_irc_result_payload(
     points: list[dict[str, Any]] = []
     has_forward = False
     has_reverse = False
+    # Trajectory points whose branch no source states.
+    unstated_points = 0
     for traj in trajectories:
         traj_direction = traj.get("direction")
         rich_points = traj.get("rich_points") or []
@@ -7353,6 +7593,8 @@ def _build_irc_result_payload(
                 has_forward = True
             elif direction == _IRC_DIRECTION_REVERSE:
                 has_reverse = True
+            else:
+                unstated_points += 1
             point: dict[str, Any] = {"point_index": len(points)}
             if direction in (_IRC_DIRECTION_FORWARD, _IRC_DIRECTION_REVERSE):
                 point["direction"] = direction
@@ -7390,20 +7632,39 @@ def _build_irc_result_payload(
             points.append(point)
     if not points:
         return None
+    if unstated_points:
+        # A branch whose direction no source states. ARC runs every IRC job
+        # in one direction (arc/job/adapters/common.py refuses an irc job
+        # without 'forward' or 'reverse') and current output records it as
+        # ``irc_log_directions``; without that (older runs pad the list
+        # with None), a parsed per-point direction or a filename naming
+        # one, which branch those points lie on is unknown. The run mode
+        # (``direction``, required) and ``has_forward``/``has_reverse``
+        # would both be guesses, so refuse the block rather than claim
+        # ``both`` or file the unlabelled points under the other branch.
+        message = (
+            f"{unstated_points} of {len(points)} IRC point(s) from the "
+            f"{len(trajectories)} IRC log(s) have no stated direction (no "
+            f"irc_log_directions entry, no per-point direction, no forward/"
+            f"reverse filename), and IRCResultPayload.direction is required, "
+            f"so the IRC result is omitted; the irc calculation is still sent."
+        )
+        logger.warning("TCKDB %s: %s: %s", warning_field, _W_IRC_DIRECTION_NOT_STATED, message)
+        if warnings is not None:
+            warnings.append({
+                "code": _W_IRC_DIRECTION_NOT_STATED,
+                "message": message,
+                "field": warning_field,
+                "context": {"source": "tckdb_arc_self_check",
+                            "action": "irc_result_omitted"},
+            })
+        return None
     if has_forward and has_reverse:
         overall = _IRC_DIRECTION_BOTH
     elif has_forward:
         overall = _IRC_DIRECTION_FORWARD
-    elif has_reverse:
-        overall = _IRC_DIRECTION_REVERSE
     else:
-        # Direction couldn't be detected from filenames. The schema
-        # requires a direction enum value — default to ``both`` since
-        # ARC's invariant is that any IRC run with multiple logs covers
-        # both branches. With a single unlabeled log we still pick
-        # ``both`` rather than guessing one side; the per-point
-        # direction is simply omitted.
-        overall = _IRC_DIRECTION_BOTH
+        overall = _IRC_DIRECTION_REVERSE
 
     # TS marker: synthesized point identifying the optimized saddle the
     # IRC was seeded from. ``direction`` is intentionally omitted (the
@@ -7899,8 +8160,10 @@ def _build_path_search_result_payload(
     # spans < ``_GSM_STRINGFILE_ENERGY_EPS`` is the "no energy emitted"
     # sentinel — we leave relative energies null rather than upload a
     # fabricated flat-zero profile. When a build *does* emit energies,
-    # this populates ``relative_energy_kj_mol`` for every node and marks
-    # the peak node ``is_climbing_image``.
+    # this populates ``relative_energy_kj_mol`` for every node. The peak
+    # node is not marked ``is_climbing_image``: the contract defines that
+    # flag for NEB-CI images (string methods ignore it), and the highest
+    # node of a string is not evidence that a climbing image was run.
     if zero_e_h is None and not any(e is not None for e in energies) and method == "gsm":
         if gsm_evidence is not None:
             rel_kcal = [evidence_relative_kcal.get(p["point_index"]) for p in points]
@@ -7928,19 +8191,15 @@ def _build_path_search_result_payload(
                         p["relative_energy_kj_mol"] = (
                             (v - base_kcal) * _KCAL_MOL_TO_KJ_MOL
                         )
-                    peak_pos = max(
-                        range(len(vals)), key=lambda k: vals[k],
-                    )
-                    points[peak_pos]["is_climbing_image"] = True
 
+    # ``converged`` (optional) is omitted: ARC records no convergence
+    # verdict for a path search. ``TSGuess.success`` and ``log_path`` mean
+    # only that the output file exists (arc/job/adapters/ts/xtb_gsm.py and
+    # orca_neb.py ``process_run``), not that the string or band converged,
+    # and the contract asks a producer to leave out what its source does
+    # not state.
     payload: dict[str, Any] = {
         "method": method,
-        # ``converged: True`` is reliable here — the caller's gate
-        # only invokes this builder when the chosen TSGuess has a
-        # ``log_path``, which the producer sets only on
-        # ``tsg.success=True`` (see ``xtb_gsm.process_run`` /
-        # ``orca_neb`` adapters).
-        "converged": True,
         "n_points": len(points),
         "points": points,
     }

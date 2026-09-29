@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 from unittest import mock
 
+from _contract import contract_validate
 import pytest
 import yaml
 
@@ -54,7 +55,7 @@ def _submit(tmp_path, doc, record):
         outcome = _adapter(tmp_path).submit_computed_species_from_output(
             output_doc=doc, species_record=record)
     payload = json.loads(outcome.payload_path.read_text())
-    ComputedSpeciesUploadRequest.model_validate(payload)
+    contract_validate(ComputedSpeciesUploadRequest, payload)
     assert json.loads(outcome.sidecar_path.read_text())["warnings"] == outcome.warnings
     return payload.get("thermo"), outcome.warnings
 
@@ -76,7 +77,7 @@ def _expected_stripped(thermo):
 def _assert_stripped_block_is_valid(block):
     assert enthalpy_reference_error(block) is None
     for _target, model in TARGETS:
-        model.model_validate(block)
+        contract_validate(model, block)
 
 
 def _warning(code, action="thermo_enthalpy_omitted", field="thermo"):
@@ -272,7 +273,7 @@ def test_stripped_blocks_validate_for_both_roots(label, target, model):
     assert block == _expected_stripped(thermo) | {
         "source_calculations": [{"calculation_key": "r0_opt", "role": "opt"}]}
     assert enthalpy_reference_error(block) is None
-    model.model_validate(block)
+    contract_validate(model, block)
 
 
 def test_reaction_participant_warning_carries_its_field(tmp_path):
@@ -303,7 +304,7 @@ def test_entropy_free_stripped_block_keeps_cp_without_pressure():
          "thermo_points": [{"temperature_k": 300.0, "cp_j_mol_k": 20.8, "h_kj_mol": -1306.5}]},
         calc_keys_by_role={}, target_model="ThermoInBundle")
     assert block == {"points": [{"temperature_k": 300.0, "cp_j_mol_k": 20.8}]}
-    ThermoInBundle.model_validate(block)
+    contract_validate(ThermoInBundle, block)
 
 
 def test_bond_correction_flag_does_not_gate_enthalpy():

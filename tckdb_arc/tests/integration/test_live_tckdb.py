@@ -260,7 +260,15 @@ def test_golden_species_calculations_thermo_and_hessian(live_tckdb, tmp_path):
     assert thermo["nasa"] is None
     assert thermo["s298_j_mol_k"] == pytest.approx(source["s298_j_mol_k"])
     assert (thermo["tmin_k"], thermo["tmax_k"]) == (source["tmin_k"], source["tmax_k"])
-    assert thermo["reference_pressure_bar"] == pytest.approx(1.01325)
+    # The golden output.yml records no standard_state_pressure_pa, so the
+    # adapter omits reference_pressure_bar (never defaulting RMG's 1 atm)
+    # and TCKDB stores the entropy's pressure as not stated.
+    assert "standard_state_pressure_pa" not in source
+    assert "reference_pressure_bar" in thermo
+    assert thermo["reference_pressure_bar"] is None
+    unstated = "thermo_reference_pressure_not_stated"
+    assert unstated in _codes(outcomes["H2"].warnings)
+    assert unstated in _codes(json.loads(outcomes["H2"].sidecar_path.read_text())["warnings"])
     assert [(p["temperature_k"], p["cp_j_mol_k"], p["s_j_mol_k"], p["h_kj_mol"], p["g_kj_mol"])
             for p in thermo["points"]] == [
         (p["temperature_k"], p["cp_j_mol_k"], p["s_j_mol_k"], None, None)
@@ -293,7 +301,9 @@ def test_arc_1_2_formation_enthalpy_kept_or_stripped_to_s_cp(live_tckdb, tmp_pat
     assert set(outcomes) == ENTHALPY_KEPT | set(ENTHALPY_STRIPPED)
     for label, outcome in outcomes.items():
         thermo = live_tckdb.get(f"/thermo/{_uploaded(live_tckdb, outcome)['thermo']['thermo_id']}")
+        # ARC 1.2 records standard_state_pressure_pa = 101325 Pa: stated, so sent.
         assert thermo["reference_pressure_bar"] == pytest.approx(1.01325), label
+        assert "thermo_reference_pressure_not_stated" not in _codes(outcome.warnings), label
         assert thermo["s298_j_mol_k"] is not None, label
         assert all(p["s_j_mol_k"] is not None and p["cp_j_mol_k"] is not None
                    for p in thermo["points"]), label
@@ -502,7 +512,7 @@ def test_artifact_sidecars_capture_server_warnings(live_tckdb, tmp_path):
     assert all(sc.get("warnings") for sc in sidecars), [sc.get("warnings") for sc in sidecars]
 
 
-# tckdb-client 0.93's upload_artifacts keeps only the response body, so the
+# tckdb-client's (0.93–0.95) upload_artifacts keeps only the response body, so the
 # adapter's status/request-id/replay helpers always read None.
 _TRANSPORT_FIELDS = {  # field -> (sidecar value, is it right)
     "status_code": (lambda sc: sc.get("response_status_code"), lambda v: v in (200, 201)),

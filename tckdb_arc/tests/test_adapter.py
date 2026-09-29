@@ -17,6 +17,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from _contract import contract_validate
 from tckdb_arc.adapter import (
     ARTIFACTS_ENDPOINT_TEMPLATE,
     ArtifactUploadOutcome,
@@ -1258,7 +1259,7 @@ class TestAdditionalCalculations(unittest.TestCase):
         self.assertAlmostEqual(sp["spin_diagnostic"]["s_squared_annihilated"], 2.0001)
         # Full-payload validation against the installed tckdb-schemas.
         from tckdb_schemas.fragments.calculation import CalculationWithResultsPayload
-        model = CalculationWithResultsPayload.model_validate(sp)
+        model = contract_validate(CalculationWithResultsPayload, sp)
         self.assertAlmostEqual(model.spin_diagnostic.s_squared, 2.0153)
 
     def test_sp_spin_diagnostic_minimal_only_s_squared(self):
@@ -1429,7 +1430,7 @@ class TestAdditionalCalculations(unittest.TestCase):
             [m["is_imaginary"] for m in modes], [True, False, False, False],
         )
         self.assertNotIn("reaction_coordinate_mode_index", result)
-        FreqResultPayload(**result)
+        contract_validate(FreqResultPayload, result)
 
     def test_freq_modes_only_record_still_emits_freq_calc(self):
         """When only statmech.harmonic_frequencies_cm1 is populated (no
@@ -1779,6 +1780,10 @@ def _full_record():
         "s298_j_mol_k": 282.6,
         "tmin_k": 100.0,
         "tmax_k": 5000.0,
+        # Current ARC records the standard state RMG's partition function
+        # used (arc/output.py ``_thermo_to_dict``); older output does not,
+        # and the adapter then omits reference_pressure_bar.
+        "standard_state_pressure_pa": 101325.0,
         "nasa_low": {
             "tmin_k": 100.0,
             "tmax_k": 1000.0,
@@ -1862,15 +1867,13 @@ class TestComputedSpeciesBundle(unittest.TestCase):
         self.assertEqual(len(payload["conformers"]), 1)
         self.assertEqual(payload["conformers"][0]["key"], "conf0")
 
-    def test_species_entry_asserts_ground_electronic_state(self):
-        """ARC has no excited-state workflow, so every uploaded
-        species_entry must explicitly declare ``electronic_state_kind:
-        ground``. Sending it explicitly (rather than relying on the TCKDB
-        column server_default) keeps replay payloads self-describing."""
+    def test_species_entry_does_not_assert_an_electronic_state(self):
+        """ARC does not state the electronic state (it computes the
+        multiplicity it was given, which need not be the ground state), so
+        ``electronic_state_kind`` is omitted and TCKDB applies its own
+        default (maintainer decision, adapter 0.6.0)."""
         _, _, payload = self._submit()
-        self.assertEqual(
-            payload["species_entry"]["electronic_state_kind"], "ground"
-        )
+        self.assertNotIn("electronic_state_kind", payload["species_entry"])
 
     def test_species_entry_omits_unsupported_identity_fields(self):
         """ARC has no honest source for stereo_label, electronic_state_label,
@@ -2599,7 +2602,7 @@ class TestComputedSpeciesBundle(unittest.TestCase):
         # local fixture asserts don't surface.
         record = self._record_with_alt_conformers()
         _, _, payload = self._submit(record=record)
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
     def test_no_conformers_field_preserves_single_conformer_behavior(self):
         # Records without a ``conformers`` field (older output.yml) must
@@ -3026,7 +3029,7 @@ class TestComputedSpeciesBundle(unittest.TestCase):
         # Native hartree/bohr²: N-H stretch diagonal ~0.39, never ~1e3 (SI J/m²).
         self.assertLess(max(abs(v) for v in triangle), 5.0)
         # The attached hessian dict validates under the TCKDB schema.
-        payload_obj = HessianPayload(**hessian)
+        payload_obj = contract_validate(HessianPayload, hessian)
         self.assertEqual(payload_obj.source, HessianSource.parsed_log)
         # Cartesian Hessians must use their parser frame, independently of
         # the conformer's orientation.
@@ -3520,9 +3523,7 @@ class TestChargePropagation(unittest.TestCase):
     def test_species_entry_payload_anion(self):
         record = _fake_record(smiles="[OH-]", charge=-1, multiplicity=1)
         payload = TCKDBAdapter._species_entry_payload(record)
-        # Negative ints are truthy, so the ``or 0`` guard inside the
-        # helper must NOT collapse a -1 to 0. This is the regression
-        # this case pins down.
+        # A negative charge must survive as itself, never collapse to 0.
         self.assertEqual(payload["charge"], -1)
         self.assertEqual(payload["multiplicity"], 1)
 
@@ -3534,14 +3535,52 @@ class TestChargePropagation(unittest.TestCase):
         self.assertEqual(payload["charge"], 1)
         self.assertEqual(payload["multiplicity"], 2)
 
-    def test_species_entry_payload_none_charge_defaults_to_zero(self):
-        # Defensive: ARCSpecies never lets charge stay None at write
-        # time (species.py:493 fills 0), but a hand-edited output.yml
-        # could. The helper must coerce None → 0 rather than crash.
-        record = _fake_record(smiles="CC", charge=0, multiplicity=1)
-        record["charge"] = None
+    def test_species_entry_payload_refuses_unstated_charge_or_multiplicity(self):
+        # ARC writes charge and multiplicity for every record
+        # (arc/output.py ``_spc_to_dict``); a record without a usable value
+        # is malformed. TCKDB requires both with no default, and a
+        # defaulted 0 / singlet is a different identity (a radical filed as
+        # a singlet), so the adapter refuses instead of filling one in.
+        for field, bad in (("charge", None), ("charge", "1"), ("charge", True),
+                           ("charge", 0.5), ("multiplicity", None),
+                           ("multiplicity", 0), ("multiplicity", "2")):
+            with self.subTest(field=field, value=bad):
+                record = _fake_record(smiles="[CH3]", charge=0, multiplicity=2)
+                record[field] = bad
+                with self.assertRaises(ValueError) as ctx:
+                    TCKDBAdapter._species_entry_payload(record)
+                self.assertIn(f"states no usable {field}", str(ctx.exception))
+        for field in ("charge", "multiplicity"):
+            with self.subTest(field=field, value="absent"):
+                record = _fake_record(smiles="[CH3]", charge=0, multiplicity=2)
+                del record[field]
+                with self.assertRaises(ValueError):
+                    TCKDBAdapter._species_entry_payload(record)
+        # An integral float is ARC's integer written through YAML.
+        record = _fake_record(smiles="[CH3]", charge=0.0, multiplicity=2.0)
         payload = TCKDBAdapter._species_entry_payload(record)
-        self.assertEqual(payload["charge"], 0)
+        self.assertEqual((payload["charge"], payload["multiplicity"]), (0, 2))
+
+    def test_unstated_charge_refuses_the_upload_not_the_sweep(self):
+        # Species and TS both: the per-record build fails (the sweep's
+        # existing channel counts and logs it), nothing is written.
+        cfg = TCKDBConfig(
+            enabled=True, base_url="http://localhost:8000/api/v1",
+            payload_dir=self.tmp, api_key_env="X_TCKDB_API_KEY",
+            project_label="proj-charge", upload_mode="computed_reaction",
+        )
+        adapter = TCKDBAdapter(cfg, client_factory=lambda c, k: _StubClient())
+        for target in ("species", "transition_state"):
+            with self.subTest(target=target):
+                doc = _reaction_output_doc()
+                if target == "species":
+                    doc["species"][0].pop("charge")
+                else:
+                    doc["transition_states"][0]["charge"] = None
+                with self.assertRaises(ValueError) as ctx:
+                    adapter.submit_computed_reaction_from_output(
+                        output_doc=doc, reaction_record=doc["reactions"][0])
+                self.assertIn("states no usable charge", str(ctx.exception))
 
     def test_species_entry_payload_refuses_is_ts_record(self):
         """D2: applying the same standard as ``_freq_result_payload``'s
@@ -3691,7 +3730,8 @@ class TestComputedSpeciesStatmechFreqScaleFactor(unittest.TestCase):
         self.assertIn("freq_scale_factor", sm)
         fsf = sm["freq_scale_factor"]
         self.assertAlmostEqual(fsf["value"], 0.961)
-        self.assertEqual(fsf["scale_kind"], "fundamental")
+        # ARC does not state the factor's kind; TCKDB applies its default.
+        self.assertNotIn("scale_kind", fsf)
         self.assertEqual(fsf["level_of_theory"]["method"], "wb97xd")
         self.assertEqual(fsf["level_of_theory"]["basis"], "def2-tzvp")
         self.assertEqual(fsf["software"], {"name": "gaussian"})
@@ -3839,7 +3879,7 @@ class TestComputedSpeciesStatmechFreqScaleFactor(unittest.TestCase):
         _, payload = self._build_payload(self._doc_with_fsf())
         # Sanity: the field is populated, not just bypassed.
         self.assertTrue(payload["statmech"]["freq_scale_factor"]["value"])
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
 
 class TestComputedSpeciesStatmechBaseFields(unittest.TestCase):
@@ -4115,7 +4155,7 @@ class TestComputedSpeciesStatmechBaseFields(unittest.TestCase):
         # Rotor #3 keeps index 3, not 2.
         self.assertEqual(torsions[1]["torsion_index"], 3)
         self.assertEqual(torsions[1]["treatment_kind"], "free_rotor")
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
     # ---------------- coordinate definitions (1D, ND, malformed)
     def test_torsion_coordinates_emitted_for_1d(self):
@@ -4289,7 +4329,7 @@ class TestComputedSpeciesStatmechBaseFields(unittest.TestCase):
     # ---------------- 17: live schema validation
     def test_payload_validates_against_tckdb_schema(self):
         _, payload = self._submit(doc=self._doc(), record=self._record_with_statmech())
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
 
 class TestScanCalculations(unittest.TestCase):
@@ -4460,7 +4500,11 @@ class TestScanCalculations(unittest.TestCase):
         torsion = payload["statmech"]["torsions"][0]
         self.assertNotIn("source_scan_calculation_key", torsion)
 
+    @pytest.mark.payload_refused_by_contract
     def test_no_scan_calcs_when_additional_calculations_empty(self):
+        # The record's torsion still names scan_rotor_0, which is no longer
+        # emitted; the adapter forwards the dangling reference unrepaired
+        # and TCKDB refuses it (statmech torsion scan key undeclared).
         record = self._record_with_scan()
         record["additional_calculations"] = []
         _, _, payload = self._submit(record=record)
@@ -4499,7 +4543,7 @@ class TestScanCalculations(unittest.TestCase):
     # ---- 5: payload validates against the live TCKDB schema
     def test_payload_validates_against_live_schema(self):
         _, _, payload = self._submit(record=self._record_with_scan())
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
     # ---- 6: per-point scan geometries flow through unchanged.
     #
@@ -4535,7 +4579,7 @@ class TestScanCalculations(unittest.TestCase):
         _, _, payload = self._submit(record=self._record_with_scan_geometries())
         # Server's CalculationScanPointPayload now accepts inline
         # ``geometry: GeometryPayload | None`` — the bundle must validate.
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
 
 class TestComputedReactionStatmechBaseFields(unittest.TestCase):
@@ -4722,7 +4766,7 @@ class TestComputedReactionStatmechBaseFields(unittest.TestCase):
     # ---------------- 18: live schema validation
     def test_payload_validates_against_tckdb_schema(self):
         _, payload = self._submit(doc=self._doc_with_statmech_and_fsf())
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
 
 class TestFreqNImagSpeciesEntryKindConsistency(unittest.TestCase):
@@ -4866,7 +4910,7 @@ class TestFreqNImagSpeciesEntryKindConsistency(unittest.TestCase):
         )
         self.assertEqual(freq["freq_reaction_coordinate_mode_index"], 1)
         # Would have raised CodedValidationError pre-fix.
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_ts_two_imaginary_modes_designates_without_statmech_harmonic_frequencies(self):
         """D4(a): n_imag=2 with NO statmech.harmonic_frequencies_cm1 at all.
@@ -4894,7 +4938,7 @@ class TestFreqNImagSpeciesEntryKindConsistency(unittest.TestCase):
         self.assertEqual(freq["freq_n_imag"], 2)
         self.assertEqual(freq["freq_frequencies_cm1"], [-1320.5, -30.0])
         self.assertEqual(freq["freq_reaction_coordinate_mode_index"], 1)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_ts_designates_reaction_coordinate_when_harmonic_frequencies_already_include_imaginary_modes(self):
         """D1: designation must run whenever n_imag > 1, independent of
@@ -4939,7 +4983,7 @@ class TestFreqNImagSpeciesEntryKindConsistency(unittest.TestCase):
         # have raised transition_state_reaction_coordinate_not_designated.
         self.assertEqual(freq["freq_reaction_coordinate_mode_index"], 1)
         self.assertEqual(freq["freq_imaginary_dispositions"], {"2": "unassigned"})
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_ts_designates_window_mode_over_a_stiffer_artifact(self):
         """D5: designation follows ARC's (75, 10000) cm-1 window, not
@@ -4983,7 +5027,7 @@ class TestFreqNImagSpeciesEntryKindConsistency(unittest.TestCase):
         # D4: the excluded artifact (mode 1) is declared, not left
         # undeclared; the designated mode (mode 2) is not.
         self.assertEqual(freq["freq_imaginary_dispositions"], {"1": "unassigned"})
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_removing_freq_imaginary_dispositions_would_fail_validation(self):
         """D4: prove ``freq_imaginary_dispositions`` is load-bearing, not
@@ -5015,13 +5059,13 @@ class TestFreqNImagSpeciesEntryKindConsistency(unittest.TestCase):
         self.assertEqual(dispositions, {"1": "unassigned"})
 
         with self.assertRaises(Exception) as ctx:
-            ComputedReactionUploadRequest.model_validate(payload)
+            contract_validate(ComputedReactionUploadRequest, payload)
         self.assertIn(
             "transition_state_reaction_coordinate_ambiguous", str(ctx.exception),
         )
 
         freq["freq_imaginary_dispositions"] = dispositions
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_ts_two_in_window_candidates_designates_larger_magnitude(self):
         """D5: two DISTINCT-magnitude candidates both inside ARC's (75,
@@ -5051,7 +5095,7 @@ class TestFreqNImagSpeciesEntryKindConsistency(unittest.TestCase):
         self.assertEqual(freq["freq_reaction_coordinate_mode_index"], 1)
         self.assertEqual(freq["freq_imag_freq_cm1"], -1320.5)
         self.assertEqual(freq["freq_imaginary_dispositions"], {"2": "unassigned"})
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_ts_degenerate_pair_refused_as_ambiguous(self):
         """D5: a degenerate pair sharing one magnitude, both inside ARC's
@@ -5300,16 +5344,12 @@ class TestComputedReactionBundle(unittest.TestCase):
         species_keys = sorted(s["key"] for s in payload["species"])
         self.assertEqual(species_keys, ["p0_CH2O", "p1_CH3", "r0_CHO", "r1_CH4"])
 
-    def test_reaction_species_entries_assert_ground_state(self):
-        """Reaction-bundle species_entry blocks must carry the same
-        explicit ``electronic_state_kind: ground`` assertion as the
-        conformer-bundle path; both go through ``_species_entry_payload``
-        and replay tooling shouldn't have to special-case the bundle kind."""
+    def test_reaction_species_entries_do_not_assert_an_electronic_state(self):
+        """Reaction-bundle species_entry blocks omit ``electronic_state_kind``
+        like the species bundle; both go through ``_species_entry_payload``."""
         _, _, payload = self._submit()
         for sp in payload["species"]:
-            self.assertEqual(
-                sp["species_entry"]["electronic_state_kind"], "ground"
-            )
+            self.assertNotIn("electronic_state_kind", sp["species_entry"])
             for absent in (
                 "stereo_label",
                 "electronic_state_label",
@@ -5562,7 +5602,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         # If any torsion's source_scan_calculation_key still dangled,
         # this validator (computed_reaction_upload.py:840-848) would
         # raise — exactly the 422 we hit in the field.
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     # ---------------- 3b: per-point scan geometries flow through to the bundle
     def test_scan_point_geometries_pass_through_in_reaction_bundle(self):
@@ -5688,7 +5728,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         _, _, payload = self._submit()
         # Sanity: the field is populated, not just bypassed.
         self.assertTrue(payload["transition_state"].get("unmapped_smiles"))
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_ts_block_includes_irc_when_present(self):
         doc = _reaction_output_doc(with_irc=True)
@@ -5724,7 +5764,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         self.assertEqual(kin["product_keys"], ["p0_CH2O", "p1_CH3"])
         # And the whole bundle satisfies the real validator, not just a
         # dict-shape assertion.
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     # ---------------- C-4 / adversarial-review D1: A/Ea with no usable
     # unit must never be deposited as a bare (unitless) magnitude — see
@@ -5755,7 +5795,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         self.assertAlmostEqual(kin["n"], 4.37949)
         self.assertAlmostEqual(kin["reported_ea"], 78.9012)
         self.assertEqual(kin["reported_ea_units"], "kj_mol")
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_kinetics_a_units_missing_omits_a_and_keeps_rest(self):
         # A present, A_units absent entirely — same defect as an
@@ -5768,7 +5808,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         kin = payload["kinetics"][0]
         self.assertNotIn("a", kin)
         self.assertNotIn("a_units", kin)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_kinetics_a_units_explicit_null_omits_a_and_keeps_rest(self):
         # D1 repro: ARC's documented, deliberate ``A_units: null`` shape
@@ -5780,7 +5820,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         self.assertNotIn("a", kin)
         self.assertNotIn("a_units", kin)
         self.assertAlmostEqual(kin["reported_ea"], 78.9012)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_kinetics_ea_units_unrecognized_omits_ea_and_keeps_rest(self):
         rxn = _reaction_record()
@@ -5793,7 +5833,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         self.assertNotIn("reported_ea_units", kin)
         self.assertAlmostEqual(kin["a"], 0.204298)
         self.assertEqual(kin["a_units"], "cm3_mol_s")
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_kinetics_ea_units_missing_omits_ea_and_keeps_rest(self):
         rxn = _reaction_record()
@@ -5802,7 +5842,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         kin = payload["kinetics"][0]
         self.assertNotIn("reported_ea", kin)
         self.assertNotIn("reported_ea_units", kin)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_kinetics_a_present_n_and_ea_absent_still_omits_bad_a_units(self):
         # The omit-not-raise behavior must fire even when A is the only
@@ -5817,7 +5857,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         kin = payload["kinetics"][0]
         self.assertNotIn("a", kin)
         self.assertNotIn("a_units", kin)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_kinetics_recognized_units_do_not_omit_and_validate(self):
         # Control case: a fully-recognized unit pair still builds and
@@ -5829,7 +5869,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         self.assertIn("a_units", kin)
         self.assertIn("reported_ea", kin)
         self.assertIn("reported_ea_units", kin)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_kinetics_a_units_null_reaction_still_uploads_species_ts_geometry(self):
         # D1: the defect under review was that an unresolvable A unit
@@ -5873,26 +5913,29 @@ class TestComputedReactionBundle(unittest.TestCase):
         self.assertNotIn("a_units", kin)
         self.assertAlmostEqual(kin["reported_ea"], 78.9012)
 
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     # ---------------- tunneling_model passthrough
     def test_kinetics_tunneling_model_passes_through(self):
         # output.yml records the tunneling method ARC asked Arkane to
-        # apply (currently always Eckart). The adapter must surface it
-        # verbatim as ``tunneling_model`` on the BundleKineticsIn so the
-        # DB row records which correction was applied to A/n/Ea.
+        # apply (currently always Eckart). The adapter surfaces it as
+        # ``tunneling_model`` on the BundleKineticsIn so the DB row records
+        # which correction was applied to A/n/Ea, spelled as the
+        # contract's ``TunnelingModel`` token (the value the server stores).
         _, _, payload = self._submit()
-        self.assertEqual(payload["kinetics"][0]["tunneling_model"], "Eckart")
+        self.assertEqual(payload["kinetics"][0]["tunneling_model"], "eckart")
 
     def test_kinetics_tunneling_model_arbitrary_value(self):
-        # No allowlist on the producer side — TCKDB's tunneling_model is
-        # a free-form str | None (computed_reaction_upload.py:463). If a
-        # future ARC config switches to Wigner / Skodje-Truhlar / etc.,
-        # the adapter must pass it through unchanged.
-        rxn = _reaction_record()
-        rxn["kinetics"]["tunneling"] = "Wigner"
-        _, _, payload = self._submit(reaction=rxn)
-        self.assertEqual(payload["kinetics"][0]["tunneling_model"], "Wigner")
+        # TCKDB's tunneling_model is the ``TunnelingModel`` enum (none,
+        # wigner, eckart, sct, other). A known method maps to its token;
+        # one the enum does not name is ``other``, exactly as the server's
+        # ``normalize_tunneling_model`` would store it.
+        for arc_value, token in (("Wigner", "wigner"), ("Skodje-Truhlar", "other")):
+            with self.subTest(arc_value=arc_value):
+                rxn = _reaction_record()
+                rxn["kinetics"]["tunneling"] = arc_value
+                _, _, payload = self._submit(reaction=rxn)
+                self.assertEqual(payload["kinetics"][0]["tunneling_model"], token)
 
     def test_kinetics_tunneling_field_omitted_when_absent(self):
         # Backward compat: output.yml from before the tunneling-surfacing
@@ -5912,7 +5955,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         rxn = _reaction_record()
         rxn["kinetics"]["tunneling"] = {"method": "Eckart", "cutoff": 0.5}
         _, _, payload = self._submit(reaction=rxn)
-        self.assertEqual(payload["kinetics"][0]["tunneling_model"], "Eckart")
+        self.assertEqual(payload["kinetics"][0]["tunneling_model"], "eckart")
 
     def test_kinetics_tunneling_dict_with_model_key(self):
         # Producers may use 'model' instead of 'method' as the canonical
@@ -5920,18 +5963,16 @@ class TestComputedReactionBundle(unittest.TestCase):
         rxn = _reaction_record()
         rxn["kinetics"]["tunneling"] = {"model": "Wigner"}
         _, _, payload = self._submit(reaction=rxn)
-        self.assertEqual(payload["kinetics"][0]["tunneling_model"], "Wigner")
+        self.assertEqual(payload["kinetics"][0]["tunneling_model"], "wigner")
 
-    def test_kinetics_tunneling_dict_without_canonical_falls_back_to_json(self):
-        # No recognized key → emit deterministic JSON instead of a Python
-        # repr so two equivalent dicts always hash the same payload.
+    def test_kinetics_tunneling_dict_without_canonical_falls_back_to_other(self):
+        # No recognized key: the object names no tunneling method the
+        # enum knows, so the token is ``other`` (the deterministic JSON
+        # label the helper builds is not a ``TunnelingModel`` value).
         rxn = _reaction_record()
         rxn["kinetics"]["tunneling"] = {"foo": "bar", "cutoff": 0.5}
         _, _, payload = self._submit(reaction=rxn)
-        self.assertEqual(
-            payload["kinetics"][0]["tunneling_model"],
-            '{"cutoff":0.5,"foo":"bar"}',
-        )
+        self.assertEqual(payload["kinetics"][0]["tunneling_model"], "other")
 
     def test_kinetics_tunneling_empty_string_omits(self):
         # Empty / whitespace-only strings carry no information; treat
@@ -6029,7 +6070,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         rxn["kinetics"]["degeneracy"] = 2.0
         _, _, payload = self._submit(reaction=rxn)
         self.assertEqual(payload["kinetics"][0]["degeneracy"], 2.0)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     # ---------------- note from long_kinetic_description
     def test_kinetics_note_from_long_kinetic_description(self):
@@ -6141,7 +6182,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         self.assertNotIn("d_reported_ea", kin)
         self.assertNotIn("reported_ea", kin)
         self.assertNotIn("reported_ea_units", kin)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     # ---------------- 7: kinetics.source_calculations populated by local keys
     def test_kinetics_source_calculations_explicit(self):
@@ -6275,6 +6316,24 @@ class TestComputedReactionBundle(unittest.TestCase):
         # locatable via ``ts_point_index`` on the result.
         self.assertEqual(result["ts_point_index"], 4)
 
+    def test_irc_level_assumed_opt_level_is_reported_on_every_irc_calc(self):
+        # ARC runs IRC at irc_level, which output.yml does not export; the
+        # calc is labelled with opt_level and that assumption is reported.
+        doc, proj = self._irc_fixture_with_logs_on_disk()
+        with self._patch_parse_irc():
+            outcome, _, payload = self._submit(output_doc=doc, project_directory=proj)
+        irc_calc = next(c for c in payload["transition_state"]["calculations"]
+                        if c["key"] == "ts_irc")
+        self.assertEqual(irc_calc["level_of_theory"]["method"], doc["opt_level"]["method"])
+        [warning] = [w for w in outcome.warnings if w["code"] == "irc_level_assumed_opt_level"]
+        self.assertEqual(warning["field"], "transition_state.irc.level_of_theory")
+        self.assertEqual(warning["context"], {"source": "tckdb_arc_self_check",
+                                              "action": "level_of_theory_assumed"})
+        self.assertIn("does not export irc_level", warning["message"])
+        # No IRC calculation, no warning.
+        outcome, _, _ = self._submit()
+        self.assertNotIn("irc_level_assumed_opt_level", {w["code"] for w in outcome.warnings})
+
     def test_irc_points_preserve_direction_and_geometry(self):
         doc, proj = self._irc_fixture_with_logs_on_disk()
         with self._patch_parse_irc():
@@ -6297,6 +6356,41 @@ class TestComputedReactionBundle(unittest.TestCase):
         # Producer must NOT label points as reactant/product.
         for p in points:
             self.assertNotIn("role", p)
+
+    def test_irc_result_refused_when_any_log_leaves_its_direction_unstated(self):
+        # IRCResultPayload.direction is required. Logs whose direction ARC
+        # did not record (no irc_log_directions entry, no forward/reverse in
+        # the filename, geometry-only points) do not say which branch they
+        # hold, so the result is omitted with a warning instead of claiming
+        # ``both`` (or filing them under the one stated branch); the irc
+        # calculation itself is kept. ARC runs predating f6af510b pad
+        # irc_log_directions with None.
+        for directions in (None, ["reverse", None], [None, None]):
+            with self.subTest(irc_log_directions=directions):
+                proj = tempfile.mkdtemp(prefix="arc-tckdb-irc-")
+                self.addCleanup(shutil.rmtree, proj, ignore_errors=True)
+                for name in ("TS0_irc_a.log", "TS0_irc_b.log"):
+                    (pathlib.Path(proj) / name).write_text("dummy")
+                doc = _reaction_output_doc(with_irc=True)
+                ts = doc["transition_states"][0]
+                ts["irc_logs"] = ["TS0_irc_a.log", "TS0_irc_b.log"]
+                if directions is None:
+                    ts.pop("irc_log_directions", None)
+                else:
+                    ts["irc_log_directions"] = directions
+                points = self._fake_irc_points("forward")
+                with mock.patch("tckdb_arc._arc_optional.parse_irc_traj", return_value=points):
+                    outcome, _, payload = self._submit(output_doc=doc, project_directory=proj)
+                irc_calc = next(c for c in payload["transition_state"]["calculations"]
+                                if c["key"] == "ts_irc")
+                self.assertNotIn("irc_result", irc_calc)
+                [warning] = [w for w in outcome.warnings
+                             if w["code"] == "irc_direction_not_stated"]
+                self.assertEqual(warning["field"], "transition_state.irc_result")
+                self.assertEqual(warning["context"], {"source": "tckdb_arc_self_check",
+                                                      "action": "irc_result_omitted"})
+                self.assertEqual(
+                    json.loads(outcome.sidecar_path.read_text())["warnings"], outcome.warnings)
 
     def test_irc_no_explicit_output_geometries_when_irc_result_present(self):
         # Regression: the producer must NOT emit explicit output_geometries
@@ -6604,7 +6698,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         rev = self._fake_irc_points("reverse")
         with self._patch_parse_irc_by_index([fwd, rev]):
             _, _, payload = self._submit(output_doc=doc, project_directory=proj)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     # ---------------- IRC double-emit regression
     def test_irc_calc_attaches_irc_result_only_no_explicit_output_geometries(self):
@@ -7080,7 +7174,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         doc, proj = self._irc_fixture_with_logs_on_disk()
         with self._patch_parse_irc():
             _, _, payload = self._submit(output_doc=doc, project_directory=proj)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     # ---------------- AEC/BAC routing (species + TS)
     def _doc_with_corrections(self, *, attach_to_ts=True):
@@ -7220,7 +7314,7 @@ class TestComputedReactionBundle(unittest.TestCase):
     def test_correction_payload_validates_against_live_schema(self):
         # End-to-end pydantic validation when the live schema is reachable.
         _, _, payload = self._submit(output_doc=self._doc_with_corrections())
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_scheme_atom_and_bond_params_reach_bundle(self):
         # Integration: if output.yml carries scheme.atom_params /
@@ -7288,7 +7382,7 @@ class TestComputedReactionBundle(unittest.TestCase):
                         {"bond_key": "C-H", "value": -0.17350},
                     ]
         _, _, payload = self._submit(output_doc=doc)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     # ---------------- frequency-scale-factor on reaction species blocks
     def _doc_with_fsf(self, *, value=0.988,
@@ -7320,7 +7414,7 @@ class TestComputedReactionBundle(unittest.TestCase):
             self.assertIn("freq_scale_factor", sm)
             fsf = sm["freq_scale_factor"]
             self.assertAlmostEqual(fsf["value"], 0.988)
-            self.assertEqual(fsf["scale_kind"], "fundamental")
+            self.assertNotIn("scale_kind", fsf)
             self.assertEqual(fsf["level_of_theory"]["method"], "wb97xd")
 
     def test_species_statmech_emits_scoped_source_calculations(self):
@@ -7385,7 +7479,7 @@ class TestComputedReactionBundle(unittest.TestCase):
         # Live-schema smoke for the FSF path. Skipped when pydantic /
         # backend isn't reachable in the active env.
         _, _, payload = self._submit(output_doc=self._doc_with_fsf())
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     # ---------------- 16: endpoint is /uploads/computed-reaction
     def test_post_target_endpoint(self):
@@ -7434,14 +7528,14 @@ class TestComputedReactionProvenanceFields(unittest.TestCase):
         rxn["reversible"] = True
         payload = self._submit(reaction=rxn)
         self.assertIs(payload["reversible"], True)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_reversible_false_emitted_explicitly(self):
         rxn = _reaction_record()
         rxn["reversible"] = False
         payload = self._submit(reaction=rxn)
         self.assertIs(payload["reversible"], False)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_reversible_omitted_when_absent(self):
         # ARCReaction has no .reversible attribute today, so the producer
@@ -7453,7 +7547,7 @@ class TestComputedReactionProvenanceFields(unittest.TestCase):
         payload = self._submit(reaction=rxn)
         self.assertNotIn("reversible", payload)
         # The default still validates as True.
-        validated = ComputedReactionUploadRequest.model_validate(payload)
+        validated = contract_validate(ComputedReactionUploadRequest, payload)
         self.assertIs(validated.reversible, True)
 
     def test_reversible_none_treated_as_absent(self):
@@ -7461,7 +7555,7 @@ class TestComputedReactionProvenanceFields(unittest.TestCase):
         rxn["reversible"] = None
         payload = self._submit(reaction=rxn)
         self.assertNotIn("reversible", payload)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     # -- analysis_software_release ------------------------------------------
 
@@ -7474,21 +7568,21 @@ class TestComputedReactionProvenanceFields(unittest.TestCase):
         self.assertEqual(
             payload["analysis_software_release"]["revision"], "feedface" * 5,
         )
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_analysis_software_release_omitted_when_arkane_commit_absent(self):
         doc = _reaction_output_doc()
         doc.pop("arkane_git_commit", None)
         payload = self._submit(output_doc=doc)
         self.assertNotIn("analysis_software_release", payload)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_analysis_software_release_omitted_when_arkane_commit_empty(self):
         doc = _reaction_output_doc()
         doc["arkane_git_commit"] = ""
         payload = self._submit(output_doc=doc)
         self.assertNotIn("analysis_software_release", payload)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -7777,13 +7871,13 @@ class TestComputedSpeciesAppliedCorrectionsBundle(unittest.TestCase):
         payload = self._submit_with_corrections(
             [_aec_record(), _pbac_record()]
         )
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
     def test_mbac_payload_validates_against_live_schema(self):
         payload = self._submit_with_corrections(
             [_aec_record(), _mbac_record()]
         )
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
 
 class TestCalculationConstraints(unittest.TestCase):
@@ -7867,7 +7961,7 @@ class TestCalculationConstraints(unittest.TestCase):
         self.assertAlmostEqual(primary["constraints"][0]["target_value"], 1.45)
         self.assertEqual(primary["constraints"][1]["constraint_kind"], "angle")
         self.assertNotIn("target_value", primary["constraints"][1])
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
     def test_constraints_omitted_when_record_field_absent(self):
         record = _full_record()
@@ -7898,7 +7992,7 @@ class TestCalculationConstraints(unittest.TestCase):
         # No cross-talk back onto the opt calc.
         primary = payload["conformers"][0]["primary_calculation"]
         self.assertNotIn("constraints", primary)
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
     def test_scan_calc_constraints_attached_inline_via_additional_calculations(self):
         # The scan loop uses ``source_constraints`` from the per-entry
@@ -7937,7 +8031,7 @@ class TestCalculationConstraints(unittest.TestCase):
             "dihedral",
             [c["constraint_kind"] for c in scans[0]["constraints"]],
         )
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
     def test_invalid_constraints_filtered_silently(self):
         # Best-effort contract: a malformed entry must be dropped, not
@@ -7956,7 +8050,7 @@ class TestCalculationConstraints(unittest.TestCase):
         self.assertEqual(len(primary["constraints"]), 1)
         self.assertEqual(primary["constraints"][0]["constraint_kind"], "angle")
         self.assertEqual(primary["constraints"][0]["constraint_index"], 1)
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
     def test_constraints_missing_index_base_dropped_not_assumed(self):
         # C-1c: a dict-shaped constraint with no declared index_base must
@@ -7974,7 +8068,7 @@ class TestCalculationConstraints(unittest.TestCase):
         payload = self._submit(record)
         primary = payload["conformers"][0]["primary_calculation"]
         self.assertNotIn("constraints", primary)
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
     def test_rotor_scan_end_to_end_through_real_submit_pipeline(self):
         # C-2/C-5, end to end (not just the _neutral_scan_result_to_tckdb
@@ -8015,7 +8109,7 @@ class TestCalculationConstraints(unittest.TestCase):
             [1, 2, 3, 4],
         )
         self.assertEqual(coord["resolution_degrees"], 15.0)
-        ComputedSpeciesUploadRequest.model_validate(payload)
+        contract_validate(ComputedSpeciesUploadRequest, payload)
 
 
 class TestCalculationConstraintsSerializer(unittest.TestCase):
@@ -8805,7 +8899,7 @@ class TestComputedReactionDependencyEdges(unittest.TestCase):
         target["smiles"] = "[CH:1]=[O:2]"
         target["unmapped_smiles"] = "[CH]=O"
         _, _, payload = self._submit(output_doc=doc)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
         # Sanity: confirm the field actually surfaces on the right
         # block, not just that the payload validates without it.
         cho = next(s for s in payload["species"]
@@ -8832,7 +8926,7 @@ class TestComputedReactionDependencyEdges(unittest.TestCase):
         ts["successful_methods"] = ["AutoTST"]
         ts["ts_report"] = "narrative"
         _, _, payload = self._submit(output_doc=doc)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_dependency_survives_reaction_bundle_flatten(self):
         # ``_flatten_all_reaction_calcs`` pops opt_result into flat
@@ -8866,7 +8960,7 @@ class TestComputedReactionDependencyEdges(unittest.TestCase):
         self._make_neb_ts(doc)
         self._add_coarse_to_species(doc, "CHO")
         _, _, payload = self._submit(output_doc=doc)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
 
 class TestPathSearchResultBuilder(unittest.TestCase):
@@ -8950,9 +9044,11 @@ class TestPathSearchResultBuilder(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_gsm_result_carries_reliable_metadata(self):
-        # GSM with parsed stringfile from the real fixture: converged,
-        # is_double_ended, source_endpoint_count are all set from
-        # method-static knowledge that ARC commits to at producer time.
+        # GSM with parsed stringfile from the real fixture:
+        # is_double_ended and source_endpoint_count are set from
+        # method-static knowledge. ``converged`` is not: ARC records no
+        # convergence verdict (TSGuess.success means the output file
+        # exists), so the optional field is omitted.
         path = _GSM_STRINGFILE_FIXTURE
         if not path or not os.path.isfile(path):
             # Fall back to the single-point branch via a synthetic xyz
@@ -8963,7 +9059,7 @@ class TestPathSearchResultBuilder(unittest.TestCase):
         else:
             result = self.build(method='gsm', log_path=path,
                                 fallback_xyz_text=None)
-        self.assertTrue(result['converged'])
+        self.assertNotIn('converged', result)
         self.assertTrue(result['is_double_ended'])
         self.assertEqual(result['source_endpoint_count'], 2)
 
@@ -8974,7 +9070,7 @@ class TestPathSearchResultBuilder(unittest.TestCase):
         result = self.build(method='neb',
                             log_path='/no/such/neb/input.log',
                             fallback_xyz_text='C 0 0 0\nH 1 0 0')
-        self.assertTrue(result['converged'])
+        self.assertNotIn('converged', result)
         self.assertTrue(result['is_double_ended'])
         self.assertEqual(result['source_endpoint_count'], 2)
 
@@ -9429,8 +9525,9 @@ class TestPathSearchPointsWithNodeMetadata(unittest.TestCase):
     def test_stringfile_relative_energies_populate_when_node_outputs_absent(self):
         # No node outputs → fall back to the stringfile comment column
         # (relative kcal/mol). Every node gets relative_energy_kj_mol
-        # (converted, first node 0), the peak is flagged
-        # is_climbing_image, and absolute-Hartree fields stay null.
+        # (converted, first node 0) and absolute-Hartree fields stay null.
+        # No node is flagged is_climbing_image: the contract defines it
+        # for NEB-CI images, and a string's peak is not evidence of one.
         rel_kcal = [0.0, 3.0, 12.5, 7.0, 1.0]
         sf = self._energetic_stringfile(rel_kcal)
         result = self.build(method='gsm', log_path=sf,
@@ -9444,10 +9541,7 @@ class TestPathSearchPointsWithNodeMetadata(unittest.TestCase):
             self.assertNotIn('electronic_energy_hartree', p)
         # First node is the relative-zero.
         self.assertAlmostEqual(result['points'][0]['relative_energy_kj_mol'], 0.0)
-        # Exactly one climbing image, at the energy peak (index 2 here).
-        climbing = [p for p in result['points'] if p.get('is_climbing_image')]
-        self.assertEqual(len(climbing), 1)
-        self.assertEqual(climbing[0]['point_index'], 2)
+        self.assertFalse(any('is_climbing_image' in p for p in result['points']))
 
     def test_all_zero_stringfile_is_sentinel_no_relative_energies(self):
         # ARC's molecularGSM build writes 0.000000 for every comment
@@ -9478,7 +9572,7 @@ class TestPathSearchPointsWithNodeMetadata(unittest.TestCase):
         for point, energy in zip(result['points'], rel_kcal):
             self.assertNotIn('electronic_energy_hartree', point)
             self.assertAlmostEqual(point['relative_energy_kj_mol'], energy * 4.184)
-        self.assertTrue(any(point.get('is_climbing_image') for point in result['points']))
+        self.assertFalse(any('is_climbing_image' in point for point in result['points']))
 
 
 class TestArtifactFilenameCoercion(unittest.TestCase):
@@ -9837,7 +9931,7 @@ class TestPhase3EvidenceParity(unittest.TestCase):
                 }
                 self.assertEqual(fallback, sidecar)
                 self.assertEqual(self._canonical(fallback), self._canonical(sidecar))
-                HessianPayload(**sidecar)
+                contract_validate(HessianPayload, sidecar)
 
     def test_irc_sidecar_matches_rich_fallback(self):
         from tckdb_arc.adapter import _build_irc_result_payload, _normalize_xyz_text
@@ -9868,7 +9962,41 @@ class TestPhase3EvidenceParity(unittest.TestCase):
         sidecar = _build_irc_result_payload(sidecar_trajectories, -1.1, marker)
         self.assertEqual(fallback, sidecar)
         self.assertEqual(self._canonical(fallback), self._canonical(sidecar))
-        IRCResultPayload(**sidecar)
+        contract_validate(IRCResultPayload, sidecar)
+
+    def test_irc_builder_refuses_a_result_with_no_stated_direction(self):
+        from tckdb_arc.adapter import _build_irc_result_payload
+        xyz = {"symbols": ("H", "H"), "isotopes": (1, 1),
+               "coords": ((0.0, 0.0, 0.0), (0.0, 0.0, 0.74))}
+        trajectories = [{"direction": None, "rich_points": None, "geom_points": [xyz, xyz]}]
+        warnings = []
+        self.assertIsNone(_build_irc_result_payload(trajectories, warnings=warnings))
+        self.assertEqual([w["code"] for w in warnings], ["irc_direction_not_stated"])
+        # A stated branch next to an unstated one is still a guess: the
+        # unlabelled points would be filed under the stated branch and the
+        # run mode would claim one direction. Refused as well.
+        partial = [
+            {"direction": "reverse", "rich_points": None, "geom_points": [xyz, xyz]},
+            {"direction": None, "rich_points": None, "geom_points": [xyz, xyz]},
+        ]
+        warnings = []
+        self.assertIsNone(_build_irc_result_payload(partial, warnings=warnings))
+        self.assertEqual([w["code"] for w in warnings], ["irc_direction_not_stated"])
+        self.assertIn("2 of 4 IRC point(s)", warnings[0]["message"])
+        # A per-point direction from the parser labels the point even when
+        # the log's own entry is unknown.
+        rich = [{"direction": None, "geom_points": None, "rich_points": [
+            {"xyz": xyz, "direction": "forward"}, {"xyz": xyz, "direction": "forward"}]}]
+        result = _build_irc_result_payload(rich, warnings=warnings)
+        self.assertEqual(result["direction"], "forward")
+        # One stated direction on every point: the run mode is that branch.
+        trajectories[0]["direction"] = "reverse"
+        warnings = []
+        result = _build_irc_result_payload(trajectories, warnings=warnings)
+        self.assertEqual((result["direction"], result["has_forward"], result["has_reverse"]),
+                         ("reverse", False, True))
+        self.assertEqual(warnings, [])
+        contract_validate(IRCResultPayload, result)
 
     def test_gsm_absolute_energies_require_evidence_not_raw_node_indices(self):
         from tckdb_arc.adapter import _build_path_search_result_payload, _normalize_xyz_text
@@ -9922,7 +10050,7 @@ class TestPhase3EvidenceParity(unittest.TestCase):
         self.assertEqual(sidecar["points"][2]["max_gradient"], 0.03)
         for actual, expected in zip(fallback["points"], sidecar["points"]):
             self.assertEqual(actual["geometry"], expected["geometry"])
-        PathSearchResultPayload(**sidecar)
+        contract_validate(PathSearchResultPayload, sidecar)
 
     # Scaffolding for the live-ARC-producer tests below: the golden project's
     # logs, mocked ESS parsers, and distinct bent H3 stringfile frames, so the
@@ -10132,7 +10260,7 @@ class TestPhase3EvidenceParity(unittest.TestCase):
             self.assertEqual(len(species_hessians), 2)  # H2 as reactant and as product
             self.assertEqual(sidecar_payload, fallback_payload)
             self.assertEqual(self._canonical(sidecar_payload), self._canonical(fallback_payload))
-            ComputedReactionUploadRequest.model_validate(sidecar_payload)
+            contract_validate(ComputedReactionUploadRequest, sidecar_payload)
 
     def test_actual_arc_producer_geometry_matched_gsm_values_reach_payload(self):
         """A gradient file whose geometry is exactly one frame carries its values to that point.
@@ -10195,7 +10323,7 @@ class TestPhase3EvidenceParity(unittest.TestCase):
         for index, point in points.items():
             if index != matched_index:
                 self.assertNotIn("electronic_energy_hartree", point)
-        ComputedReactionUploadRequest.model_validate(payload)
+        contract_validate(ComputedReactionUploadRequest, payload)
 
 
 class TestSingleHartreeToKjMolConstant(unittest.TestCase):

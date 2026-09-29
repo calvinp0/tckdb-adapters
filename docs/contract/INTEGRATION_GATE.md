@@ -19,8 +19,8 @@ loopback too. So the run fails unless all three hold:
 The adapter reads its key from `TCKDB_INTEGRATION_API_KEY`, so an ambient
 `TCKDB_API_KEY` is never used.
 
-Validated against TCKDB_v2 `ad3cd706` (alembic head `86ffcd9d3c65`), with
-tckdb-client 0.93.0 and tckdb-schemas 0.51.0 in `arc_env`. The strict xfails
+Validated against TCKDB_v2 `9e6061b0` (backend unchanged since `11cc43d7`),
+with tckdb-client 0.95.0 and tckdb-schemas 0.52.0 (adapter 0.6.0). The strict xfails
 below match on server warning codes and read-back shapes, so a TCKDB change to
 either can flip them without any adapter change.
 
@@ -30,7 +30,9 @@ either can flip them without any adapter change.
   (`pip install -e "$TCKDB/backend"`), so Alembic, uvicorn and
   `scripts/bootstrap_admin.py` run the checkout's code.
 - `arc_env` has `tckdb_arc` installed editable from this repository and
-  `tckdb-client` 0.93.x. Its `tckdb_schemas` is an editable install of
+  `tckdb-client` 0.95.x. If `arc_env` still has an older client, run with the
+  checkout's client source first on the path:
+  `PYTHONPATH=$TCKDB/clients/python/src conda run -n arc_env python -m pytest ...`. Its `tckdb_schemas` is an editable install of
   `$TCKDB/schemas/python/tckdb-schemas`, so the adapter validates against
   whatever that working tree holds.
 - Docker, with the two images below available locally or pullable.
@@ -106,7 +108,7 @@ counts are taken only once two consecutive snapshots agree (see T4).
 
 | Corpus | Modes | Read back |
 |---|---|---|
-| `golden` (Phase 3, `tckdb_evidence.json`) | species, conformer, reaction, TS | calculation owners and types; H2 thermo stored as S and Cp only (no H298, NASA, point H or G, or reference kind), because pre-1.2 output cannot show the enthalpy is a formation enthalpy and H2 is too light for the magnitude guard, with the `enthalpy_formation_unverifiable_light_species` warning; reference pressure and source calculations; Hessian values; conformer-mode log and input artifacts |
+| `golden` (Phase 3, `tckdb_evidence.json`) | species, conformer, reaction, TS | calculation owners and types; H2 thermo stored as S and Cp only (no H298, NASA, point H or G, or reference kind), because pre-1.2 output cannot show the enthalpy is a formation enthalpy and H2 is too light for the magnitude guard, with the `enthalpy_formation_unverifiable_light_species` warning; reference pressure not stated (read back as null; the golden output records none, so the adapter omits it with the `thermo_reference_pressure_not_stated` warning) and source calculations; Hessian values; conformer-mode log and input artifacts |
 | `golden` + kinetics at T0 = 300 K and Arkane commit | reaction, TS | Arrhenius `a = A/T0**n`, `n`, `Ea`, kinetics source-calculation roles and owners, TS composition against both sides, IRC and GSM results, the standalone TS's calculations |
 | `arc_1_2` (output 1.2 atom-correction flags) | species, conformer | formation enthalpy kept for CH4, stripped to S and Cp (no H298, NASA, point H or G, or reference kind) for the other five, with the producer warning |
 | `arc_1_2` CH4 + `energy_corrections` | species | applied AEC and BAC totals, units, components, source `sp` calculation |
@@ -134,7 +136,7 @@ failure (which raises `RuntimeError`) fails the test instead of satisfying it:
 
 - artifact-batch sidecars drop the server's warnings;
 - artifact-batch sidecars lose the status code, the upload request ID and the
-  replay flag, because tckdb-client 0.93 keeps only the response body (one
+  replay flag, because tckdb-client (0.93–0.95) keeps only the response body (one
   xfail per field);
 - computed-species thermo never names Arkane, even when `arkane_git_commit`
   is present (computed-reaction does);

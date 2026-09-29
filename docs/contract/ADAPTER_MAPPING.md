@@ -184,7 +184,7 @@ Other non-mappings are deliberate. They are recorded, not ranked:
 
 | Field | Default | Site |
 |---|---|---|
-| `thermo.reference_pressure_bar` | **1.01325 bar**, used when `standard_state_pressure_pa` is absent or falls outside [0.5, 2.0] bar. Otherwise the value is Pa/1e5. The argument is that RMG hard-codes P0 = 1 atm. | `adapter.py:5132-5165` |
+| `thermo.reference_pressure_bar` | **None since adapter 0.6.0.** The value is `standard_state_pressure_pa`/1e5 when that is a number within [0.5, 2.0] bar; otherwise the field is omitted and `thermo_reference_pressure_not_stated` is reported. Before 0.6.0 it defaulted to 1.01325 bar (RMG's hard-coded P0 = 1 atm), which the producer contract forbids. | `adapter.py` `_thermo_reference_pressure_bar` |
 | `species_entry.charge` / `.multiplicity` | 0 / 1. A record without a multiplicity uploads as a singlet. | `adapter.py:3253-3254` |
 | TS `charge` | 0 | `adapter.py:2889` |
 | TS multiplicity | The reaction multiplicity | `adapter.py:2879-2886` |

@@ -2,6 +2,7 @@
 
 import math
 
+from _contract import contract_validate
 import pytest
 from tckdb_schemas.workflows.computed_reaction_upload import BundleKineticsIn
 
@@ -16,7 +17,7 @@ def build(**overrides):
         kinetics_record=record, reactant_keys=["r"], product_keys=["p"],
         actor_calc_keys={}, ts_calc_keys={},
     )
-    BundleKineticsIn.model_validate(result)
+    contract_validate(BundleKineticsIn, result)
     return result
 
 

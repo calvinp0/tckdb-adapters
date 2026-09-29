@@ -11844,11 +11844,11 @@
   - computed_species
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:5475
   maps_from: 'output.yml: species[].thermo.standard_state_pressure_pa'
-  transform_kind: default
-  transform: Pa/1e5 when a real number landing in [0.5, 2.0] bar; otherwise (absent, malformed, bool) FALLBACK constant 1.01325 bar (RMG IdealGasTranslation P0 = 1 atm, adapter.py:5137) with a log warning when malformed.
+  transform_kind: unit_conversion
+  transform: Pa/1e5 when a real number landing in [0.5, 2.0] bar; otherwise (absent, malformed, bool) the field is OMITTED, never defaulted (adapter 0.6.0; before, a 1.01325 bar fallback).
   condition: entropy content present (s298, NASA, point S or G)
-  on_absence: field omitted (never emitted as null)
-  warning_codes: null
+  on_absence: field omitted (never emitted as null); producer warning thermo_reference_pressure_not_stated, action reference_pressure_omitted
+  warning_codes: [thermo_reference_pressure_not_stated]
   emission_route: tckdb_arc/tckdb_arc/adapter.py:1083
   empirical: fixture
   empirical_counts:
@@ -12543,11 +12543,11 @@
   - computed_reaction
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:5475
   maps_from: 'output.yml: species[].thermo.standard_state_pressure_pa'
-  transform_kind: default
-  transform: Pa/1e5 when a real number landing in [0.5, 2.0] bar; otherwise (absent, malformed, bool) FALLBACK constant 1.01325 bar (RMG IdealGasTranslation P0 = 1 atm, adapter.py:5137) with a log warning when malformed.
+  transform_kind: unit_conversion
+  transform: Pa/1e5 when a real number landing in [0.5, 2.0] bar; otherwise (absent, malformed, bool) the field is OMITTED, never defaulted (adapter 0.6.0; before, a 1.01325 bar fallback).
   condition: entropy content present (s298, NASA, point S or G)
-  on_absence: field omitted (never emitted as null)
-  warning_codes: null
+  on_absence: field omitted (never emitted as null); producer warning thermo_reference_pressure_not_stated, action reference_pressure_omitted
+  warning_codes: [thermo_reference_pressure_not_stated]
   emission_route: tckdb_arc/tckdb_arc/adapter.py:2511
   empirical: fixture
   empirical_counts:
