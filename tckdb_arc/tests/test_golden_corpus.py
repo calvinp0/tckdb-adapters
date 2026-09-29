@@ -30,7 +30,7 @@ from unittest import mock
 
 import yaml
 
-from tckdb_arc.adapter import TCKDBAdapter
+from tckdb_arc.adapter import TCKDBAdapter, _build_nasa_block
 from tckdb_arc.config import TCKDBConfig
 
 # Real published wire-contract models (test-only dependency).
@@ -386,6 +386,57 @@ class TestGoldenCorpus(unittest.TestCase):
         # hard-coded 1 atm; this fixture records no pressure). Stripping
         # exactly those two fields reproduces the previous snapshots, so no
         # other leaf changed.
+        #
+        # computed_species / computed_reaction changed again (transition_state
+        # did not, it carries no thermo) for adapter 0.5.0: this schema-1.1
+        # fixture records no ``atom_corrections_applied`` flag, and H2's raw
+        # total energy (about 1.0 hartree) sits inside the magnitude guard's
+        # blind spot, so its enthalpy cannot be verified as formation_298k.
+        # All three H2 thermo blocks (the species bundle, r0_H2, p1_H2) lose
+        # h298_kj_mol, nasa, every point h_kj_mol/g_kj_mol and
+        # enthalpy_reference_kind, keeping S298, point S/Cp, bounds, provenance
+        # and reference_pressure_bar. H carries no thermo. Restoring exactly
+        # those fields from the fixture reproduces the previous snapshots below,
+        # so no other leaf changed.
+        self.assertEqual(
+            {
+                "computed_species": "194f02a5e8a6069ec06c8ef0f4424878aa98e86de11f29f3d862db258c13cfb7",
+                "computed_reaction": "d769b48380b3a82b1b0245985aea64f4966289460f1cc278badb8b2f97aae78b",
+                "transition_state": "9f9ba6edb1e88589595b95782474b9d3ad6c8b912c9c00c627b011512b8cc69b",
+            },
+            {
+                "computed_species": self._canonical_sha256(species),
+                "computed_reaction": self._canonical_sha256(reaction),
+                "transition_state": self._canonical_sha256(transition_state),
+            },
+        )
+        h2_thermo = output_doc["species"][0]["thermo"]
+        self.assertEqual(output_doc["species"][0]["label"], "H2")
+
+        def with_h2_enthalpy_restored(payload):
+            restored = copy.deepcopy(payload)
+            blocks = [restored.get("thermo")] + [
+                sp.get("thermo") for sp in restored.get("species") or []
+            ]
+            blocks = [block for block in blocks if block is not None]
+            self.assertTrue(blocks)
+            for block in blocks:
+                self.assertFalse({"h298_kj_mol", "nasa", "enthalpy_reference_kind"} & set(block))
+                self.assertEqual(block["s298_j_mol_k"], h2_thermo["s298_j_mol_k"])
+                block["h298_kj_mol"] = float(h2_thermo["h298_kj_mol"])
+                block["nasa"] = _build_nasa_block(h2_thermo["nasa_low"], h2_thermo["nasa_high"])
+                block["enthalpy_reference_kind"] = "formation_298k"
+                self.assertEqual(len(block["points"]), len(h2_thermo["thermo_points"]))
+                for point, record in zip(block["points"], h2_thermo["thermo_points"]):
+                    self.assertEqual(point["temperature_k"], record["temperature_k"])
+                    self.assertFalse({"h_kj_mol", "g_kj_mol"} & set(point))
+                    point["h_kj_mol"] = record["h_kj_mol"]
+                    point["g_kj_mol"] = record["g_kj_mol"]
+            return restored
+
+        species = with_h2_enthalpy_restored(species)
+        reaction = with_h2_enthalpy_restored(reaction)
+
         def without_thermo_state(payload):
             stripped = copy.deepcopy(payload)
             blocks = [stripped.get("thermo")] + [

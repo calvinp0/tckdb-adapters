@@ -3,8 +3,9 @@
 ``thermo.atom_corrections_applied`` false means Arkane subtracted no atom
 energies; true still needs ``thermo.atom_corrections_level`` to be the level
 the species' energies were computed at. Enthalpy that fails either check (or
-the magnitude backstop, the only check for a null flag) is stripped from the
-thermo block; entropy and Cp still go up.
+the non-finite and magnitude backstops) is stripped from the thermo block;
+entropy and Cp still go up. A null flag gets those backstops plus the interim
+checks in test_thermo_unflagged_enthalpy.py.
 """
 
 import copy
@@ -134,7 +135,9 @@ def test_flag_catches_what_the_magnitude_guard_misses(label):
     assert abs(thermo["h298_kj_mol"]) < BOUND_KJ_MOL
     thermo["atom_corrections_applied"] = None
     block = _build_thermo_block(thermo, calc_keys_by_role={}, target_model="ThermoInBundle")
-    assert block["enthalpy_reference_kind"] == "formation_298k"  # undetectable without the flag
+    # Without the flag the magnitude guard cannot catch these; given no
+    # composition (element_symbols), the interim light-species rule is off too.
+    assert block["enthalpy_reference_kind"] == "formation_298k"
 
 
 def test_unknown_flag_falls_back_to_the_magnitude_guard(tmp_path):
