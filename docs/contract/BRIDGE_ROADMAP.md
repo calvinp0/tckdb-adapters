@@ -356,6 +356,8 @@ provides a form without an opt.
 
 ### A7. Send the ESS version and revision separately; use `arkane_version` ([gate])
 
+**Status (adapter 0.6.1): done.** See CURRENT_ARC_INTEGRATION.md, "Provenance passthrough".
+
 **What to change.**
 
 - Split ARC's `ess_versions` banner into `version` and `revision`; for example
@@ -389,6 +391,9 @@ the warnings that report TCKDB repairing the adapter's provenance from the log.
 **Effort.** S in the adapter once the client exposes the envelope (C3).
 
 ### A9. Name Arkane on species thermo and statmech ([gate])
+
+**Status (adapter 0.6.1): done** for the computed-species route (the reaction route
+inherits the bundle's `analysis_software_release`).
 
 **What to change.** Set `software_release` to `{name: Arkane, version: arkane_version,
 revision: arkane_git_commit}` on `species_upload.thermo`, `species_upload.statmech` and
@@ -809,6 +814,10 @@ Separately, `conformer_upload` runs no provenance warnings for its nested statme
 
 ### C10. Correction-scheme provenance for tool-table schemes ([gate])
 
+**Status (adapter 0.6.1):** `scheme.software` now names the program in the record's
+`matched_arkane_key` (`gaussian`), without a release, and is omitted when the key names
+none or disagrees with ARC's level; the release and literature remain open.
+
 **What happens.** `scheme.software` is the program release that computed a scheme's
 parameters. Arkane's database does not record that release, so no ARC deposit can fill
 it honestly. Every new scheme then warns `missing_energy_correction_scheme_software`, and
@@ -880,7 +889,7 @@ your behalf. Nothing is inferred today.
 | `ts_upload.reaction.reversible: true` (always) | `:3175` | Replace with B11 |
 | Kinetics `T0 = 1 K` when absent | `:6797` | Keep |
 | Freq/sp level falls back to `opt_level`; software falls back to the requested level's | `:4383-4404`, `:3400` | Keep for freq/sp; scan is already refused |
-| Correction scheme `software` / `workflow_tool_release` | not sent | See C10. **Never Arkane as `scheme.software`, never ARC as `scheme.workflow_tool_release`** (MR-2, AP-8) |
+| Correction scheme `software` / `workflow_tool_release` | `software` = `{name: <matched_arkane_key's software>}` since 0.6.1; `workflow_tool_release` not sent | See C10. **Never Arkane as `scheme.software`, never ARC as `scheme.workflow_tool_release`** (MR-2, AP-8) |
 
 ### D4. Which upload modes to run
 

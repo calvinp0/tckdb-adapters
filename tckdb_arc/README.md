@@ -51,6 +51,26 @@ every one reports `irc_level_assumed_opt_level`. Kinetics `tunneling_model` is
 sent as the contract's lowercase token (`eckart`, unknown methods `other`),
 the value TCKDB stored anyway.
 
+Adapter 0.6.1 passes ARC's software provenance through. Each calculation's
+ESS banner (`ess_versions`, e.g. `Gaussian 16, Revision C.02`) is split into
+`version` `16` and `revision` `C.02` by TCKDB's own shared
+`SoftwareReleaseRef` normaliser; a banner naming another program, or of any
+other shape, is sent unchanged. Computed-species thermo and statmech name
+Arkane (`arkane_version`, `arkane_git_commit`) as their `software_release`.
+Each energy-correction scheme names the program its parameters come from as
+`scheme.software`: the `software='<name>'` in the record's
+`matched_arkane_key` (Arkane's database entry, e.g. `gaussian`), with no
+release. It is omitted when the key is absent or names no software, and
+omitted with an `energy_correction_scheme_software_conflict` warning when it
+disagrees with the correction level's software. Literature is not sent: ARC
+records no citation.
+
+Upgrading to 0.6.1 changes the payload hash, and so the idempotency key, of
+every ARC upload whose ESS banner is composite (e.g. `Gaussian 16, Revision
+C.02`), and of every species upload that now carries Arkane or scheme
+software. Replaying a sidecar written before 0.6.1 posts under a new key, so
+TCKDB records it as a new deposit rather than replaying the old one.
+
 Thermo blocks with enthalpy content declare `enthalpy_reference_kind:
 formation_298k` (Arkane's H298 and NASA are formation enthalpies at
 298.15 K) only when that holds. Blocks with entropy content carry

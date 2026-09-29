@@ -550,11 +550,10 @@ def test_refusal_is_recorded_in_sidecar(live_tckdb, tmp_path):
     assert "species_geometry_composition_mismatch" in sidecar["last_error"]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "adapter gap: only the computed-reaction bundle carries Arkane provenance "
-    "(analysis_software_release); computed-species thermo never sets "
-    "software_release even when output.yml has arkane_git_commit"))
 def test_computed_species_thermo_names_arkane(live_tckdb, tmp_path):
+    # Adapter 0.6.1 names Arkane (arkane_version / arkane_git_commit) on the
+    # computed-species thermo and statmech blocks, as the reaction bundle's
+    # analysis_software_release already did.
     outcome = _submit_species(live_tckdb, tmp_path, "arc_1_2_corrections")["CH4"]
     thermo = live_tckdb.get(f"/thermo/{_uploaded(live_tckdb, outcome)['thermo']['thermo_id']}")
     assert thermo["software_release_id"] is not None

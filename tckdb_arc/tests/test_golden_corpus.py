@@ -406,7 +406,61 @@ class TestGoldenCorpus(unittest.TestCase):
         # those fields from the fixture reproduces the previous snapshots below,
         # so no other leaf changed.
         #
-        # All three changed for adapter 0.6.0 (tckdb-schemas 0.52, the producer
+        # All three changed for adapter 0.6.1 for one reason: ARC's ESS banners
+        # are split into version/revision the way TCKDB's shared
+        # ``SoftwareReleaseRef.normalize_composite_version`` would. This
+        # fixture records ``Gaussian 16`` (no revision), so every calculation
+        # software_release named gaussian goes from version "Gaussian 16" to
+        # "16". The fixture carries no ``arkane_version``/``arkane_git_commit``
+        # and no energy-correction records, so the Arkane release and scheme
+        # software changes do not reach it. Putting "Gaussian 16" back on
+        # exactly those releases reproduces the 0.6.0 snapshots checked next.
+        self.assertEqual(
+            {
+                "computed_species": "51313aab968f6693d4feaea32087029fab8aef4135cb72f223dd2957408d48e9",
+                "computed_reaction": "055c29dadcd70c8f84f58b84c2ceb8eeb3464156024e3568e8ddda0d8d4f634e",
+                "transition_state": "5ab6d4a92ba569c5614353385aeaa38512320dbbadcabdc4980d08ac0d5c4b18",
+            },
+            {
+                "computed_species": self._canonical_sha256(species),
+                "computed_reaction": self._canonical_sha256(reaction),
+                "transition_state": self._canonical_sha256(transition_state),
+            },
+        )
+
+        def with_banner_versions_restored(payload, *, releases):
+            restored = copy.deepcopy(payload)
+            found = []
+
+            def collect(obj):
+                if isinstance(obj, dict):
+                    release = obj.get("software_release")
+                    if isinstance(release, dict) and "level_of_theory" in obj:
+                        found.append(release)
+                    for value in obj.values():
+                        collect(value)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        collect(item)
+
+            collect(restored)
+            # Calculations without an ESS banner (no ess_versions entry for
+            # their job) carry no version, before and after.
+            versioned = [release for release in found if "version" in release]
+            self.assertEqual(len(versioned), releases)
+            for release in found:
+                if release in versioned:
+                    self.assertEqual(release, {"name": "gaussian", "version": "16"})
+                    release["version"] = "Gaussian 16"
+                else:
+                    self.assertEqual(set(release), {"name"})
+            return restored
+
+        species = with_banner_versions_restored(species, releases=3)
+        reaction = with_banner_versions_restored(reaction, releases=13)
+        transition_state = with_banner_versions_restored(transition_state, releases=5)
+
+        # Adapter 0.6.0 (tckdb-schemas 0.52, the producer
         # contract). First, by the maintainer's decision, identity/provenance
         # defaults ARC does not state are no longer sent:
         # ``species_entry.electronic_state_kind="ground"`` (every species

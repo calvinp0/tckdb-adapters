@@ -51,7 +51,7 @@ and `git diff --check` pass.
 | Reaction participant thermo/NASA/points | Participant `thermo` | Source-calculation links restored for the current schema, scoped to each participant |
 | Thermo enthalpy basis and standard-state pressure | `enthalpy_reference_kind`, `reference_pressure_bar` on every thermo block | Enthalpy content (H298, NASA, point H or G) declares `formation_298k` (TCKDB #520). Entropy content (S298, NASA, point S or G) carries `thermo.standard_state_pressure_pa` / 1e5 when ARC recorded it as a number within 0.5–2 bar; otherwise, since adapter 0.6.0, `reference_pressure_bar` is omitted (never defaulted; TCKDB #529 and the 0.52 producer contract) and `thermo_reference_pressure_not_stated` is reported with action `reference_pressure_omitted` (0.5.0 filled RMG's 1 atm, 1.01325 bar). Cp-only blocks carry neither. Enthalpy is declared only when it is a formation enthalpy; for pre-1.2 output without the correction flags this is the maintainer-approved option (d) interpretation (Arkane's corrected H298 is a formation enthalpy by construction; the magnitude, header-level, dispersion/solvation and light-species checks below are heuristics that make an uncorrected enthalpy very unlikely to pass, not proof): from output.yml 1.2, `thermo.atom_corrections_applied` must be true and `thermo.atom_corrections_level` must equal the energy level (`composite_method`, else `sp_level`; effective method with dispersion folded in, and basis, normalized by a port of ARC `1977e53b`'s `_normalized_method_and_basis`, checked by a parity test against that ARC), and neither level may set `dispersion` or `solvation_method`. Non-finite values and enthalpies beyond ±2.0e4 kJ/mol always fail. For a null or absent switch (output.yml 1.0/1.1, YAML-loaded species) adapter 0.5.0 then also strips when the header `arkane_level_of_theory` is not the energy level (`enthalpy_atom_corrections_level_mismatch`; a null header or one without a method is not checked), when the energy level or that header sets `dispersion` or `solvation_method` (`enthalpy_atom_corrections_level_unverifiable`), and when the species' composition (xyz, else the record's `formula`, since ARC 1.0 writes `xyz: null` for monoatomics) puts its raw total energy (H 0.50, He 2.90, Li 7.43 hartree per atom) inside the magnitude bound (`enthalpy_formation_unverifiable_light_species`: hydrogen-only species, He, He2, HeH, the Li atom), in that order; their context adds `atom_corrections_applied: not_recorded` and `corrections_level_source`. These interim rules are superseded by output.yml 1.2's switch (ARC PR #1059) for new runs. Failing enthalpy (H298, NASA, point H and G) is stripped, S298 and point S/Cp kept, with warning action `thermo_enthalpy_omitted` (`thermo_omitted` if nothing remains). A block the shared `tckdb_schemas.enthalpy_reference.enthalpy_reference_error` rule refuses is omitted whole. All refusals are producer warnings in the sidecar and outcome |
 | Correction scheme metadata | Applied energy corrections | Removed obsolete `scheme.version`; nonempty legacy version preserved in scheme note |
-| `ess_software` / `ess_versions` | Calculation software release | Observed software used per job; no borrowing another program's version |
+| `ess_software` / `ess_versions` | Calculation software release | Observed software used per job; no borrowing another program's version. Since 0.6.1 the banner is split into `version` and `revision` exactly as TCKDB's shared `SoftwareReleaseRef` would (roadmap A7) |
 | `scf_reference` | Level-of-theory spin treatment | Actual freq/SP references retained only on their respective jobs |
 | `freq_hessian_method` | Typed calculation parameter | Known analytic/finite-difference method retained |
 | `rotor_scans` | Scan calculations | TS reaction-bundle mapping added; explicit scan provenance required rather than assuming optimization method |
@@ -178,3 +178,47 @@ conformance with what the contract states, not reactions to new validation.
 | sp level falls back to `opt_level` | `level_of_theory` required | a null `sp_level` means no sp job ran (`arc/main.py:1135-1145`), so ARC parses `e_elect` from the opt log (`arc/scheduler.py:849-850`, `parse_opt_e_elect` at `:3484-3505`); `sp_level == opt_level` also reuses the opt output (`arc/scheduler.py:1662-1683`); output.yml's `sp_energy_hartree` is that `e_elect` (`arc/output.py:1763-1764`). The sp calc is marked `reused_result` from opt | **Keep** (verified) |
 | Arrhenius `T0_k` → 1 K when the key is absent | TCKDB evaluates `a*T**n` | current output always writes `T0_k` (`arc/output.py:2824`); pre-contract exports come from Arkane's `Arrhenius().fit_to_data(...)` called without `T0` (RMG-Py `arkane/kinetics.py:190`), whose default is `T0=1` K (`rmgpy/kinetics/arrhenius.pyx:149`, stored at `:200`; `Arrhenius.__init__` default `T0=(1.0, "K")` at `:69`) | **Keep** for pre-contract output |
 | `ts_upload.reaction.reversible = True` | required, no default (the computed-reaction route defaults `true`) | ARC has no reversibility attribute (`arc/output.py:2841-2849`) | **Keep.** Refusing would block every standalone TS upload. [TCKDB#583](https://github.com/TCKDB/TCKDB/issues/583) asks the TS route to default it like the computed-reaction route |
+
+## Provenance passthrough (adapter 0.6.1)
+
+A real ARC benzene run (B3LYP/def2-TZVP, output.yml 1.2; now the fixture
+`tckdb_arc/tests/fixtures/benzene_b3lyp_def2tzvp`) deposited on production drew
+provenance warnings for data output.yml already held. Status by roadmap item:
+
+- **A7, done.** Each calculation's `software_release` banner (`ess_versions`,
+  e.g. `Gaussian 16, Revision C.02`) is split before sending by
+  `tckdb_schemas.fragments.refs.SoftwareReleaseRef.normalize_composite_version`,
+  the shared rule the server itself applies (it warned
+  `software_release_version_is_composite` and stored `16` / `C.02`). The adapter
+  reuses that model rather than porting it, so both agree by construction: a
+  leading token equal to the software name is stripped and a trailing
+  `, Revision <label>` split off (ORCA `5.0.4`, Molpro `2022.3`, Psi4 `1.7`); a
+  banner whose leading token names another program (`name=gaussian`,
+  `ORCA 6.0.0`; `name=qchem`, `Q-Chem 5.4`) or has no recognised shape is sent
+  unchanged, as the server leaves it. The server's `[auto]` note is not sent.
+- **A9, done.** Computed-species `thermo.software_release` and
+  `statmech.software_release` name Arkane (`version` ← `arkane_version`,
+  `revision` ← `arkane_git_commit`, each when recorded), as the reaction bundle's
+  `analysis_software_release` does (and now also with the version). Arkane is
+  post-processing software; it never goes on a calculation, which TCKDB refuses
+  (`calculation_software_is_workflow_tool`). Conformer mode emits no statmech
+  (roadmap A2 row 7), so it has no slot to fill.
+- **C10 / MR-2, done for the program name.** Each applied correction's
+  `scheme.software` is `{name: <software>}` parsed from the record's
+  `matched_arkane_key` (Arkane's database entry, e.g.
+  `LevelOfTheory(method='b3lyp2023',basis='def2tzvp',software='gaussian')`),
+  the program whose numerics the atom-energy and BAC parameters come from. The
+  record's `level_of_theory` is ARC's own level, not the table's: ARC's matcher
+  (`arc/statmech/arkane.py`) accepts a key without software for any program. So
+  the field is omitted when the key is absent, unparseable or names no software,
+  and omitted with `energy_correction_scheme_software_conflict` when it
+  disagrees with the level's software. The contract calls a name-only release
+  "a complete and honest deposit"; ARC does not record which release computed
+  Arkane's tables, so no version is sent. Never Arkane or ARC.
+- **Literature, known gap.** `missing_literature_provenance` remains advisory:
+  ARC records no citation for its thermo, statmech or schemes.
+
+Also seen on the fixture: the atom-energy scheme's `atom_params` are not sent,
+because ARC writes that table as `reference_atom_energies`, not
+`parameter_table`, and the screened alternative conformer's opt is labelled
+with `opt_level` and the opt banner (roadmap A4).

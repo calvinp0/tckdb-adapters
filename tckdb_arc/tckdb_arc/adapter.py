@@ -37,6 +37,10 @@ from typing import Any, Literal
 from tckdb_client import TCKDBClient
 from tckdb_client.errors import TCKDBError
 from tckdb_schemas.enthalpy_reference import enthalpy_reference_error
+from tckdb_schemas.fragments.refs import (
+    W_SOFTWARE_RELEASE_VERSION_IS_COMPOSITE,
+    SoftwareReleaseRef,
+)
 from tckdb_schemas.utils import normalize_tunneling_model
 
 from tckdb_arc._logging import get_logger
@@ -302,6 +306,10 @@ def _correction_records_from_record(record: Mapping[str, Any]) -> list[dict[str,
             "value_unit": unit,
             "scheme": scheme,
             "components": correction.get("components") or [],
+            # Arkane's database key the table came from; read by
+            # ``_build_applied_energy_corrections`` for ``scheme.software``,
+            # never sent itself.
+            "matched_arkane_key": correction.get("matched_arkane_key"),
         })
     return out
 
@@ -1067,6 +1075,7 @@ class TCKDBAdapter:
             source_calculation_key=(
                 _CALC_KEY_SP if _CALC_KEY_SP in included_keys else None
             ),
+            warnings=warnings,
         )
         if applied_corrections:
             bundle["applied_energy_corrections"] = applied_corrections
@@ -1086,7 +1095,13 @@ class TCKDBAdapter:
             header_corrections_level=output_doc.get("arkane_level_of_theory"),
             element_symbols=_species_element_symbols(species_record),
         )
+        # This route has no bundle-level analysis_software_release (the
+        # reaction bundle does, and its thermo/statmech inherit it), so the
+        # Arkane release goes on the thermo and statmech blocks themselves.
+        arkane_release = _arc_analysis_software_release(output_doc)
         if thermo_block is not None:
+            if arkane_release is not None:
+                thermo_block["software_release"] = dict(arkane_release)
             bundle["thermo"] = thermo_block
 
         # Workflow-tool release at bundle level (in addition to per-calc):
@@ -1122,6 +1137,8 @@ class TCKDBAdapter:
             warning_field="statmech",
         )
         if statmech_block is not None:
+            if arkane_release is not None:
+                statmech_block["software_release"] = dict(arkane_release)
             bundle["statmech"] = statmech_block
 
         return bundle
@@ -2540,6 +2557,8 @@ class TCKDBAdapter:
         applied_corrections = _build_applied_energy_corrections(
             _correction_records_from_record(species_record),
             source_calculation_key=calc_keys.get(_CALC_KEY_SP),
+            warnings=warnings,
+            warning_field=f"species[{actor_key}].applied_energy_corrections",
         )
         if applied_corrections:
             species_block["applied_energy_corrections"] = applied_corrections
@@ -2942,6 +2961,8 @@ class TCKDBAdapter:
         applied_corrections = _build_applied_energy_corrections(
             _correction_records_from_record(ts_record),
             source_calculation_key=calc_keys.get(_CALC_KEY_SP),
+            warnings=warnings,
+            warning_field="transition_state.applied_energy_corrections",
         )
         if applied_corrections:
             ts_block["applied_energy_corrections"] = applied_corrections
@@ -3089,6 +3110,7 @@ class TCKDBAdapter:
             )
             self._warned_ts_artifacts_unsupported = True
 
+        ts_warnings: list[dict[str, Any]] = []
         ts_block, _ = self._build_ts_block(
             output_doc=output_doc,
             ts_record=ts_record,
@@ -3102,8 +3124,16 @@ class TCKDBAdapter:
             # The standalone TS endpoint has no artifact slot — skip the
             # (potentially multi-MB) read+base64 rather than build+strip.
             include_artifacts=False,
-            warnings=warnings,
+            warnings=ts_warnings,
         )
+        # The standalone request drops the TS's applied energy corrections
+        # (below), so findings about them do not describe this upload.
+        if warnings is not None:
+            warnings.extend(
+                w for w in ts_warnings
+                if not str(w.get("field", "")).startswith(
+                    "transition_state.applied_energy_corrections")
+            )
 
         # Applied energy corrections travel on the TS block for the
         # reaction bundle but have no home in the standalone request. Log
@@ -3490,7 +3520,8 @@ class TCKDBAdapter:
                 if (opt_software and str(opt_software).lower() == str(software_name).lower()):
                     ess_version = ess_versions.get("opt")
             if ess_version:
-                software_release["version"] = str(ess_version)
+                software_release.update(
+                    _split_ess_version_banner(software_release["name"], str(ess_version)))
 
         calc: dict[str, Any] = {
             "type": calc_type,
@@ -4430,6 +4461,45 @@ def _screened_conformer_origin() -> dict[str, Any]:
     }
 
 
+def _split_ess_version_banner(name: str, banner: str) -> dict[str, str]:
+    """Split an ESS banner into ``version`` (and ``revision``) as TCKDB would.
+
+    ARC records the banner as printed (``ess_versions``: ``'Gaussian 16,
+    Revision C.02'``). TCKDB keeps version and revision in separate columns
+    and, given the banner as ``version``, normalises it itself with a
+    ``software_release_version_is_composite`` warning. The rule is the shared
+    ``tckdb_schemas.fragments.refs.SoftwareReleaseRef.normalize_composite_version``
+    (the model the server validates with), so it is reused here rather than
+    re-implemented and the adapter sends exactly what the server would store:
+
+    * no internal whitespace (``'16'``, ``'5.0.4'``): unchanged;
+    * leading token equal to ``name`` (case-insensitive): stripped, and a
+      trailing ``', Revision <label>'`` split into ``revision``
+      (``'Gaussian 16, Revision C.02'`` -> ``16`` / ``C.02``, ``'ORCA 5.0.4'``
+      -> ``5.0.4``, ``'Molpro 2022.3'`` -> ``2022.3``);
+    * leading token naming another program (``name='gaussian'``,
+      ``'ORCA 6.0.0'``; ``name='qchem'``, ``'Q-Chem 5.4'``): unchanged, as
+      the server leaves it (it warns ``software_release_name_looks_wrong``);
+      the adapter never guesses which of the two is right.
+
+    The server's ``[auto] ...`` provenance note is not sent: the split is
+    a deterministic reformat, and the banner is reconstructible from
+    ``name``/``version``/``revision``.
+    """
+    unchanged = {"version": banner}
+    try:
+        ref = SoftwareReleaseRef(name=name, version=banner)
+    except ValueError:
+        return unchanged
+    warning = ref.version_warning()
+    if warning is None or warning.code != W_SOFTWARE_RELEASE_VERSION_IS_COMPOSITE:
+        return unchanged
+    split = {"version": ref.version}
+    if ref.revision is not None:
+        split["revision"] = ref.revision
+    return split
+
+
 def _stated_integer(
     record: Mapping[str, Any],
     field: str,
@@ -5071,10 +5141,38 @@ def _scheme_level_of_theory(scheme: Mapping[str, Any]) -> dict[str, Any] | None:
     return _arc_level_to_tckdb_lot(scheme.get("level_of_theory"))
 
 
+_ARKANE_KEY_RE = re.compile(r"^\s*LevelOfTheory\((?P<body>.*)\)\s*$", re.DOTALL)
+_ARKANE_KEY_SOFTWARE_RE = re.compile(r"(?:^|,)\s*software\s*=\s*'(?P<name>[A-Za-z0-9_.+-]+)'\s*(?=,|$)")
+_W_ENERGY_CORRECTION_SCHEME_SOFTWARE_CONFLICT = "energy_correction_scheme_software_conflict"
+
+
+def _arkane_key_software(matched_arkane_key: Any) -> str | None:
+    """The ``software='<name>'`` in Arkane's matched database key, or ``None``.
+
+    ARC records the key as the entry's repr, e.g.
+    ``LevelOfTheory(method='b3lyp2023',basis='def2tzvp',software='gaussian')``
+    (arc/output.py ``matched_arkane_key``). Only a key of that shape with
+    exactly one clean, single-quoted ``software`` token counts; anything
+    else (no key, a key without software, an unparseable string) is
+    ``None``, never a guess.
+    """
+    if not isinstance(matched_arkane_key, str):
+        return None
+    shape = _ARKANE_KEY_RE.match(matched_arkane_key)
+    if shape is None:
+        return None
+    names = [m.group("name") for m in _ARKANE_KEY_SOFTWARE_RE.finditer(shape.group("body"))]
+    if len(names) != 1 or shape.group("body").count("software") != 1:
+        return None
+    return names[0]
+
+
 def _build_applied_energy_corrections(
     applied_records: Any,
     *,
     source_calculation_key: str | None = None,
+    warnings: list[dict[str, Any]] | None = None,
+    warning_field: str = "applied_energy_corrections",
 ) -> list[dict[str, Any]]:
     """Translate ``output.yml`` per-species ``applied_energy_corrections``
     into the TCKDB ``AppliedEnergyCorrectionUploadPayload`` shape.
@@ -5137,6 +5235,52 @@ def _build_applied_energy_corrections(
         lot_ref = _scheme_level_of_theory(scheme_in)
         if lot_ref is not None:
             scheme_out["level_of_theory"] = lot_ref
+        # ``scheme.software`` is the program that computed the scheme's
+        # parameters (contract: "The program release that computed this
+        # scheme's parameters"). That is the ``software`` of the Arkane
+        # database entry the table came from, recorded by ARC as
+        # ``matched_arkane_key`` (e.g. LevelOfTheory(method='b3lyp2023',
+        # basis='def2tzvp', software='gaussian')). The record's
+        # ``level_of_theory`` is ARC's own level, not the table's: ARC's
+        # matcher (arc/statmech/arkane.py) accepts a key without software
+        # for any program, so crediting the table to the level's software
+        # could name a program that never computed it. Hence: the key's
+        # software, name only (ARC records no release); omitted when the
+        # key is absent or names none; omitted with a warning when it
+        # disagrees with the level's software. Never Arkane or ARC (they
+        # looked the table up; that is ``workflow_tool_release``).
+        if "software" not in scheme_out:
+            key_software = _arkane_key_software(rec.get("matched_arkane_key"))
+            scheme_level = scheme_in.get("level_of_theory")
+            level_software = (
+                scheme_level.get("software") if isinstance(scheme_level, Mapping) else None
+            )
+            if key_software is None:
+                pass
+            elif (isinstance(level_software, str) and level_software.strip()
+                    and level_software.strip().lower() != key_software.lower()):
+                message = (
+                    f"The {scheme_out.get('kind')} table came from Arkane's "
+                    f"{rec.get('matched_arkane_key')!r} (software={key_software!r}), "
+                    f"but ARC's correction level names software={level_software!r}. "
+                    f"Which program computed the table is unclear, so "
+                    f"scheme.software is omitted."
+                )
+                logger.warning("TCKDB %s: %s: %s", warning_field,
+                               _W_ENERGY_CORRECTION_SCHEME_SOFTWARE_CONFLICT, message)
+                if warnings is not None:
+                    warnings.append({
+                        "code": _W_ENERGY_CORRECTION_SCHEME_SOFTWARE_CONFLICT,
+                        "message": message,
+                        "field": f"{warning_field}.scheme.software",
+                        "context": {"source": "tckdb_arc_self_check",
+                                    "action": "scheme_software_omitted",
+                                    "scheme_kind": str(scheme_out.get("kind")),
+                                    "arkane_key_software": key_software,
+                                    "level_software": level_software},
+                    })
+            else:
+                scheme_out["software"] = {"name": key_software}
 
         payload: dict[str, Any] = {
             "application_role": rec["application_role"],
@@ -6076,16 +6220,26 @@ def _arc_analysis_software_release(
 ) -> dict[str, Any] | None:
     """Build the Arkane ``SoftwareReleaseRef``-shaped dict, or ``None``.
 
-    ARC drives Arkane for kinetics/thermo fitting; the only durable
-    Arkane provenance ``output.yml`` carries today is the RMG-Py HEAD
-    commit (Arkane lives in that repo). No Arkane version string is
-    captured, so we emit ``name`` + ``revision`` only and let the
-    schema's other ``SoftwareReleaseRef`` fields remain absent.
+    ARC runs Arkane for the thermo, statmech and kinetics it reports, so
+    Arkane is the post-processing software of those products (their
+    ``software_release`` / ``analysis_software_release``), never a
+    calculation's ``software_release``, which TCKDB refuses for a
+    workflow tool (``calculation_software_is_workflow_tool``). output.yml
+    records ``arkane_version`` (e.g. ``4.0.0``) and ``arkane_git_commit``
+    (the RMG-Py commit Arkane ran from). The version goes to ``version``;
+    the commit stays in ``revision``, where earlier adapters put it. Each
+    is sent only when ARC recorded it; ``None`` when neither is.
     """
+    arkane_version = output_doc.get("arkane_version")
     arkane_git_commit = output_doc.get("arkane_git_commit")
-    if not arkane_git_commit:
+    if not (arkane_version or arkane_git_commit):
         return None
-    return {"name": "Arkane", "revision": str(arkane_git_commit)}
+    release: dict[str, Any] = {"name": "Arkane"}
+    if arkane_version:
+        release["version"] = str(arkane_version)
+    if arkane_git_commit:
+        release["revision"] = str(arkane_git_commit)
+    return release
 
 
 # StatmechCalculationRole values that ARC's three-stage opt/freq/sp

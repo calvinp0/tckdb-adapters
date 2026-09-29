@@ -138,11 +138,13 @@ failure (which raises `RuntimeError`) fails the test instead of satisfying it:
 - artifact-batch sidecars lose the status code, the upload request ID and the
   replay flag, because tckdb-client (0.93–0.95) keeps only the response body (one
   xfail per field);
-- computed-species thermo never names Arkane, even when `arkane_git_commit`
-  is present (computed-reaction does);
 - the adapter never reads `ts_checks.IRC`: a TS with `IRC: true` is deposited
   without passing IRC evidence, and one with `IRC: false` without failing
   evidence.
+
+`test_computed_species_thermo_names_arkane` was such an xfail until adapter
+0.6.1, which names Arkane on computed-species thermo and statmech; it is now
+an ordinary assertion.
 
 ## TCKDB findings
 
