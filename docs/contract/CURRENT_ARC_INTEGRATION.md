@@ -12,6 +12,9 @@ and schema versions; their percentages are not current coverage measurements.
 - TCKDB main: `adceeff5c0470c37483d16c4d6b46a005c076dfe`, client 0.93.0,
   schemas 0.51.0. The checkout advanced during this investigation; the final
   installation and CI pin use this revision.
+  TCKDB HEAD has since moved to `ad3cd706` (client 0.94.0, still schemas 0.51.0),
+  adding backend-only rules (#565 refuses ARC/RMG as calculation software, #566)
+  that the adapter already satisfies. See BRIDGE_ROADMAP.md C12.
 - Adapter: working tree including substantial pre-existing uncommitted work.
   Those changes were retained.
 
@@ -66,28 +69,42 @@ a rate law with unknown normalization.
 
 ## Remaining work, by owner
 
-| Gap | Owner / next step |
-|---|---|
-| Current ARC rotor export has results but no scan level/software | ARC must export scan provenance. Adapter accepts explicit `scan_level`; missing provenance is reported, not replaced with `opt_level`. See `arc/output.py::_build_rotor_scan_entry` and `arc/scheduler.py::run_scan_jobs`. |
-| Standalone TS endpoint has no `scan_result` slot | Use `computed_reaction` to carry TS scans with known provenance; standalone mode warns and omits them. Target parity requires TCKDB work. |
-| TS statmech has no bundle field | Extend TCKDB `BundleTransitionStateIn` before wiring ARC's TS statmech. |
-| Full tunneling and partition-function provenance | TCKDB `BundleKineticsIn` lacks `tunneling_application`, `interpretation_assignments`, and `network_kinetics_ref`. The existing tunneling label is not replayable evidence. |
-| Transport | ARC has internal transport data but does not export it in `output.yml`. TCKDB bundles also lack transport fields; a separate transport upload route exists. Both producer export and adapter orchestration are needed. |
-| `wavefunction_stability` | Adapter gap requiring source-job binding. A stability calculation/followed solution must not be mislabeled as a result of the final SP or optimization. |
-| `ts_checks` | Adapter evidence mapping remains. ARC's completed IRC jobs do not establish that its endpoint validation passed; map explicit verdicts and source calculations to TCKDB validation evidence. |
-| Execution environment and effective calculation settings | ARC export is incomplete, especially beyond coarse/fine optimization settings. Do not invent runtime metadata from requested input settings. |
-| NEB portable evidence, alternative TS guesses, multidimensional rotor scans | Producer evidence/export work; current portable sidecar covers Hessian/IRC/GSM, successful 1D rotors and the chosen guess. |
-| Deposit rights | Requires explicit depositor information/configuration; no license or consent is inferred. |
-| Whether Arkane applied atom-energy corrections | Exported by ARC output.yml 1.2 (`thermo.atom_corrections_applied` / `atom_corrections_level`, ARC branch `feature_export_atom_corrections_applied` at `a10e8ae0`, not yet on ARC main) and consumed by the adapter. Pre-1.2 output (`db0934d5`) cannot say so: an `energy_corrections[]` `atom_energy` row strongly suggests corrections were applied (a freq-level mismatch can disable them while the row is still exported), and its absence proves nothing. For such output, and for thermo Arkane loaded from YAML, the adapter falls back to the ±2.0e4 kJ/mol magnitude guard (`_FORMATION_ENTHALPY_MAX_ABS_KJ_MOL`), which misses every species whose raw total energy is below about 7.6 hartree (H, H2, He, the Li atom), so since 0.5.0 it strips such light species' enthalpy by composition and checks the header `arkane_level_of_theory` (written by ARC `db0934d5` as a required, nullable level dict: the user's setting, else `composite_method`, else `sp_level`) against the energy level. |
-| Per-species energy level | ARC must export the level each species' energies were computed at. Under `adaptive_levels`, SP levels vary by species but output.yml records one `sp_level`, so the adapter's comparison with `atom_corrections_level` can pass wrongly, and the adapter cannot detect adaptive runs. ARC `1977e53b` now warns at run time when an adaptive sp or composite level differs from the Arkane level, but output.yml still does not record it. |
-| Atom-energy matching ignores dispersion and solvation | ARC bug. Its Arkane key match and `data/AEC.yml` lookup ignore `dispersion` and `solvation_method`: B3LYP + GD3BJ gets plain B3LYP atom energies and SMD gets gas-phase ones, yet `atom_corrections_level` equals `sp_level`. Fix: make the match refuse, or warn, when the level has dispersion or solvation the matched key lacks. ARC `1977e53b` warns at run time for a solvated energy level and for an Arkane level carrying its dispersion in the separate field. Until the match is fixed the adapter strips enthalpy when either the energy level or `atom_corrections_level` sets either field (`enthalpy_atom_corrections_level_unverifiable`). |
+The ranked, owner-sorted list is now **[`BRIDGE_ROADMAP.md`](BRIDGE_ROADMAP.md)**. It is
+built from the 0.51 gap matrix (`GAP_MATRIX.md`) and the live integration-gate
+findings. The table below is kept as a short index into it. Three rows of the earlier
+version of this table were contradicted by the refreshed inventories and are corrected
+here: transport, `wavefunction_stability` and `ts_checks`.
+
+| Gap | Owner / next step | Roadmap |
+|---|---|---|
+| Petersson `bac_total` with no bond component: TCKDB 422s the whole upload (`bac_total_requires_components`). Current ARC drops all components when any bond lacks a parameter (`arc/output.py:1592-1596`) and the adapter forwards `components or []` | Adapter: drop the componentless correction on bonded species and TSs, with a sidecar warning. **Producer-breaking** | A1 |
+| TS-guess `path_search` and IRC calculations labelled with the opt level and opt ESS | Adapter. The TS guess is always wrong: use `neb_level` / `ess_software.neb`, and omit GSM until ARC exports its level. The IRC is wrong when `irc_level` ≠ `opt_level`: ARC defaults `irc_level` to `wb97xd/def2tzvp` (`arc/main.py:1166-1176`), so take the IRC level from its log's route line. **Wrong data** | A3, B3 |
+| Screened alternative conformers filed as opts at `opt_level` | Adapter: stop until ARC exports the conformer level. This is wrong in ARC's default configuration (conformer `wb97xd/def2svp` vs opt `wb97xd/def2tzvp`, `arc/settings/settings.py:227-229`). **Wrong data** | A4, B3 |
+| `statmech_treatment` inferred from ARC's torsion list, though Arkane ignores rotors when the freq log has no force-constant matrix (RMG-Py `arkane/statmech.py:647-667`; ARC's Gaussian freq always writes one, so the case is composite/ORCA/Q-Chem/Molpro) | Adapter: emit a rotor-bearing treatment only when parser evidence has the species' `freq_hessian`, otherwise omit (the field is optional in TCKDB); ARC: export what Arkane applied. **Wrong data (conditional)** | A5, B4 |
+| Atoms get a primary opt that never ran: normally sent with `converged: false`, since ARC never sets `job_types['opt']` for an atom, and with `converged: true` in composite runs (`arc/scheduler.py:3441`) | TCKDB: a form without an opt; adapter: skip until then. **Wrong data** | A6, C6 |
+| Current ARC rotor export has results but no scan level/software | ARC must export scan provenance. The adapter accepts an explicit `scan_level`; missing provenance is reported, not replaced with `opt_level`. See `arc/output.py::_build_rotor_scan_entry` and `arc/scheduler.py::run_scan_jobs` | B3 |
+| Standalone TS endpoint has no `scan_result` slot | Use `computed_reaction` to carry TS scans with known provenance; standalone mode warns and omits them. Parity needs TCKDB work | C9 |
+| TS statmech has no bundle field | Extend TCKDB `BundleTransitionStateIn` before wiring ARC's TS statmech (still true at 0.51) | C8 |
+| Full tunneling and partition-function provenance | TCKDB `BundleKineticsIn` still lacks `tunneling_application`, `interpretation_assignments` and `network_kinetics_ref` at 0.51. The existing tunneling label is not replayable evidence | C8 |
+| Transport | **Corrected.** ARC has no working transport path to export: no `onedmin` job adapter is registered, the processor's transport step is a `# todo` (`arc/processor.py:237`), and `transport_data` is not persisted. TCKDB *does* have homes at 0.51 (`conformer_upload.transport` and `POST /uploads/transport`). So this is new ARC capability first; the adapter follows | B11 |
+| `wavefunction_stability` | **Corrected:** ARC exports it (`arc/output.py:1841-1842`, tested). The gap is the adapter's: map it to `scf_stability` on the sp/freq calculation whose reference was tested, never on the final opt | A10 |
+| `ts_checks` | **Corrected:** ARC exports the verdicts since output 1.1 (`arc/output.py:1986`, `:2779-2805`). The gaps are in the adapter and TCKDB. The adapter must map `ts_checks.IRC` (never `irc_converged`, which only means the IRC jobs finished) to `validation_evidence`. TCKDB accepts only `kind: 'irc'`, so the E0, e_elect, freq and NMD verdicts have no home. No real-ARC fixture sets `ts_checks.IRC` | A14, C7 |
+| Execution environment and effective calculation settings | ARC export is incomplete, especially beyond coarse/fine optimization settings. Do not invent runtime metadata from requested input settings | B11 |
+| NEB portable evidence, alternative TS guesses, multidimensional rotor scans | Producer evidence/export work; the current portable sidecar covers Hessian/IRC/GSM, successful 1D rotors and the chosen guess | B11 |
+| Deposit rights | Requires explicit depositor information/configuration; no license or consent is inferred. Silent at upload, but a dataset release refuses records without a rights basis | D2 |
+| Whether Arkane applied atom-energy corrections | Exported by ARC output.yml 1.2 (`thermo.atom_corrections_applied` / `atom_corrections_level`, PR #1059 branch `feature_export_atom_corrections_applied`, not yet on ARC main) and consumed by the adapter. Pre-1.2 output (`db0934d5`, ARC main today) cannot say so. An `energy_corrections[]` `atom_energy` row does **not** prove the corrections were applied: it is keyed on the energy level alone, and Arkane's model chemistry can be `None` when the freq level is not found and no `freq_scale_factor` was given (`arc/statmech/arkane.py:1138-1157`). The row's absence proves nothing either. At `0913124`, such output gets only the ±2.0e4 kJ/mol magnitude guard, which misses H, H2, He and Li. **Decided (option d); committed as `84b1b05` on `fix_unverifiable_enthalpy_without_flags` (adapter 0.5.0), pending merge:** when the flag is absent, strip the enthalpy for light species by composition, taken from the species' xyz or else its `formula` (hydrogen-only species, He, He2, HeH, the Li atom), when the header `arkane_level_of_theory` does not match the energy level, and when either level sets a separate `dispersion` or `solvation_method`. Composition uses the xyz, else the record's `formula`, because ARC 1.0 writes `xyz: null` for monoatomics. The header `arkane_level_of_theory` is written by ARC `db0934d5` as a required, nullable level dict; a null header, or one without a method, is not checked. These interim rules are superseded by output.yml 1.2's switch (ARC PR #1059) for new runs. Residual risk: a stand-in with the same method and basis that differs by a year refit or by ARC's fuzzy key match. In the golden corpus only H2 loses its enthalpy. The `feature_tckdb_integration_gate` test `test_golden_species_calculations_thermo_and_hessian` asserts golden H2's `formation_298k` and NASA fit, so whichever branch merges second must update it | A2, B1, D1 |
+| Per-species energy level | ARC must export the level each species' energies were computed at. Under `adaptive_levels` every calculation is attributed to the run-level level (**wrong data**), and the adapter's comparison with `atom_corrections_level` can pass wrongly. `output.yml` does not record adaptive runs, but the adapter can detect them from the project's `input.yml` (which the CLI already reads) or `restart.yml` (ARC saves `adaptive_levels` there, `arc/main.py:439`). The interim is to refuse or strip affected calculations until ARC exports per-species levels | A2b, B2 |
+| Atom-energy matching ignores dispersion and solvation | ARC bug. Its Arkane key match and `data/AEC.yml` lookup ignore `dispersion` and `solvation_method`: B3LYP + GD3BJ gets plain B3LYP atom energies and SMD gets gas-phase ones, yet `atom_corrections_level` equals `sp_level`. Fix: make the match refuse, or warn, when the level has dispersion or solvation the matched key lacks. ARC `1977e53b` warns at run time. Until the match is fixed, the adapter strips enthalpy when either level sets either field (`enthalpy_atom_corrections_level_unverifiable`) | B1 |
+| TCKDB commits writes after the 201 is sent (`backend/app/api/deps.py:123-150`, T4) | TCKDB. Until fixed, a 201 does not prove persistence, so the adapter's sidecar and idempotency record can describe a deposit that does not exist | C1 |
 
 TCKDB workflow checks extend beyond schema validation: source calculations
 must belong to the right species and scientific role; SP/optimization geometry
 and level relationships must agree; TS composition must match reaction
-participants. A future integration gate should POST these offline corpus
-payloads to an isolated current backend and inspect persisted relationships
-and response warnings. Never use production deposits as this test fixture.
+participants. `TCKDB_DEMAND.yml` now lists them as 508 `workflow_check` rows, and
+`gap_matrix.yml` attaches each to its path. The live integration gate (branch
+`feature_tckdb_integration_gate`, `docs/contract/INTEGRATION_GATE.md`, under review)
+POSTs the offline corpora to an isolated backend and reads the rows back. Never
+use production deposits as this test fixture.
 
 ## Reproduce
 

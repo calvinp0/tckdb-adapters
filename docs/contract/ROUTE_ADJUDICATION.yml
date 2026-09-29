@@ -3589,3 +3589,575 @@
     pre-translated to actor-scoped keys by the caller at :2401.'
   evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:277
   exceptions: []
+
+# ============================================================================
+# Phase B refresh for tckdb-schemas 0.51.0 (TCKDB_v2 ad3cd706). New row kinds.
+# See ROUTE_ADJUDICATION.md §7. The concept rulings above were written against
+# the 0.22 path set and still apply by concept tail; the rows below (a) stop
+# them leaking onto the three new roots, (b) relate the reaction bundle's
+# flattened result scalars to the nested result blocks, and (c) record
+# adapter mappings Phase B found reading a key ARC does not write.
+#
+#   kind: route_applicability  -- regex `pattern` over the demand path; applies
+#       only when no inventory supplies the row at its own path (no A2, A3 or
+#       A4 row). verdict VACUOUS -> NOT_APPLICABLE; DIFFERENT_INSTANCE or GATED
+#       -> ARC_ABSENT without borrowing any sibling's supply.
+#   kind: flattened_alias      -- a ComputedReactionCalculationIn scalar and the
+#       nested result tail it flattens; supply is looked up at the nested tail.
+#   kind: mapping_review       -- the adapter emits the field but reads an ARC
+#       key that A2 shows ARC does not write there; `verdict_override` replaces
+#       the join verdict.
+# ============================================================================
+- kind: route_applicability
+  rule_id: AP-1-result-block-on-opt-primary
+  pattern: '^(species_upload\.conformers\[\]\.primary_calculation|reaction_upload\.species\[\]\.conformers\[\]\.calculation|reaction_upload\.transition_state\.calculation|ts_upload\.primary_opt|conformer_upload\.calculation)\.(freq_result|sp_result|irc_result|path_search_result|scan_result|freq_|sp_)'
+  verdict: VACUOUS
+  rationale: 'These four routes are the primary calculation of a conformer or TS, and TCKDB
+    requires that calculation to be type opt (computed_species_upload.py:327,
+    computed_reaction_upload.py:281 and :939, transition_state_upload.py:166-167). A typed
+    calculation admits only the result block matching its type (computed_species_upload.py:208-240,
+    fragments/calculation.py:883 CalculationWithResultsPayload). A freq/sp/irc/path-search/scan result
+    on an opt calculation is therefore refused or meaningless. On the reaction route the
+    flattened freq_*/sp_* scalars are not refused by a type matrix, but ARC runs freq and sp as
+    separate jobs and the adapter deposits them as separate calculations, so no ARC object
+    populates them on the opt. The old concept rulings generalised these rows from additional
+    calculations; that was a route-shape artefact, not supply. conformer_upload.calculation is not
+    forced to type opt by the schema, but it is the calculation that produced the conformer
+    geometry and the adapter''s conformer mode always sends the opt there (freq and sp go to
+    additional_calculations[], which are supplied), so for ARC these legs are vacuous too.'
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:327
+- kind: route_applicability
+  rule_id: AP-2-irc-path-search-on-minimum
+  pattern: '^(species_upload|conformer_upload|transport_upload|reaction_upload\.species\[\])\..*\.(irc_result|path_search_result)(\.|$)'
+  verdict: VACUOUS
+  rationale: 'An IRC or a double-ended path search is run from a saddle point. On a minimum''s
+    calculation routes TCKDB exposes the field only because its calculation model is uniform
+    across calculation types. This supersedes the 0.22 ruling in §1.5 of ROUTE_ADJUDICATION.md,
+    which reached the same conclusion (not a gap) but encoded it as GENERALISES, so the matrix
+    showed these rows as WIRED although the adapter never emits them there
+    (_build_irc_result_payload and _build_path_search_result_payload are called only inside the
+    TS block). NOT_APPLICABLE says what §1.5 meant.'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:2542
+- kind: route_applicability
+  rule_id: AP-3-ts-designation-on-minimum
+  pattern: '^(species_upload|conformer_upload|transport_upload|reaction_upload\.species\[\])\..*\.(reaction_coordinate_mode_index|freq_reaction_coordinate_mode_index)$'
+  verdict: VACUOUS
+  rationale: 'reaction_coordinate_mode_index designates the reaction-coordinate mode of a saddle
+    point. The schema says it is "meaningless on a minimum, and refused there"
+    (fragments/calculation.py:257-269, validator :323-357).'
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:262
+- kind: route_applicability
+  rule_id: AP-4-transport-gated
+  pattern: '^(transport_upload\.|conformer_upload\.transport\.)'
+  verdict: GATED
+  rationale: 'Every transport route is gated on ARC producing transport data, which it does not:
+    arc/output.py has no transport code (A2), the processor''s transport step is a todo
+    (ARC:arc/processor.py:237) and no onedmin job adapter is registered (A3), and the adapter has
+    no transport builder (A4 §7). The provenance and calculation sub-blocks of a transport upload
+    (software_release, workflow_tool_release, calculations[], species_entry) are supplied at
+    other routes, but borrowing them here would describe a record nobody can deposit. Rows with
+    their own A3 latent supply (dipole, polarizability, sigma, epsilon) keep ARC_LATENT.'
+  evidence: ARC:arc/processor.py:237
+- kind: route_applicability
+  rule_id: AP-5-execution-environment
+  pattern: '\.execution_environment(\.|\{|$)'
+  verdict: DIFFERENT_INSTANCE
+  rationale: 'Extends the 0.22 ruling (§2.2) to the new roots. ExecutionEnvironmentManifestPayload
+    nests narrower release identities and requires schema_version, a discriminated runtime and an
+    executable; no ARC export or adapter builder produces any of it. A calculation''s own
+    software_release / workflow_tool_release is a different object. The 0.22 PARTIAL rulings on
+    workflow_tool_release.* and software_release.* enumerated only the 0.22 routes as exceptions,
+    so without this rule the conformer_upload / ts_upload / transport_upload execution-environment
+    routes were wrongly generalised.'
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/fragments/execution_environment.py:253
+- kind: route_applicability
+  rule_id: AP-6-aec-frequency-scale-factor
+  pattern: '\.applied_energy_corrections\[\]\.frequency_scale_factor(\.|$)'
+  verdict: DIFFERENT_INSTANCE
+  rationale: 'Extends the 0.22 ruling (§2.1) to conformer_upload. ARC never attaches a scale factor
+    to a correction record (its energy_correction $def is additionalProperties:false) and the
+    adapter never emits the block; statmech.freq_scale_factor is a different field.'
+  evidence: ARC:arc/output.py:1532
+- kind: route_applicability
+  rule_id: AP-7-ts-rotor-scan
+  pattern: '^(reaction_upload\.transition_state|ts_upload)\..*\.scan_result(\.|$)'
+  verdict: DIFFERENT_INSTANCE
+  rationale: 'Extends the 0.22 ruling (§2.4). ARC''s transition_states[] record carries no
+    rotor_scans, and ts_upload has no scan slot at 0.51. Where the adapter does emit a scan on the
+    reaction TS route (A4 rows exist) this rule does not apply.'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3079
+- kind: flattened_alias
+  flat_field: sp_electronic_energy_hartree
+  nested_tail: sp_result.electronic_energy_hartree
+  verdict: GENERALISES
+  rationale: 'ComputedReactionCalculationIn inherits CalculationIn''s flattened result scalars
+    (fragments/calculation.py CalculationIn; reaction validator computed_reaction_upload.py:178-197
+    names them) instead of the typed opt_result / freq_result / sp_result blocks the species,
+    conformer and TS roots use. The adapter builds the nested blocks once and unwraps them for
+    the reaction root (_flatten_all_reaction_calcs), and A2 keys the TS supply on both spellings.
+    The ARC value is the same record field, so supply at the nested tail covers the flat field.'
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:178
+- kind: flattened_alias
+  flat_field: opt_converged
+  nested_tail: opt_result.converged
+  verdict: GENERALISES
+  rationale: Same flattening as sp_electronic_energy_hartree.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:178
+- kind: flattened_alias
+  flat_field: opt_n_steps
+  nested_tail: opt_result.n_steps
+  verdict: GENERALISES
+  rationale: Same flattening as sp_electronic_energy_hartree.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:178
+- kind: flattened_alias
+  flat_field: opt_final_energy_hartree
+  nested_tail: opt_result.final_energy_hartree
+  verdict: GENERALISES
+  rationale: Same flattening as sp_electronic_energy_hartree.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:178
+- kind: flattened_alias
+  flat_field: freq_n_imag
+  nested_tail: freq_result.n_imag
+  verdict: GENERALISES
+  rationale: Same flattening as sp_electronic_energy_hartree.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:178
+- kind: flattened_alias
+  flat_field: freq_imag_freq_cm1
+  nested_tail: freq_result.imag_freq_cm1
+  verdict: GENERALISES
+  rationale: Same flattening as sp_electronic_energy_hartree.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:178
+- kind: flattened_alias
+  flat_field: freq_zpe_hartree
+  nested_tail: freq_result.zpe_hartree
+  verdict: GENERALISES
+  rationale: Same flattening as sp_electronic_energy_hartree.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:178
+- kind: flattened_alias
+  flat_field: freq_frequencies_cm1
+  nested_tail: freq_result.modes[].frequency_cm1
+  verdict: GENERALISES
+  rationale: 'The flat list of signed frequencies is the modes[].frequency_cm1 column without the
+    per-mode metadata. Same ARC source (statmech.harmonic_frequencies_cm1 plus the imaginary
+    list). Caveat carried from A2: for a TS, harmonic_frequencies_cm1 drops every negative mode and
+    the adapter re-inserts them as -abs(v), so mode order is reconstructed, not ESS order.'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:4660
+- kind: flattened_alias
+  flat_field: freq_reaction_coordinate_mode_index
+  nested_tail: freq_result.reaction_coordinate_mode_index
+  verdict: GENERALISES
+  rationale: 'TS routes only: the minimum routes are NOT_APPLICABLE under AP-3 when nothing emits
+    them. Same designation the nested field carries.'
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:262
+- kind: flattened_alias
+  flat_field: freq_imaginary_dispositions
+  nested_tail: freq_result.modes[].imaginary_disposition
+  verdict: PARTIAL
+  exceptions_patterns:
+  - '^reaction_upload\.species\[\]\.'
+  rationale: 'TS routes generalise from the nested per-mode disposition. The species routes do not:
+    a disposition on a minimum''s spurious imaginary mode is a different object (the 0.22 ruling
+    in §2.5), and ARC refuses a minimum with an imaginary mode outright.'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:4462
+- kind: mapping_review
+  rule_id: MR-1-aec-atom-params-read-dead-key
+  pattern: '\.applied_energy_corrections\[\]\.scheme\.atom_params\[\]\.(element|value)$'
+  verdict_override: ADAPTER_GAP
+  rationale: 'The adapter fills scheme.atom_params only from correction.parameter_table.values when
+    correction_type is atom_energy (adapter.py:285-291). ARC writes a parameter_table only on the
+    Petersson bond-additivity record; the atom-energy record carries its per-element table as
+    reference_atom_energies (ARC:arc/output.py:1575-1587), which the adapter never reads. So on
+    current ARC output the atom_params leaves are never emitted although ARC exports the values.
+    This is integration-gate finding C4. The values are Arkane''s per-element atomic energies at
+    the scheme''s level (hartree, the same unit as the AEC total), which is what an atom-energy
+    scheme''s parameters are; they are NOT per-atom corrections that sum to the total, so the fix
+    must not reconstruct the total from them.'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:285
+- kind: route_applicability
+  rule_id: AP-8-scheme-workflow-tool
+  pattern: '\.applied_energy_corrections\[\]\.scheme\.workflow_tool_release\.'
+  verdict: DIFFERENT_INSTANCE
+  rationale: 'A correction scheme''s workflow_tool_release names the tool "whose data file was the
+    proximate source" of the scheme''s parameters (energy_correction.py EnergyCorrectionSchemeRef
+    docstring). For ARC that is Arkane''s correction table (RMG-Py; whether the numbers live in
+    RMG-Py or RMG-database is UNVERIFIED), not ARC. The 0.22 PARTIAL ruling on
+    workflow_tool_release.* generalised these rows from the bundle-level ARC release because the
+    scheme route did not exist at 0.22. Sending ARC here would be wrong provenance. ARC does export
+    arkane_version / arkane_git_commit, which could identify the proximate tool; that is a policy
+    call recorded in BRIDGE_ROADMAP.md, not a supply the join can assert.'
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:69
+- kind: route_applicability
+  rule_id: AP-9-scheme-spin-treatment
+  pattern: '\.applied_energy_corrections\[\]\.scheme\.level_of_theory\.spin_treatment$'
+  verdict: DIFFERENT_INSTANCE
+  rationale: 'Since 0.22 the calculation routes gained a spin_treatment supply (scf_reference.
+    {freq,sp}_reference, observed from the freq/sp input). That observes the reference of ARC''s
+    own jobs, not the level a correction scheme was fitted at. ARC''s Level has no spin-treatment
+    attribute (§3 of this file), so the scheme leg stays unsupplied.'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3419
+- kind: route_applicability
+  rule_id: AP-10-ts-conformer-key
+  pattern: '^reaction_upload\.transition_state\.(calculation|calculations\[\])\.conformer_key$'
+  verdict: VACUOUS
+  rationale: 'conformer_key names a conformer declared by the calculation''s own species. At 0.51
+    reaction_upload.transition_state has no conformers[] (geometry, calculation, calculations[]
+    only), so there is nothing for a TS calculation to name.'
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:899
+- kind: mapping_review
+  rule_id: MR-2-scheme-software-is-the-ess
+  pattern: '\.applied_energy_corrections\[\]\.scheme\.software\.'
+  when_verdicts: [ADAPTER_GAP, ROUTE_UNRESOLVED, WIRED, SOURCE_UNCONFIRMED]
+  verdict_override: ARC_ABSENT
+  rationale: 'A2 maps scheme.software.name/version from Arkane (model ''arkane_atom_energy'' /
+    arkane_version). TCKDB defines scheme.software as "the program release that computed this
+    scheme''s parameters (e.g. Gaussian 16, Revision C.02)" (energy_correction.py
+    EnergyCorrectionSchemeRef docstring): the ESS build whose numerics the atom energies or bond
+    parameters encode. Arkane looked the table up; it did not compute it. Arkane''s correction
+    database records the model chemistry, not the program release that produced it, so ARC cannot
+    honestly fill this field; filling it with Arkane would be wrong data under a field that is
+    part of scheme identity. Missing it only warns (missing_energy_correction_scheme_software).
+    Integration-gate finding A4 (schemes without software) is therefore a policy/TCKDB item, not
+    an adapter gap.'
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:54
+- concept: software_release.revision
+  kind: concept
+  affected_rows: 14
+  verdict: PARTIAL
+  exceptions_patterns:
+  - '(calculation|calculations\[\]|primary_opt|primary_calculation|additional_calculations\[\])\.software_release\.revision$'
+  - '^reaction_upload\.software_release\.revision$'
+  different_instance_verdict: ADAPTER_GAP
+  rationale: 'Two objects share this tail. On thermo/statmech (and analysis) routes the release is
+    Arkane''s and the RMG-Py commit (arkane_git_commit) generalises from species_upload.thermo /
+    statmech to the reaction mirror. On calculation routes (and the bundle-level ESS
+    reaction_upload.software_release) the release is the electronic-structure program''s: a
+    different object from Arkane. It is not absent, though: ARC exports ess_versions as the full
+    banner (''Gaussian 16, Revision C.01''; A2 fidelity_note on every
+    …software_release.version row) and the adapter sends the whole banner as version
+    (adapter.py:3437-3441) instead of splitting out the revision. So the calculation legs are
+    ADAPTER_GAP, not ARC_ABSENT.'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3437
+- concept: scf_stability.status
+  kind: concept
+  verdict: PARTIAL
+  exceptions_patterns: &opt_primary
+  - '^(species_upload\.conformers\[\]\.primary_calculation|reaction_upload\.species\[\]\.conformers\[\]\.calculation|reaction_upload\.transition_state\.calculation|ts_upload\.primary_opt|conformer_upload\.calculation)\.'
+  rationale: 'A2 hosts ARC''s wavefunction_stability verdict (a species-level analysis run on the
+    sp/freq reference; derived mapping) on the additional sp/freq calculation. That generalises to
+    every additional-calculation route (conformer_upload.additional_calculations[],
+    ts_upload.additional_calculations[], reaction_upload.*.calculations[]). It does not
+    generalise to the primary opt calculation: the stability job tested the sp/freq reference,
+    not the geometry optimisation, and A2 itself warns a species-level verdict does not prove the
+    reference of other jobs (the adapter says the same at adapter.py:3416-3418).
+    conformer_upload.calculation is treated as the primary opt: the adapter''s conformer mode
+    always sends the opt there.'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3416
+- concept: scf_stability.instability_count
+  kind: concept
+  verdict: PARTIAL
+  exceptions_patterns: *opt_primary
+  rationale: As scf_stability.status.
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3416
+- concept: scf_stability.instability_type
+  kind: concept
+  verdict: PARTIAL
+  exceptions_patterns: *opt_primary
+  rationale: As scf_stability.status.
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3416
+- concept: scf_stability.lowest_eigenvalue
+  kind: concept
+  verdict: PARTIAL
+  exceptions_patterns: *opt_primary
+  rationale: As scf_stability.status.
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3416
+- concept: scf_stability.reoptimized_wavefunction
+  kind: concept
+  verdict: PARTIAL
+  exceptions_patterns: *opt_primary
+  rationale: As scf_stability.status.
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3416
+- concept: parameters[].canonical_key
+  kind: concept
+  verdict: PARTIAL
+  exceptions_patterns: *opt_primary
+  rationale: 'The supplied parameter is the freq job''s Hessian method (freq_hessian_method), keyed on
+    the freq calculation. It generalises to additional-calculation routes on other roots, not to
+    the primary opt, where a freq Hessian method describes nothing. A3''s latent effective-keyword
+    rows (primary_calculation.parameters[].raw_key / section) are separate supply and keep their
+    own verdict.'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3467
+- concept: parameters[].canonical_value
+  kind: concept
+  verdict: PARTIAL
+  exceptions_patterns: *opt_primary
+  rationale: As parameters[].canonical_key.
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3467
+- concept: parameters[].raw_value
+  kind: concept
+  verdict: PARTIAL
+  exceptions_patterns: *opt_primary
+  rationale: As parameters[].canonical_key.
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3467
+- concept: parameters[].value_type
+  kind: concept
+  verdict: PARTIAL
+  exceptions_patterns: *opt_primary
+  rationale: As parameters[].canonical_key.
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3467
+- concept: parameters[].section
+  kind: concept
+  verdict: GENERALISES
+  rationale: 'Supplied (latent, A3) at species_upload.conformers[].primary_calculation from the
+    input deck''s resource/route sections (%mem, %NProcShared, %maxcore, %pal). Every opt ARC runs
+    writes the same kind of deck, so the latent supply generalises to the other primary-opt
+    routes.'
+  evidence: ARC:arc/job/adapters/gaussian.py:61
+- concept: source_literature.title
+  kind: concept
+  verdict: PARTIAL
+  exceptions_patterns:
+  - '\.scheme\.source_literature\.title$'
+  rationale: 'Supplied at species_upload.statmech.freq_scale_factor.source_literature from ARC''s
+    freq_scale_factor_source citation string. That generalises to the other statmech FSF routes
+    (conformer_upload, reaction_upload.species[]). A correction scheme''s source_literature is the
+    citation of the scheme''s parameter table, a different object that ARC does not export
+    (integration-gate finding A4: schemes deposited without literature).'
+  evidence: ARC:arc/output.py:134
+- concept: freq_scale_factor.software.version
+  kind: concept
+  verdict: DIFFERENT_INSTANCE
+  rationale: 'The sibling the tail matcher found is the correction scheme''s software version
+    (A2: arkane_version), which is neither this object nor, per MR-2, a valid supply. The FSF''s
+    software is the ESS the scale factor was derived for; ARC exports a name-only key
+    (freq_scale_factor_key / opt level software) and no release version for it.'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:5851
+- concept: species_entry.stereo_label
+  kind: concept
+  verdict: GENERALISES
+  rationale: 'Species identity is one ARC record reached from every species-entry route
+    (species_upload, conformer_upload, reaction_upload.species[], ts_upload.reaction participants).
+    The latent supply (A3: determine_chirality) is the same value on each.'
+  evidence: ARC:arc/species/conformers.py:2245
+- concept: energy_level_of_theory.basis
+  kind: concept
+  verdict: GENERALISES
+  rationale: 'The energy level of a thermo or statmech block is the level of the single points the
+    E0 came from. One ARC value (atom_corrections_level on 1.2, else the run-level sp_level /
+    composite_method) serves species and reaction mirrors and the conformer statmech block, and
+    statmech and thermo of one species share it.'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:5177
+- concept: energy_level_of_theory.method
+  kind: concept
+  verdict: GENERALISES
+  rationale: As energy_level_of_theory.basis.
+  evidence: tckdb_arc/tckdb_arc/adapter.py:5177
+- concept: freq_scale_factor.note
+  kind: concept
+  verdict: GENERALISES
+  rationale: Same statmech block shape on species_upload, conformer_upload and the reaction mirror.
+  evidence: tckdb_arc/tckdb_arc/adapter.py:5843
+- concept: freq_scale_factor.scale_kind
+  kind: concept
+  verdict: GENERALISES
+  rationale: As freq_scale_factor.note.
+  evidence: tckdb_arc/tckdb_arc/adapter.py:5843
+- concept: statmech.source_calculations[].calculation_key
+  kind: concept
+  verdict: GENERALISES
+  rationale: As freq_scale_factor.note. The conformer root links by ConformerCalculationIn.key.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/conformer_upload.py:221
+- concept: statmech.source_calculations[].role
+  kind: concept
+  verdict: GENERALISES
+  rationale: As statmech.source_calculations[].calculation_key.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/conformer_upload.py:221
+- concept: statmech.rotational_constant_a_cm1
+  kind: concept
+  verdict: GENERALISES
+  rationale: 'Species mirror (§1.2): reaction_upload.species[].statmech gained the rotational
+    constants at 0.51 (c734499c), same ARC species record.'
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:401
+- concept: statmech.rotational_constant_b_cm1
+  kind: concept
+  verdict: GENERALISES
+  rationale: As statmech.rotational_constant_a_cm1.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:401
+- concept: statmech.rotational_constant_c_cm1
+  kind: concept
+  verdict: GENERALISES
+  rationale: As statmech.rotational_constant_a_cm1.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:401
+- concept: thermo.enthalpy_formation_0k_kj_mol
+  kind: concept
+  verdict: GENERALISES
+  rationale: 'Species mirror: BundleThermoIn gained ThermoStateFields at 0.51 (fd68f1ba), same ARC
+    thermo record.'
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:277
+- concept: thermo.phase
+  kind: concept
+  verdict: GENERALISES
+  rationale: As thermo.enthalpy_formation_0k_kj_mol.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:277
+- concept: scheme.component_params[].component_kind
+  kind: concept
+  verdict: GENERALISES
+  rationale: 'All AEC sites share AppliedEnergyCorrectionInBundle (§1.3); the Melius table is
+    run-level in ARC and applies to any record of the run that carries a Melius BAC.'
+  evidence: ARC:arc/output.py:193
+- concept: scheme.component_params[].key
+  kind: concept
+  verdict: GENERALISES
+  rationale: As scheme.component_params[].component_kind.
+  evidence: ARC:arc/output.py:193
+- concept: scheme.component_params[].value
+  kind: concept
+  verdict: GENERALISES
+  rationale: As scheme.component_params[].component_kind.
+  evidence: ARC:arc/output.py:193
+- concept: scheme.note
+  kind: concept
+  verdict: GENERALISES
+  rationale: As scheme.component_params[].component_kind (legacy pass-through note).
+  evidence: tckdb_arc/tckdb_arc/adapter.py:5042
+- concept: additional_calculations[].opt_result.converged
+  kind: concept
+  verdict: GENERALISES
+  rationale: 'The additional opt on a species is the coarse opt (coarse_opt_log /
+    coarse_opt_n_steps / coarse_opt_final_energy_hartree). ARC writes those keys from the shared
+    _spc_to_dict for species and TS records alike (ARC:arc/output.py:1780-1786), so the supply
+    generalises to conformer_upload and ts_upload additional calculations; the adapter builds the
+    coarse opt only on the species routes.'
+  evidence: ARC:arc/output.py:1780
+- concept: additional_calculations[].opt_result.final_energy_hartree
+  kind: concept
+  verdict: GENERALISES
+  rationale: As additional_calculations[].opt_result.converged.
+  evidence: ARC:arc/output.py:1780
+- concept: additional_calculations[].opt_result.n_steps
+  kind: concept
+  verdict: GENERALISES
+  rationale: As additional_calculations[].opt_result.converged.
+  evidence: ARC:arc/output.py:1780
+- concept: output_geometries[].geometry.xyz_text
+  kind: concept
+  verdict: GENERALISES
+  rationale: As additional_calculations[].opt_result.converged (coarse opt output geometry).
+  evidence: ARC:arc/output.py:1808
+- concept: output_geometries[].role
+  kind: concept
+  verdict: GENERALISES
+  rationale: As additional_calculations[].opt_result.converged.
+  evidence: ARC:arc/output.py:1808
+- concept: additional_calculations[].input_geometries[].xyz_text
+  kind: concept
+  verdict: GENERALISES
+  rationale: Same calculation shape across the species and conformer roots (§1.1).
+  evidence: tckdb_arc/tckdb_arc/adapter.py:1614
+- concept: additional_calculations[].key
+  kind: concept
+  verdict: GENERALISES
+  rationale: 'Adapter-minted local key. The conformer root needs it only to be named by a statmech
+    link, and the conformer mode emits no statmech, so the gap is the adapter''s (it rides with
+    the conformer-statmech item).'
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/conformer_upload.py:221
+- concept: calculation.key
+  kind: concept
+  verdict: GENERALISES
+  rationale: As additional_calculations[].key.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/conformer_upload.py:221
+- concept: validation_evidence[].product_participant_mapping
+  kind: concept
+  verdict: GENERALISES
+  rationale: 'Same TS, same IRC evidence on both TS homes (ts_upload and
+    reaction_upload.transition_state); A3 keyed the latent mapping on one.'
+  evidence: ARC:arc/checks/ts.py:670
+- concept: validation_evidence[].source_calculation_key
+  kind: concept
+  verdict: GENERALISES
+  rationale: As validation_evidence[].product_participant_mapping.
+  evidence: ARC:arc/scheduler.py:4207
+- kind: route_applicability
+  rule_id: AP-11-freq-sp-evidence-on-opt-primary
+  pattern: '^(species_upload\.conformers\[\]\.primary_calculation|reaction_upload\.species\[\]\.conformers\[\]\.calculation|reaction_upload\.transition_state\.calculation|ts_upload\.primary_opt|conformer_upload\.calculation)\.(hessian|spin_diagnostic|level_of_theory\.spin_treatment)(\.|$)'
+  verdict: DIFFERENT_INSTANCE
+  rationale: 'ARC''s Hessian comes from the freq log (parser_evidence freq_hessian), its S^2 from the
+    sp job, and its spin treatment from scf_reference.{freq,sp}_reference, observed on those
+    inputs. None of them describes the geometry optimisation that is the primary calculation, and
+    the adapter deliberately does not propagate the freq/sp reference to the opt
+    (adapter.py:3416-3418). The 0.22 calculation-route mirroring ruling (§1.1) generalised these
+    across routes by tail; on the primary-opt routes that borrowed a freq/sp fact for the opt.'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3416
+- kind: route_mirror
+  rule_id: RM-1-reaction-species-blocks
+  pattern: '^reaction_upload\.species\[\]\.(thermo|statmech|species_entry|applied_energy_corrections\[\])\.'
+  replacement: 'species_upload.\1.'
+  verdict: GENERALISES
+  rationale: 'The species mirror of §1.2, made mechanical. A2 keys per-species leaves under
+    species_upload only and states the identical ARC value populates reaction_upload.species[];
+    the adapter reads the same output.yml species[] record for both
+    (_build_computed_species_payload and _build_reaction_species_block). At 0.22 only the rows
+    nobody mapped were adjudicated, so the reaction mirror rows the adapter DOES map stayed
+    SOURCE_UNCONFIRMED although their supply was inventoried one route over. BundleThermoIn and
+    BundleStatmechIn are subsets of the species-root models, so a mirror path always exists on the
+    species root.'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:2205
+- kind: route_mirror
+  rule_id: RM-2-reaction-species-primary-calc
+  pattern: '^reaction_upload\.species\[\]\.conformers\[\]\.calculation\.'
+  replacement: 'species_upload.conformers[].primary_calculation.'
+  verdict: GENERALISES
+  rationale: As RM-1; the reaction conformer's calculation is the species conformer's primary opt.
+  evidence: tckdb_arc/tckdb_arc/adapter.py:2205
+- kind: route_mirror
+  rule_id: RM-3-reaction-species-calcs
+  pattern: '^reaction_upload\.species\[\]\.calculations\[\]\.'
+  replacement: 'species_upload.conformers[].additional_calculations[].'
+  verdict: GENERALISES
+  rationale: As RM-1; reaction species calculations[] carry the freq/sp/scan/coarse-opt jobs the
+    species root carries as additional_calculations[].
+  evidence: tckdb_arc/tckdb_arc/adapter.py:2205
+- kind: route_mirror
+  rule_id: RM-4-reaction-species-conformer
+  pattern: '^reaction_upload\.species\[\]\.conformers\[\]\.(geometry|label|key)'
+  replacement: 'species_upload.conformers[].\1'
+  verdict: GENERALISES
+  rationale: As RM-1.
+  evidence: tckdb_arc/tckdb_arc/adapter.py:2205
+- kind: route_mirror
+  rule_id: RM-5-conformer-root
+  pattern: '^conformer_upload\.(statmech|species_entry|applied_energy_corrections\[\])\.'
+  replacement: 'species_upload.\1.'
+  verdict: GENERALISES
+  rationale: 'The conformer root carries the same per-species record ARC exports once; A2 keyed
+    most leaves on both roots, and this covers the ones it keyed on species_upload only.'
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/conformer_upload.py:236
+- kind: route_mirror
+  rule_id: RM-6-conformer-calcs
+  pattern: '^conformer_upload\.additional_calculations\[\]\.'
+  replacement: 'species_upload.conformers[].additional_calculations[].'
+  verdict: GENERALISES
+  rationale: As RM-5.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/conformer_upload.py:239
+- kind: route_mirror
+  rule_id: RM-7-conformer-primary
+  pattern: '^conformer_upload\.calculation\.'
+  replacement: 'species_upload.conformers[].primary_calculation.'
+  verdict: GENERALISES
+  rationale: As RM-5; the conformer root's calculation is the opt that produced the geometry.
+  evidence: TCKDB:schemas/python/tckdb-schemas/tckdb_schemas/workflows/conformer_upload.py:238
+- kind: route_mirror
+  rule_id: RM-8-standalone-ts
+  pattern: '^ts_upload\.primary_opt\.'
+  replacement: 'reaction_upload.transition_state.calculation.'
+  verdict: GENERALISES
+  rationale: 'The standalone TS root and the reaction bundle''s TS block describe the same ARC
+    transition_states[] record; A2 keyed most leaves on both. Only non-flattened fields can match
+    (the reaction TS calculation flattens its results).'
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3088
+- kind: route_mirror
+  rule_id: RM-9-standalone-ts-calcs
+  pattern: '^ts_upload\.additional_calculations\[\]\.'
+  replacement: 'reaction_upload.transition_state.calculations[].'
+  verdict: GENERALISES
+  rationale: As RM-8.
+  evidence: tckdb_arc/tckdb_arc/adapter.py:3088

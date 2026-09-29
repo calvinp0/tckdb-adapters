@@ -1,458 +1,301 @@
-# A4 — what the ARC→TCKDB adapter currently wires
+# A4 — what the ARC→TCKDB adapter emits (refresh for tckdb-schemas 0.51.0)
 
-Companion narrative to `ADAPTER_MAPPING.yml` (775 rows, all distinct paths).
+This is the narrative that goes with `ADAPTER_MAPPING.yml`. The YAML has 838 rows, one per distinct canonical path.
 
-This inventory is **purely descriptive**. Every row carries
-`status_at_0_22_0: unknown`; the adapter was written against `tckdb-schemas`
-**0.8.0** and TCKDB_v2's working tree is at **0.22.0**, so whether a target field
-still exists, still has that name, or still has that type is A5's call and Phase
-B's join. Where I could see that the adapter's target no longer matches the
-0.22.0 module layout at all, I said so in this narrative rather than editing the
-`path` — paths are spelled the way the adapter spells them, per the brief.
-
-## 1. Path-root caveat — read this before joining
-
-`FIELD_KEY.md` defines exactly two roots, `species_upload` and
-`reaction_upload`. The adapter builds **four** distinct wire payloads:
-
-| Adapter entry point | Endpoint | Root used in the YAML | Joins against A1/A5? |
-|---|---|---|---|
-| `submit_computed_species_from_output` (adapter.py:899) | `/uploads/computed-species` | `species_upload` | yes |
-| `submit_computed_reaction_from_output` (adapter.py:1945) | `/uploads/computed-reaction` | `reaction_upload` | yes |
-| `submit_computed_ts_from_output` (adapter.py:2782) | `/uploads/transition-states` | `transition_state_upload` | **no** |
-| `submit_from_output` (adapter.py:742) | `/uploads/conformers` | `conformer_upload` | **no** |
-
-The last two have no root in the grammar because they have no published model in
-`tckdb_schemas` at 0.22.0 — there is no `workflows/transition_state_upload.py`
-and no `workflows/conformer_upload.py` in the package (`tests/test_ts_upload.py`
-reconstructs `TransitionStateUploadRequest` locally from fragment schemas and
-says so explicitly at its module docstring). I invented the two extra roots
-rather than dropping ~188 real mappings or misfiling them under
-`species_upload`. **Phase B must treat `transition_state_upload.*` and
-`conformer_upload.*` as non-joining rows**: they are adapter behaviour that A1's
-demand inventory cannot possibly cover, and a naive join will report them as
-orphans. That orphan-ness is itself the finding — the adapter POSTs to two
-endpoints whose request contracts are not in the shared schema package.
-
-## 2. Structural map of `adapter.py` (6,788 lines)
-
-| Lines | Region | Contents |
-|---|---|---|
-| 1–72 | imports, module docstring | three stated guarantees (no-op when disabled; payload on disk before any network call; failure is non-fatal unless `strict`) |
-| 74–253 | neutral-record translators | `_serialize_calc_constraints`, `_scan_entries_from_record`, `_neutral_scan_result_to_tckdb`, `_correction_records_from_record` — the ARC-output-1.1 "tool-neutral" → legacy-TCKDB-shape bridge |
-| 256–632 | constants + small resolvers | endpoint/kind constants, calc-key namespace, artifact field maps, TS-guess method maps, kinetics unit maps, `_resolve_ts_guess_path_search*`, `_coerce_artifact_filename` |
-| 634–701 | dataclasses | `UploadOutcome`, `ArtifactUploadOutcome`, `_PreparedArtifactUpload`, `TCKDBReadinessError` |
-| 703–737 | `TCKDBAdapter.__init__` | config, payload writer, evidence store, one-shot warn flags |
-| 742–893 | conformer + artifact entry points | `submit_from_output`, `submit_artifacts_for_calculation`, `submit_artifact_batch_for_calculation` |
-| 899–1047 | **computed-species bundle** | `submit_computed_species_from_output`, `_build_computed_species_payload` |
-| 1049–1345 | **conformer blocks** | `_build_conformer_block` (selected), `_build_alt_conformer_blocks` (screened) |
-| 1347–1552 | **calc-in-bundle core** | `_build_calc_in_bundle`, `_output_geometries_for_calc`, `_input_geometries_for_calc` |
-| 1554–1734 | coarse-opt + inline artifacts | `_build_opt_coarse_calc`, `_inline_artifacts_for_calc`, `_read_inline_artifact`, `_resolve_local_path` |
-| 1736–1939 | **evidence-backed reparse seams** | `_build_freq_hessian_payload`, `_parse_irc_trajectories` |
-| 1945–2203 | **computed-reaction bundle** | `submit_computed_reaction_from_output`, `_build_computed_reaction_payload` |
-| 2205–2454 | reaction species blocks | `_build_reaction_species_block` |
-| 2456–2776 | **TS block** | `_build_ts_block` (ts_guess/path_search, opt, freq, sp, irc, AEC) |
-| 2782–3052 | **standalone TS request** | `submit_computed_ts_from_output`, `_compose_transition_state_request`, `_ts_calc_to_standalone`, `_build_ts_reaction_upload` |
-| 3058–3293 | shared payload shapers | `_species_entry_payload`, `_build_payload`, `_build_calculations`, `_calculation_payload` |
-| 3299–3785 | upload/sidecar/network machinery | `_finalize_skipped`, `_upload`, `_record_failure`, `_ensure_ready` (readyz retry), artifact batch upload |
-| 3793–3977 | HTTP/sidecar helpers | batch digests, request-id extraction, readiness message formatting |
-| 3980–4176 | provenance qualifiers + level resolution | `_sp_is_reused_from_opt`, `_reused_origin`, `_final_settings_for_calc`, `_merge_parameters_json`, `_screened_conformer_origin`, `_resolve_level` |
-| 4179–4366 | **result payloads** | `_opt_result_payload`, `_coarse_opt_result_payload`, `_freq_result_payload`, `_sp_result_payload`, `_spin_diagnostic_payload` |
-| 4369–4540 | **level-of-theory + energy corrections** | `_arc_args_to_keywords`, `_arc_level_to_tckdb_lot`, `_scheme_level_of_theory`, `_build_applied_energy_corrections` |
-| 4543–4758 | **thermo** | `_build_thermo_block`, `_build_nasa_block`, `_build_thermo_points` |
-| 4761–4872 | key minting + release refs | `_safe_key_part`, `_local_key_for_actor`, `_calc_prefix_for_actor`, `_index_species`, `_index_transition_states`, `_arc_workflow_tool_release`, `_arc_analysis_software_release` |
-| 4875–5349 | **statmech** | `_build_freq_scale_factor_ref`, `_build_statmech_block_for_species`, `_classify_statmech_treatment`, `_build_slim_torsions`, `_coerce_torsion_coordinates`, `_build_statmech_source_calculations` |
-| 5352–5477 | TS handle + reaction result flattening | `_ts_unmapped_smiles_handle`, `_flatten_result_fields`, `_flatten_all_reaction_calcs` |
-| 5480–5783 | **kinetics** | `_build_kinetics_block`, `_build_kinetics_source_calculations` |
-| 5786–6017 | **IRC result** | `_detect_irc_direction`, `_build_irc_result_payload` |
-| 6020–6258 | xTB/GSM on-disk parsers | `_level_keys_match`, Turbomole `energy`/`gradient` parsers, `.xtbout` regex parser, `_read_gsm_node_outputs` |
-| 6261–6588 | **path-search result** | `_build_path_search_result_payload`, `_resolve_irc_zero_energy_reference` |
-| 6591–6788 | xyz normalization + response helpers | `_normalize_xyz_text`, `_require_xyz_text`, `_summarize_response_body`, `_extract_tckdb_public_refs`, `_extract_calc_refs`, `_skip`, `_close_quietly` |
-
-## 3. The three ARC-optional reparse paths
-
-`_arc_optional.py` is a lazy, guarded `import arc` boundary. Its wrappers raise
-`OptionalArcUnavailable`, a subclass of `ImportError`, so every caller's
-pre-existing `except Exception` / `except ImportError` degrades to "sub-payload
-omitted" instead of crashing. All three paths are **evidence-first**: if ARC
-emitted a valid `output/tckdb_evidence.json` sidecar (output schema 1.1), the
-adapter never touches ARC's parsers at all.
-
-| Path | Fallback call site | ARC symbols needed | What is silently lost when ARC is absent AND no sidecar exists |
-|---|---|---|---|
-| **freq Hessian** | `_build_freq_hessian_payload`, adapter.py:1789 | `arc.parser.parser.determine_ess`, `arc.parser.factory.ess_factory` | The entire `hessian` sub-payload on every freq calc — `geometry.xyz_text`, `lower_triangle_hartree_bohr2`, `source`, `parser_version`. Caught by the `except Exception` at adapter.py:1800, logged at **debug** level only. |
-| **IRC trajectory** | `_parse_irc_trajectories`, adapter.py:1891 | `arc.parser.parser.parse_irc_path`, `parse_irc_traj` | The entire `irc_result` sub-payload (points, geometries, energies, gradients, reaction coordinates, TS marker, `zero_energy_reference_hartree`). The `type=irc` calc node itself **is still emitted** (adapter.py:2682) with its `depends_on(irc_start)` edge, so `kinetics.source_calculations(role=irc)` still resolves — the calc exists but carries no scientific content. Per-log failures logged at **debug**. |
-| **GSM string-file** | `_build_path_search_result_payload`, adapter.py:6307 | `arc.parser.parser.parse_trajectory`, `parse_gsm_stringfile_energies`, `arc.species.converter.kabsch` | The multi-frame GSM path collapses to a **single-point fallback** built from `transition_states[].opt_input_xyz` (adapter.py:6437–6450), marked `is_ts_guess=True`. `n_points` becomes 1, per-node energies/gradients/`path_coordinate` vanish, and `is_climbing_image` is never set. The trajectory parse failure is logged at **warning**; the `kabsch` and `parse_gsm_stringfile_energies` failures at **debug**. NEB always takes this single-point fallback regardless of ARC — NEB image extraction is explicitly described as "a future parser lift" (adapter.py:6287). |
-
-**This is a real data-loss surface.** In all three cases the payload still
-validates and still uploads: a base `tckdb-arc` install processing a pre-1.1 ARC
-run produces a *smaller but structurally valid* payload, with no error, no
-warning at INFO or above (except the GSM trajectory-parse case), and no marker on
-the wire saying the data was omitted. The GSM case is the worst of the three
-because it does not omit — it **substitutes** a one-point path for an N-point one,
-which reads downstream as "ARC only computed one image", not as "the parser was
-unavailable".
-
-`_vendor.py` deliberately does *not* vendor `kabsch` (it would drag in ARC's
-atomic-mass subsystem and scipy), so the GSM `path_coordinate` derivation is
-ARC-coupled even when everything else on that path is not.
-
-## 4. Hardcoded, defaulted, or fabricated values — provenance risks
-
-Everything below is asserted by the adapter rather than read from ARC. Ordered
-roughly by how much scientific weight it carries.
-
-### Fabricated scientific content
-
-* **`path_search_result.converged = True`** (adapter.py:6531) — hardcoded on
-  every emitted path-search calc. Justified in the comment by the emission gate
-  (a log path only exists when the guess succeeded), but no ARC convergence flag
-  is consulted.
-* **`opt_result.converged = True` for `opt_coarse`** (adapter.py:4207) —
-  hardcoded, on the convention that ARC only writes `coarse_opt_log` after a
-  successful coarse run. ARC emits no `coarse_opt_converged` field, and the
-  docstring concedes a real field "would be slightly more honest".
-* **Synthesized imaginary mode** (adapter.py:4280) — ARC's
-  `statmech.harmonic_frequencies_cm1` lists only real modes, so the adapter
-  *inserts* a mode `{frequency_cm1: -abs(imag_freq_cm1), is_imaginary: True}` at
-  position 0 to make `count(is_imaginary) == n_imag` hold.
-* **Synthesized IRC TS-marker point** (adapter.py:5980–6002) — an extra point
-  appended after all trajectory points with `is_ts=True`,
-  `reaction_coordinate=0.0` (hardcoded), and the same energy used as the zero
-  reference, so its `relative_energy_kj_mol` is 0.0 by construction. It is ARC's
-  IRC *seed* geometry, not a parsed trajectory point.
-* **`irc_result.direction` defaults to `"both"`** (adapter.py:5964–5970) when no
-  direction could be established from evidence, scheduler list, or filename. The
-  comment justifies this from an ARC invariant, but with a single unlabeled log
-  the payload will claim a two-branch IRC.
-* **`transition_state.unmapped_smiles`** (adapter.py:5405) — when the TS record
-  has no SMILES, the adapter *builds* a reaction-SMILES handle
-  `"<r1>.<r2>>><p1>.<p2>"` by concatenating participant SMILES. It is a
-  deterministic traceability handle, not a structure, but it is producer-invented
-  text sitting in an identity field.
-* **`applied_energy_corrections[].value_unit` / `scheme.units`**
-  (adapter.py:226) — when the neutral record omits the unit, the adapter defaults
-  to `"hartree"` for atom-energy corrections and `"kcal_mol"` for bond-additivity.
-  A silently wrong unit here is a direct scientific error.
-* **`scheme.name = scheme.kind`** (adapter.py:228) — ARC supplies no scheme name.
-* **`scan_result.coordinates[].resolution_degrees`** (adapter.py:169) — the
-  producer's `requested_step_size` is written into a *degrees*-named field
-  without consulting `coordinate.unit`.
-
-### Hardcoded enum/literal assertions
-
-* `species_entry.molecule_kind = "molecule"` (adapter.py:3080).
-* `species_entry.electronic_state_kind = "ground"` (adapter.py:3085) — ARC has no
-  excited-state workflow; asserted deliberately rather than left to a server
-  default.
-* `calculation.quality = "raw"` (adapter.py:3249) on every calc.
-* `output_geometries[].role = "final"` (adapter.py:1498) on every output geometry.
-* `kinetics.model_kind = "modified_arrhenius"` (adapter.py:5593).
-* `kinetics.a_uncertainty_kind = "multiplicative"` (adapter.py:5696).
-* `statmech.freq_scale_factor.scale_kind = "fundamental"` (adapter.py:4959) — ARC
-  does not distinguish ZPE/enthalpy/entropy/Cp scale factors.
-* `path_search_result.is_double_ended = True` / `source_endpoint_count = 2`
-  (adapter.py:434, applied at 6540) — static per-method table.
-* `workflow_tool_release.name = "ARC"`, `analysis_software_release.name =
-  "Arkane"` (adapter.py:4850, 4872).
-* `reaction_family_source_note = "ARC-reported family"` (adapter.py:2187, 3051) —
-  stamped unconditionally whenever a family is emitted, because the producer has
-  no copy of TCKDB's canonical-family list.
-* `conformer_upload.scientific_origin = "computed"` (adapter.py:3118).
-* `transition_state_upload.reaction.reversible` **defaults to `True`**
-  (adapter.py:3034) because the standalone schema requires the field and ARC has
-  no `reversible` attribute. On the computed-reaction path the same missing value
-  is instead *omitted* (adapter.py:2165) — the two paths disagree.
-* `parameters_json.tckdb_origin` markers (`_reused_origin`, adapter.py:4020;
-  `_screened_conformer_origin`, adapter.py:4122) — `origin_kind`, human-readable
-  `reason` strings, `independent_ess_job: False`, and `producer: "ARC"` are all
-  adapter-authored.
-* `_HESSIAN_PARSER_VERSION = "arc-hessian-1"` (adapter.py:320) stamped on
-  reparsed Hessians.
-
-### Defaults that mask absence
-
-* `species_entry.charge` defaults to `0`, `multiplicity` to `1`
-  (adapter.py:3082–3083) — an ARC record missing multiplicity uploads as a
-  singlet.
-* `transition_state.charge` defaults to `0` (adapter.py:2754).
-* `_resolve_level` (adapter.py:4156) **falls back `freq_level`/`sp_level` →
-  `opt_level`** whenever the job-specific level is null. Common ARC runs declare
-  only `opt_level`, so freq and sp calcs are labelled with the opt level of theory.
-* `software_release.version` falls back to `ess_versions['opt']` when the
-  job-specific ESS version is absent (adapter.py:3243).
-* `freq_scale_factor.software` falls back to `opt_level.software`
-  (adapter.py:4969).
-* `scan_result.coordinates` `index_base` **defaults to 1** (adapter.py:139) — see
-  §5.
-* `scan_result.dimension` defaults to `1`, `is_relaxed` to `True`
-  (adapter.py:191–192); `value_unit` defaults to `"degree"` (adapter.py:155).
-* TS multiplicity falls back to the reaction's multiplicity (adapter.py:2744).
-* Conformer key defaults to the literal `"conf0"` (adapter.py:924); TS label
-  falls back to `"unlabeled-ts"` (adapter.py:2899); species label falls back to
-  `"unlabeled"` (adapter.py:923).
-
-## 5. Unit conversions and index bases — the audit's high-value findings
-
-### Unit conversions actually performed
-
-| Target | Conversion | Constant | Site (working tree) |
-|---|---|---|---|
-| `irc_result.points[].relative_energy_kj_mol` | Hartree → kJ/mol | `_vendor.E_h_kJmol = E_h·N_A/1000 = 2625.4998583629967` | `_vendor.py:43`, applied `adapter.py:6729` & `:6785` |
-| `path_search_result.points[].relative_energy_kj_mol` (absolute-energy branch) | Hartree → kJ/mol | `_vendor.E_h_kJmol` (same constant, same value) | `_vendor.py:43`, applied `adapter.py:7264` |
-| `path_search_result.points[].relative_energy_kj_mol` (string-file branch) | kcal/mol → kJ/mol | `_KCAL_MOL_TO_KJ_MOL = 4.184` | `adapter.py:496`, applied `:7303` |
-
-**Status: unified (PHASE_C_PLAN.md C-3, fixed).** Both Hartree→kJ/mol call sites now
-import and consume the single vendored `_vendor.E_h_kJmol` — the table above no
-longer documents two constants because there is only one. Historically (through
-`tckdb-adapters` `HEAD` commit `fedfe6b`) they did differ: the IRC path used a
-literal `_HARTREE_TO_KJ_MOL = 2625.4996` defined inline "to keep this helper free of
-further imports" (`HEAD` `adapter.py:5817–5820`, applied `:5943` & `:5999`), while
-the GSM/path-search path already used the vendored constant (`HEAD` `adapter.py:6478`).
-Two relative-energy fields with the same name and unit were therefore computed with
-numerically different factors — relative discrepancy `|2625.4998583629967 −
-2625.4996| / 2625.4996 ≈ 9.84e-8` (not the `~1.5e-8` this section previously stated —
-that figure was itself in error), scientifically negligible but a genuine
-consistency defect, now closed. Rebuilding the golden fixture through the pre-fix
-and post-fix code confirms the fix touches exactly four `relative_energy_kj_mol`
-leaves, all under `irc_result` (two in the reaction-route TS block, two in the
-matching standalone TS payload); `path_search_result` does not move, because it was
-never on the stale constant to begin with (`tests/test_golden_corpus.py`'s
-`test_phase3_disk_corpus_builds_all_payloads_from_sidecar`).
-
-Everything else is **unit-preserving passthrough**: Hartree energies
-(`opt_final_energy_hartree`, `sp_result.electronic_energy_hartree`,
-`zpe_hartree`, all `zero_energy_reference_hartree`), cm⁻¹ frequencies, K
-temperatures, kJ/mol and J/(mol·K) thermo scalars, and the Hessian's native
-Hartree/Bohr² lower triangle (explicitly *not* converted, adapter.py:1750–1754).
-Kinetics `A` and `Ea` are never converted — the unit rides alongside as a mapped
-enum, and an **unrecognized unit string silently drops the unit field while the
-number still ships** (`arc_to_tckdb_a_units`, adapter.py:597; the miss is logged
-at debug only). That is the single most dangerous unit path in the adapter.
-
-Two field renames drop the unit from the name without converting:
-`max_gradient_hartree_per_bohr` → `max_gradient` and
-`rms_gradient_hartree_per_bohr` → `rms_gradient` (adapter.py:1873–1874,
-6340–6341). Likewise `reaction_coordinate_sqrt_amu_bohr` →
-`reaction_coordinate` (adapter.py:1872).
-
-### Atom-index bases — three different policies in one adapter
-
-1. **`constraints[].atomN_index` — rebased, conditionally.**
-   `constraints.py:202` applies `atom - index_base + 1`, where `index_base` is
-   read from the tool-neutral record and must be 0 or 1. **But the rebase is
-   gated on `coordinate_type` being present** (`constraints.py:193`): a *legacy*
-   parser dict using the `atoms` key is assumed already 1-based and is passed
-   through unshifted. Two shapes, two policies, in one function.
-2. **`scan_result.coordinates[].atomN_index` — rebased, with a dangerous
-   default.** `adapter.py:140` does `int(atom) - index_base + 1` but reads
-   `index_base` with `coordinate.get("index_base", 1)` — i.e. **a 0-based ARC
-   coordinate that omits `index_base` is emitted unshifted**, producing a silent
-   off-by-one in every scanned dihedral. Unlike `constraints.py`, there is no
-   validity check on the resulting indices beyond a length ≤ 4 test
-   (adapter.py:149).
-3. **`statmech.torsions[].coordinates[].atomN_index` — never rebased.** ARC's
-   statmech torsion `atom_indices` are documented as already 1-based
-   (adapter.py:5182). `_coerce_torsion_coordinates` (adapter.py:5269) only
-   *validates* (exactly 4 entries, all ≥ 1, all distinct) and drops the
-   coordinate list on failure. There is no `index_base` field to consult here at
-   all, so the 1-based-ness is an unverifiable producer-side assumption.
-
-Two other index bases worth flagging for the join: `scan_result.points[].point_index`
-is **1-based** (adapter.py:172) while `irc_result.points[].point_index` is
-**0-based** (adapter.py:5920). `torsions[].torsion_index` counts only *emitted*
-torsions (adapter.py:5232, 5265), so a rotor dropped for an unrecognized
-treatment silently shifts every subsequent index away from ARC's rotor ordinals.
-
-## 6. Structural rewrites worth flagging to Phase B
-
-* **Reaction-bundle result flattening.** `_flatten_all_reaction_calcs`
-  (adapter.py:5453) runs once at the end of `_build_computed_reaction_payload`
-  and rewrites every calc in place: `opt_result` / `freq_result` / `sp_result`
-  are unwrapped into flat `opt_converged`, `opt_n_steps`,
-  `opt_final_energy_hartree`, `freq_n_imag`, `freq_imag_freq_cm1`,
-  `freq_zpe_hartree`, `sp_electronic_energy_hartree`. Only those three are
-  flattened — `scan_result`, `irc_result`, `path_search_result`, `hessian`, and
-  `spin_diagnostic` stay nested. So the *same* datum has two path spellings
-  depending on which root you are under; the YAML records both.
-* **`freq_result.modes[]` collapses to `freq_frequencies_cm1`** on the reaction
-  path (adapter.py:5450): the list of `{frequency_cm1, is_imaginary, mode_index}`
-  objects becomes a bare list of floats. `is_imaginary` and `mode_index` are
-  discarded; the sign of each float is the only surviving imaginary marker.
-* **NASA coefficient explosion**: `nasa_low.coeffs[0..6]` → `a1..a7`,
-  `nasa_high.coeffs[0..6]` → `b1..b7` (adapter.py:4689–4692).
-* **AEC parameter-table explosion**: the `{element: value}` /
-  `{bond_key: value}` mapping becomes a sorted list of two-key objects
-  (adapter.py:237, 242).
-* **`level_of_theory.keywords`**: ARC's nested `args` mapping is flattened into
-  one deterministic string `"category:key=<json>; …"` with sorted categories and
-  keys (adapter.py:4397). ARC's `method_type`, `year`, `solvation_scheme_level`,
-  `compatible_ess`, `software`, `software_version` are dropped at that seam
-  (adapter.py:4379–4385).
-* **`_ts_calc_to_standalone`** (adapter.py:2967) strips `key`, `depends_on`,
-  `geometry_key`, and `artifacts` from every calc on the standalone-TS path, and
-  `_compose_transition_state_request` drops the TS's
-  `applied_energy_corrections` entirely (adapter.py:2931, debug-logged). Inline
-  artifacts are skipped up front via `include_artifacts=False` with a one-time
-  WARNING (adapter.py:2902).
-* **`xyz_text` normalization**: ARC's atom-only xyz block is turned into
-  canonical XYZ by prepending an atom-count line plus a comment line carrying the
-  label (`_normalize_xyz_text`, adapter.py:6591). Angstroms in, Angstroms out —
-  no coordinate transformation.
-
-## 7. Deliberate non-mappings (recorded here, not in the YAML)
-
-These are ARC data the adapter sees and consciously refuses to forward. I kept
-them out of `ADAPTER_MAPPING.yml` because they are A2/A3 territory
-(`arc_only.*`), but they are adapter *decisions* and belong in the record:
-
-* `species[].conformer_energies` — workflow-local relative E0 values whose
-  reference is "lowest in this screening set". Explicitly dropped, with an
-  instruction not to reintroduce them via `note` or `parameters_json`
-  (adapter.py:1248–1259, 1338–1341).
-* `statmech.torsions[].pivot_atoms` and `torsions[].barrier_kj_mol` — no bundle
-  column (adapter.py:5217–5219).
-* `transition_states[].chosen_ts_method` as provenance on `ts_opt` — deliberately
-  *not* emitted as a `tckdb_origin` marker; treated as workflow narrative
-  (adapter.py:2589–2600). It is used only to gate the `path_search` calc.
-* `atom_map`, `ts_report`, `successful_methods`, `server`, `job_id`,
-  `relative_e0_kj_mol` — asserted absent from every built payload by
-  `test_golden_corpus.py`'s `FORBIDDEN_KEYS` check. Notably **there is no
-  reaction atom-map mapping anywhere in the adapter**, and the golden corpus test
-  actively enforces its absence.
-* Level fields `method_type` / `year` / `solvation_scheme_level` /
-  `compatible_ess` (adapter.py:4384).
-* `applied_energy_corrections[].components[].parameter_unit` — stripped by the
-  five-field allowlist (adapter.py:4369).
-
-## 8. TODO / FIXME / XXX
-
-**None.** A grep for `TODO|FIXME|XXX|HACK` across `tckdb_arc/tckdb_arc/*.py`
-returns no hits. Known-incomplete work is instead expressed as prose in
-docstrings; the two that matter are:
-
-* adapter.py:6287 — "NEB log image extraction is a future parser lift"; NEB
-  path-search results are always single-point.
-* adapter.py:5197 — `source_scan_calculation_key` support described as "deferred
-  until ARC emits scan calcs" (the surrounding code now does handle it, so this
-  comment is stale rather than an open gap).
-
-A third, adapter.py:1579–1586, documents a *known-wrong* server-side outcome: the
-bundle workflow auto-anchors every calc's output geometry to the fine opt's
-geometry, so `opt_coarse`'s output-geometry row "will incorrectly point at the
-fine geometry server-side". The producer emits explicit `output_geometries` to
-mitigate this; whether 0.22.0 still behaves that way is A5/Phase B's call.
-
-## 9. Golden fixtures vs. what `adapter.py` can emit
-
-`tckdb_arc/tests/fixtures/golden/` is **two files**: `phase3_output.yml` (85
-lines) and `tckdb_evidence.json` (73 lines). Its own README describes it as "a
-small H/H₂ exchange example". It is a *Phase-3 evidence-sidecar* fixture, not a
-mapping-coverage corpus, and `test_golden_corpus.py::test_phase3_disk_corpus_builds_all_payloads_from_sidecar`
-uses it precisely to prove the sidecar is sufficient without ARC (it patches
-`require_arc_parser` to raise).
-
-**Covered by the golden fixture:** species_entry identity; conformer geometry;
-opt/freq/sp calcs and their results; `ess_versions` version fallback; opt/freq/sp
-level resolution (all three levels declared, `sp_level` differing so the
-reused-from-opt marker is *not* exercised); `opt_input_xyz` input geometries;
-freq Hessian **from the sidecar**, for both a species and the TS; IRC forward +
-reverse **from the sidecar**; a three-frame GSM path **from the sidecar** whose
-endpoint lacks an absolute energy; `chosen_ts_method: xtb_gsm` → `method: "gsm"`;
-TS multiplicity fallback; the derived TS reaction-SMILES handle (TS `smiles` is
-null); `reaction_family`; ARC workflow-tool release. All three payload builders
-are exercised and byte-pinned by canonical SHA-256 snapshots.
-
-**Not covered by the golden fixture at all** — every one of these is adapter code
-that no golden payload exercises:
-
-| Region | Why uncovered |
+| | |
 |---|---|
-| thermo (h298/s298/NASA/points/source_calculations) | no `thermo` key on any record |
-| statmech (all of it) | no `statmech` key; no `freq_scale_factor`, no `freq_scale_factor_source` |
-| torsions / `statmech_treatment` / torsion coordinates | ditto |
-| rotor scans (`scan_result`, its coordinates and the index rebase) | no `rotor_scans` / `additional_calculations` |
-| constraints (and their index rebase) | no `*_constraints` fields |
-| applied energy corrections (AEC/BAC) | no `energy_corrections` / `applied_energy_corrections` |
-| kinetics (the entire `_build_kinetics_block`) | `kinetics: null` in the fixture |
-| coarse opt (`opt_coarse` calc, its chain edge, its output geometry) | no `coarse_opt_log` |
-| screened alt conformers + `_screened_conformer_origin` | no `conformers` list |
-| `_reused_origin` (sp reused from opt) | `sp_level` differs from `opt_level` |
-| spin diagnostic | no `sp_spin_diagnostic` |
-| `final_settings` → `parameters_json` | no `*_final_settings` fields |
-| inline artifacts (base64 logs/input decks) | README says "deliberately contains no ARC calculation files" |
-| `analysis_software_release` | no `arkane_git_commit` |
-| `unmapped_smiles` passthrough on species_entry | no `unmapped_smiles` on any record |
-| **all three ARC-reparse fallbacks** | the test poisons `require_arc_parser`; only the evidence path runs |
-| NEB path search | fixture uses GSM only |
-| `gsm_node_outputs/` on-disk energy/gradient parsing | evidence path used instead |
+| Adapter | `tckdb-arc` 0.4.0, `tckdb_arc/tckdb_arc/*.py` at `0913124` (the audit worktree `docs_demand_audit_schemas_0_51` has the same code as `main`) |
+| Schema | `tckdb-schemas` 0.51.0 (editable from `TCKDB_v2/schemas/python/tckdb-schemas`) |
+| Path spellings | `scratchpad/shared/paths_0_51.tsv` **v2** (2,991 paths across 5 roots; regenerated mid-audit after the walker fixes in §3), copied verbatim. Every YAML `path` appears in it, and a check confirms this. |
+| ARC, for gap checks | `/home/calvin/code/ARC` `main` `db0934d5`: `arc/output.py` and `arc/schemas/output_yml_schema.json`, read-only |
 
-The synthetic corpus in `tests/test_adapter.py` (9,113 lines, via `_fake_output_doc`
-/ `_full_record` / `_reaction_output_doc`) covers considerably more of the above,
-and `test_golden_corpus.py` validates two of those synthetic payloads against the
-real published `tckdb_schemas` models. But the **frozen, checked-in golden
-corpus** — the thing a reviewer would point at as "this is what the wire looks
-like" — covers roughly the opt/freq/sp/Hessian/IRC/GSM spine and nothing else.
-Thermo, statmech, kinetics, scans, constraints and energy corrections have no
-golden payload.
+The inventory records only what the adapter does. Every row has `status_at_0_51: unknown`, and A5's drift ledger decides that value. The FIELD_KEY template still names the column `status_at_0_22_0`. I renamed it because this audit targets 0.51. `tools/join_inventories.py` does not read the column.
 
-## 10. Coverage self-assessment
+## 1. Method
 
-**Read closely, line by line** (I am confident the YAML is complete for these):
+**The empirical pass came first.** I collected payloads in two ways:
 
-* adapter.py 1–260 (neutral translators + constants), 634–737, 742–1060,
-  1049–1560 (conformer/alt-conformer/calc-in-bundle/geometry policy),
-  1554–1940 (coarse opt, artifacts, Hessian, IRC parse), 1945–2460
-  (computed-reaction + reaction species block), 2456–2790 (TS block),
-  2782–3130 (standalone TS + species_entry + `_build_payload`), 3196–3300
-  (`_calculation_payload`), 3980–4550 (origins, level resolution, all result
-  payloads, LoT projection, AEC), 4543–4800 (thermo + key minting),
-  4805–5350 (release refs + statmech), 5352–5790 (TS handle, flattening,
-  kinetics), 5786–6020 (IRC result), 6045–6260 (xTB/GSM file parsers),
-  6261–6640 (path search, IRC zero ref, xyz normalization).
-* `constraints.py`, `_vendor.py`, `_arc_optional.py`, `evidence.py` — all read in
-  full.
+1. **Test-suite capture.** A pytest plugin (`-p capture_plugin`, kept in scratch) wrapped the four top-level builders: `_build_computed_species_payload`, `_build_computed_reaction_payload`, `_compose_transition_state_request` and `_build_payload`. It dumped every dict they returned while the full adapter suite ran (928 passed, 4 skipped). That gave 497 payloads: 198 species, 225 reaction, 28 TS and 46 conformer.
+2. **Real-fixture builds.** Each fixture went through every upload mode by calling the public `submit_*` entry points with `upload=False`:
+   - `golden/phase3_output.yml`, with its `tckdb_evidence.json` sidecar and again without it
+   - `arc_1_2/output.yml` (thermo 1.2 corpus)
+   - `current_arc/output.yml` with its `parser_evidence.json`
 
-**Skimmed** (read, understood, judged to contain no payload-field mappings):
+   That gave 24 payloads: 10 species, 10 conformer, 2 reaction and 2 TS.
 
-* adapter.py 3299–3790 — upload, sidecar finalization, `_record_failure`,
-  `_ensure_ready` readyz retry loop, artifact batch upload. I did read
-  `_prepare_artifact_upload` (3572) closely because it shapes the *standalone*
-  artifact sidecar, but that path writes sidecar metadata rather than TCKDB
-  payload fields, and in both bundle modes it self-suppresses (adapter.py:3584).
-* adapter.py 3793–3977 — batch digests, request-id/header extraction, readiness
-  message formatting. No mappings.
-* adapter.py 6641–6788 — response-parsing helpers (`_extract_tckdb_public_refs`,
-  `_extract_calc_refs`). These read *server responses*, not ARC output, so they
-  are outside A4's remit.
-* `payload_writer.py`, `sweep.py`, `config.py`, `idempotency.py`, `cli.py` — I
-  inspected their public surfaces (`IMPLEMENTED_ARTIFACT_KINDS`, upload-mode
-  constants, `IdempotencyInputs`) but did not walk them line by line. `sweep.py`
-  and `cli.py` are dispatchers over the `submit_*` entry points; `payload_writer.py`
-  and `idempotency.py` write local sidecars and idempotency keys, neither of which
-  crosses into a TCKDB payload field. If any of those files contains a payload
-  mutation I would have missed it. I assess that risk as **low but non-zero**.
+   `current_arc/output.yml` cannot build any payload. It is an evidence-only fixture with no `smiles` and no `xyz`, so every mode raises `ValueError`. The golden TS in conformer mode raises for the same reason (its `smiles` is null).
 
-**Known uncertainties, stated plainly:**
+I flattened each payload into FIELD_KEY paths and validated it against the real 0.51 request models (`ComputedSpeciesUploadRequest`, `ComputedReactionUploadRequest`, `TransitionStateUploadRequest`, `ConformerUploadRequest`):
 
-* `UNVERIFIED: whether ARC's tool-neutral scan records actually carry
-  `index_base`.` The adapter defaults it to 1 (adapter.py:139). If ARC's producer
-  omits it on 0-based data, every scanned-coordinate atom index is off by one and
-  nothing in the adapter would notice. A2 can settle this from the ARC side.
-* `UNVERIFIED: whether ARC's statmech torsion atom_indices are genuinely
-  1-based.` The adapter asserts it in a docstring (adapter.py:5182) and never
-  rebases. Only ARC-side evidence can confirm.
-* `UNVERIFIED: the GSM node-label → stringfile-frame-index identity.` The adapter
-  documents it as "confirmed on real reaction_06 data" (adapter.py:6413–6421)
-  from a single observation; mismatched indices are silently skipped, so a
-  producer-side change would quietly strip per-node energies.
-* `UNVERIFIED: the request contracts for /uploads/transition-states and
-  /uploads/conformers.` Neither has a published model in `tckdb_schemas` 0.22.0;
-  `test_ts_upload.py` reconstructs the TS one locally and says it was "verified
-  against the TCKDB Pi" at some past point. I recorded those 188 rows from the
-  adapter's own emission code, not from a schema.
-* Line numbers in `source` point at the **emission site** (where the key lands in
-  the dict). Where the *value* is computed elsewhere I named the helper and its
-  line in `transform`. A few rows share a single emission line because the
-  adapter writes several keys in one loop (e.g. `nasa.a1..a7` at adapter.py:4690,
-  LoT fields at adapter.py:4453); that is accurate, not sloppy.
+- **All 24 fixture payloads validate.**
+- **519 of 521 captured payloads validate.** The two failures come from deliberate negative tests (`test_no_scan_calcs_when_additional_calculations_empty` and `test_missing_scan_provenance_does_not_hide_unknown_torsion_reference`). In both, the adapter intentionally leaves a torsion's unknown `source_scan_calculation_key` for TCKDB to reject rather than repairing it silently.
+- **Two things never appear in any payload:** a key outside the 0.51 schema, and an explicit `null` on a scalar. The one explicit `null` in the whole corpus is `scheme.source_literature: null`, passed through verbatim from legacy synthetic AEC records.
+
+**The code pass came second.** I read the emission sites in `adapter.py` line by line (lines 76–305, 756–3505, 4207–7857), plus `constraints.py`, `evidence.py` and the `sweep.py` dispatcher. From that reading I built a catalog of calculation-relative fragments and per-route slot definitions. I then generated the YAML from the catalog and cross-checked it against the payloads:
+
+- Every empirically populated path is covered by the catalog, and the generator refuses to run otherwise.
+- Every path the catalog generates exists in the 0.51 path list.
+- 209 rows are `code_only`. They are reachable in code, but no built payload populates them.
+
+### Row columns (A4 schema plus extensions)
+
+| Column | Meaning |
+|---|---|
+| `path`, `source`, `adapter_source` | FIELD_KEY columns. `source` is the emission line, where the key lands in the dict. |
+| `maps_from` | The ARC origin, prefixed so `tools/phase_c_stats.py` can bucket it: `output.yml: …`, `tckdb_evidence.json \| parser_evidence.json: …`, `on-disk: …` or `(none — literal/derived/adapter-minted)`. |
+| `transform_kind` | One of `verbatim`, `coerced` (a type cast only), `renamed`, `unit_conversion`, `derived`, `constant`, `default` (a value with a fallback) or `conditional` (a passthrough gated by validity). |
+| `transform` | Free text. It ends with a `[route: …]` note on calculation rows. |
+| `condition` / `on_absence` | When the field is emitted, and what happens otherwise: omission, a refusal of the whole record, or an abort. |
+| `warning_codes` | Sidecar warning codes. The thermo enthalpy guard is the only producer-side emitter. |
+| `emission_route` | The line where the enclosing block is attached to the payload. |
+| `empirical` / `empirical_counts` | `fixture`: populated in a payload built from a checked-in ARC fixture. `synthetic`: populated only by test-suite corpora. `code_only`: populated by no built payload. |
+| `modes` | Upload modes that emit the row: `computed_species`, `computed_reaction`, `computed_ts` or `conformer`. |
+
+## 2. Counts per root and per mode
+
+| Root (mode) | Paths in 0.51 | Adapter rows | fixture | synthetic-only | code-only |
+|---|---:|---:|---:|---:|---:|
+| `species_upload` (computed_species) | 777 | 221 | 78 | 99 | 44 |
+| `reaction_upload` (computed_reaction) | 1,241 | 425 | 160 | 159 | 106 |
+| `ts_upload` (computed_ts) | 375 | 130 | 86 | 7 | 37 |
+| `conformer_upload` (conformer) | 568 | 62 | 33 | 7 | 22 |
+| `transport_upload` (no mode) | 30 | **0** | 0 | 0 | 0 |
+| **Total** | 2,991 | **838** | 357 | 272 | 209 |
+
+`transform_kind` totals:
+
+| derived | verbatim | renamed | constant | coerced | default | conditional | unit_conversion |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 246 | 180 | 112 | 119 | 91 | 55 | 31 | 4 |
+
+The four `unit_conversion` rows all compute a `relative_energy_kj_mol`:
+
+- IRC points on each of the two TS routes, converted Hartree→kJ/mol with `_vendor.E_h_kJmol`.
+- Path-search points on each of the two TS routes. These use Hartree→kJ/mol, or kcal→kJ with the factor 4.184 on the GSM stringfile branch.
+
+No other field is unit-converted. Four behaviours need care:
+
+- **Kinetics A.** It is normalized for `T0` (`a = A / T0**n`, `adapter.py:6795`), a derived change of reference and not a unit conversion.
+- **Kinetics units.** A and Ea units are mapped as enums.
+- **Unknown kinetics units** drop the value together with its unit (C-4).
+- **Renamed IRC and GSM gradients.** They drop the `_hartree_per_bohr` suffix without converting.
+
+### Code-only groups (209 rows)
+
+These are reachable, but no fixture or test populates them:
+
+- **Level-of-theory fields** `aux_basis`, `cabs_basis`, `dispersion`, `solvent`, `solvent_model` and `keywords`. They are code-only on every calculation route, on `freq_scale_factor.level_of_theory` and on `applied_energy_corrections[].scheme.level_of_theory`. No corpus level carries them.
+- **`level_of_theory.spin_treatment`** on every freq and sp route. It comes from `scf_reference.{freq,sp}_reference` (`adapter.py:3419-3423`), and no corpus record has `scf_reference`.
+- **`parameters[]`** (`freq_hessian_method`) on species, reaction-species and conformer routes. It is populated only on the TS routes (one test).
+- **`spin_diagnostic.*`** on species, reaction and TS routes. `note` is code-only everywhere, and ARC's schema has no `note` key.
+- **`constraints[]`** on reaction, TS-standalone and species-primary routes. So is `atom4_index`. Only species freq and sp constraints are exercised.
+- **`artifacts[]`** on all reaction routes. It is exercised only on the species route.
+- **`freq_result.imag_freq_cm1`** on species and conformer freq. It is copied whenever the record has it, even with `n_imag` 0 or null.
+- **TS-only designation fields** `reaction_coordinate_mode_index` and `modes[].imaginary_disposition` on `ts_upload`. On the reaction TS route they are populated synthetically.
+- **Reaction-route scan fragments:** `symmetry_number`, `zero_energy_reference_hartree`, point geometry and energy, and `start_value`/`end_value`.
+- **`path_search_result.points[].is_climbing_image`** on `ts_upload`.
+- **AEC fields:** `scheme.atom_params[].element`/`.value` and `scheme.bond_params[].bond_key`/`.value` on the species root, `scheme.bond_params[].*` on the reaction TS, and `note` on all three routes. No corpus record carries a neutral `parameter_table`.
+- **`unmapped_smiles`** on the conformer and TS-reaction participants. ARC exports no `unmapped_smiles`.
+
+## 3. Problems with path spelling in `paths_0_51.tsv`
+
+The first version of the shared list (v1, kept at `paths_0_51.v1.tsv`) had two walker bugs. This audit found both independently, and the coordinator regenerated the list (v2) while the audit was running. The YAML is keyed to **v2**.
+
+1. **`transport_upload` was bound to the wrong model (fixed in v2).** `walk_paths.py` picked "the only class ending in `UploadRequest`" in `tckdb_schemas.workflows.transport_upload`. That class was the *imported* `LiteratureUploadRequest`, so the 12 v1 `transport_upload.*` rows were literature fields. v2 roots the list at `TransportUploadPayload`, which gives 30 leaves. The updated `FIELD_KEY.md` defines the root as the backend-side `TransportUploadRequest` (`TCKDB_v2/backend/app/schemas/workflows/transport_upload.py:66`, `POST /api/v1/uploads/transport`). That class extends the payload with `species_entry`, inline `calculations` and `source_calculations` (lines 79-88), and the v2 list does not walk those three fields. **This is a residual spelling gap**: A1 should check whether `transport_upload.species_entry.*`, `.calculations[].*` and `.source_calculations[].*` belong in the list. The same payload also travels inline at `conformer_upload.transport.*`.
+2. **Fifteen list-of-model fields were not descended in v1 (fixed in v2).** They were `…applied_energy_corrections[].scheme.{atom_params,bond_params,component_params}` on each of these routes:
+
+   | Route |
+   |---|
+   | `species_upload` |
+   | `species_upload.thermo` |
+   | `reaction_upload.species[]` |
+   | `reaction_upload.transition_state` |
+   | `conformer_upload` |
+
+   The schema annotates them with forward-reference strings (`list["SchemeAtomParamPayload"]`, `energy_correction.py:92`), and the walker did not resolve `ForwardRef`. v2 descends them to `atom_params[].element`/`.value`, `bond_params[].bond_key`/`.value` and `component_params[].{component_kind,key,value}`. The A4 rows use that spelling. The adapter never builds `component_params`: Melius BAC tables are not carried, and only a legacy verbatim scheme could place them on the wire.
+3. **`FIELD_KEY.md` root table (now updated by another agent).** When this audit started it declared two roots and "0.22.0 authority". It now declares five roots against 0.51.0, and `ts_upload` and `conformer_upload` have published models. This makes the old A4's invented roots `transition_state_upload.*` and `conformer_upload.*` joinable. The first is renamed here to `ts_upload.*`. The A4 status column is renamed from `status_at_0_22_0` to `status_at_0_51`. The concurrently updated `FIELD_KEY.md` fixed the root table but its A4 template still says `status_at_0_22_0`; the join does not read the column.
+
+In v2, no A4 path has a spelling the TSV lacks, and no emitted payload key falls outside the TSV.
+
+## 4. Adapter gaps: ARC exports it, TCKDB has a home, the adapter drops it
+
+These are ranked by scientific weight. None of them is a YAML row, because a row means "adapter maps it".
+
+| # | TCKDB home (0.51) | ARC source (`db0934d5`) | Adapter behaviour |
+|---|---|---|---|
+| 1 | `reaction_upload.transition_state.validation_evidence[]`, `ts_upload.validation_evidence[]` (`kind: 'irc'`, `passed`, `rationale`, `source_calculation_key`) | `transition_states[].ts_checks.IRC` verdict plus `ts_checks.warnings` and `irc_converged` (`arc/output.py:1983-1986`, `_ts_checks_to_dict` `:2779-2805`). A2 independently confirms that ARC exports this. | Never built: there is no `validation_evidence` anywhere in the adapter, and the TS block (`adapter.py:2888-2909`) and standalone request (`:3088-3105`) omit it. TCKDB then warns `transition_state_missing_irc_evidence` on **every** TS the adapter deposits, even when ARC ran and passed the IRC check. The two participant mappings would still need an atom map, which A3 covers. `passed`, `rationale` and `source_calculation_key` (`ts_irc`) are available now. |
+| 2 | `species_upload.thermo.energy_level_of_theory`, `…statmech.energy_level_of_theory`, and the same under `reaction_upload.species[]` and `conformer_upload.statmech` | `composite_method` / `sp_level` / `opt_level` (top level) | The adapter **already computes** this level, as `_thermo_energy_level` (`adapter.py:5177`), to run the enthalpy guard, then throws it away. The thermo builder's allow-list (`adapter.py:5070-5081`) has no slot for it. |
+| 3 | **Mis-attribution, not a drop.** `level_of_theory` and `software_release` on the `ts_guess` `path_search` calc | `neb_level` (`arc/output.py:180-181`), `ess_software.neb` and `ess_versions.neb` (`:1924`, key map `:1200`) | The path-search calc is built with `level_kind="opt"` and `ess_job_key="opt"` (`adapter.py:2670-2671`). A GSM (xTB) or ORCA-NEB guess is therefore labelled with the opt DFT level and the opt ESS name and version. The comment at `:2668` says "No ts_guess_level in output_doc today", but ARC does export `neb_level`. This is wrong provenance on a populated field (fixture-populated in both golden TS payloads). |
+| 4 | `…calculations[].scf_stability.{status, lowest_eigenvalue, instability_count, instability_type, reoptimized_wavefunction}` on sp and freq calcs | `species[]/transition_states[].wavefunction_stability` (verdict, internal and external instability, `lowest_eigenvalue`, `followed_to_stable`, …; `arc/output.py:1842`, parser `:586-633`). A2 independently confirms that ARC exports this. | Ignored. Only `scf_reference` is read, for `spin_treatment` (`adapter.py:3419-3423`). |
+| 5 | `reaction_upload.analysis_software_release.version` | `arkane_version` (`arc/output.py:168`) | Only `arkane_git_commit` → `revision` is read (`adapter.py:5753-5756`). The docstring says "No Arkane version string is captured", which is stale because ARC now exports one. When ARC has a version but no commit, the whole `analysis_software_release` is omitted. |
+| 6 | Scan-calc `artifacts[]` (`output_log`) | `rotor_scans[].source_log` (`arc/output.py:2381`) | `_LOG_FIELD_BY_CALC_KEY` (`adapter.py:388`) has no scan role, so scan calcs never carry their log, even with `artifacts.upload=true`. |
+| 7 | `conformer_upload.statmech.*` (including `freq_scale_factor`, `torsions[]` and `torsions[].invalidated_reason`) and `conformer_upload.applied_energy_corrections[]` | `species[].statmech`, `freq_scale_factor`, `energy_corrections`, and `statmech.rejected_torsions[].invalidation_reason` (`arc/output.py:2122`, `:2172`) | Conformer mode (`_build_payload`, `adapter.py:3277-3298`) emits only identity, geometry and opt/freq/sp. It has no statmech, AEC or scans, although the 0.51 conformer root accepts all three. `invalidated_reason` is the only 0.51 home for ARC's rejected rotors, and no mode reaches it. |
+| 8 | `reaction_upload.species[].conformers[].label` | `species[].label` | Set on species-bundle conformers (`adapter.py:1287`) but not on reaction conformers (`:2493-2497`). |
+| 9 | `…scan_result.constraints[]` (a 0.51 slot inside the scan result) | `rotor_scans[].constraints[]` | The constraints **are** emitted, but at calc level `constraints[]` (`adapter.py:1526-1533`), not in `scan_result.constraints[]`. A5 or TCKDB should say which home is intended. The data is not lost. |
+| 10 | `path_search_result.climbing_image_index` | Derivable (the adapter already flags `points[].is_climbing_image`) | Never set (`adapter.py:7737-7740`). |
+
+Other non-mappings are deliberate. They are recorded, not ranked:
+
+- **Dropped on purpose:** `conformer_energies` (`adapter.py:1318-1329`); torsion `pivot_atoms` and `barrier_kj_mol` (no 0.51 column); constraint `target_value_units` (no unit slot); and TS applied energy corrections on `ts_upload` (no 0.51 slot, debug-logged at `adapter.py:3066`).
+- **Dropped on the standalone TS route:** TS scans (`ts_upload` has no `scan_result` slot in 0.51, warned at `adapter.py:3079-3085`) and artifacts (no slot, one-time warning at `:3037`).
+- **ARC data with no TCKDB home:** `statmech.e0_kj_mol`, `spin_multiplicity`, `inchi`/`inchi_key`/`formula`, `kinetics.n_data_points`, run-level `atom_energy_corrections`/`bond_additivity_corrections`/`bac_type`, `freq_scale_factor_key`, `datetime_*`, and `energy_corrections[].matched_arkane_key`/`reference_atom_energies`.
+- **ARC's `statmech.torsions[].dimension` is ignored.** The adapter derives the dimension from the shape of `atom_indices` instead (`adapter.py:6256`).
+
+**Candidate justified constant, not emitted:** `thermo.phase`. The 0.51 default is `None`. ARC and Arkane thermo is ideal-gas by construction; the reference-pressure fallback (`adapter.py:5132-5137`) already relies on RMG's `IdealGasTranslation`. So the adapter could assert `'gas'`, but today it asserts nothing.
+
+## 5. Constants and defaults: provenance claims that need justification
+
+**Hard literals**, meaning the adapter asserts them and does not read them from ARC:
+
+| Field(s) | Value | Site |
+|---|---|---|
+| `species_entry.molecule_kind` | `'molecule'` | `adapter.py:3251` |
+| `species_entry.species_entry_kind` | `'minimum'`. **This changed** since the 0.22 audit: it is no longer derived from `is_ts`, and an `is_ts=True` record is now refused. | `adapter.py:3209-3257` |
+| `species_entry.electronic_state_kind` | `'ground'` | `adapter.py:3258` |
+| Calculation `quality` | `'raw'` | `adapter.py:3447` |
+| Calculation `workflow_tool_release.name` | `'ARC'`, used everywhere the ARC release is claimed | `adapter.py:3455`, `:5734`, `:2290` |
+| `output_geometries[].role` | `'final'` | `adapter.py:1568`, `:1397` |
+| `depends_on[].role` | `optimized_from`, `freq_on`, `single_point_on`, `scan_parent` or `irc_start`. These edges are asserted from ARC's workflow invariant, not recorded by ARC. | `adapter.py:1158-1161`, `:1199`, `:1222`, `:1265`, `:2687`, `:2797` |
+| `input_geometries` for freq, sp and irc | The conformer's *optimized* xyz, asserted by invariant rather than recorded as an input | `adapter.py:1614-1621` |
+| `opt_result.converged` on `opt_coarse` | `True`. ARC exports no coarse convergence flag. | `adapter.py:4435` |
+| `path_search_result.converged` | `True`, justified only by the emission gate | `adapter.py:7749` |
+| `path_search_result.is_double_ended` | `True` for neb and gsm, from a static table | `adapter.py:486-489`, applied at `:7758` |
+| `path_search_result.source_endpoint_count` | `2` for neb and gsm, from the same table | `adapter.py:486-489`, applied at `:7758` |
+| IRC TS-marker point | `is_ts=True`, `reaction_coordinate=0.0`, relative energy 0. This point is synthesized: it is ARC's seed geometry, not a parsed point. | `adapter.py:7222-7244` |
+| `irc_result.direction` | `'both'` when no direction resolves | `adapter.py:7205-7212` |
+| `freq_result.modes[]` imaginary entries | Re-inserted as `-abs(v)` from `imaginary_frequencies_cm1` or `imag_freq_cm1` | `adapter.py:4660-4684` |
+| `modes[].imaginary_disposition` | `'unassigned'`, and designation of the reaction coordinate by ARC's (75, 10000) cm⁻¹ window | `adapter.py:4462-4503`, `:4758` |
+| `thermo.enthalpy_reference_kind` | `'formation_298k'`, whenever enthalpy survives the guard | `adapter.py:5470` |
+| `statmech.freq_scale_factor.scale_kind` | `'fundamental'` | `adapter.py:5843` |
+| `statmech.freq_scale_factor.workflow_tool_release` | The ARC release, claimed only when `freq_scale_factor_source` is set | `adapter.py:5858-5869` |
+| `kinetics[].model_kind` | `'modified_arrhenius'` | `adapter.py:6742` |
+| `kinetics[].a_uncertainty_kind` | `'multiplicative'` | `adapter.py:6928` |
+| `reaction_family_source_note` | `'ARC-reported family'` on both reaction routes | `adapter.py:2285`, `:3192` |
+| `ts_upload.reaction.reversible` | `True`. The standalone schema requires the field, and ARC exports no `reversible`, so this is **always** the constant. The reaction route omits the field instead. | `adapter.py:3175` |
+| `conformer_upload.scientific_origin` | `'computed'` | `adapter.py:3291` |
+| `analysis_software_release.name` | `'Arkane'` | `adapter.py:5756` |
+| `hessian.parser_version` (reparse fallback) | `'arc-hessian-1'` | `adapter.py:372` |
+| `parameters_json.tckdb_origin` markers | `origin_kind` `reused_result` or `derived`; `origin_detail` `screened_conformer`; `independent_ess_job: false`; `producer: 'ARC'` | `adapter.py:4247-4266`, `:4349-4380` |
+| `parameters[]` (freq Hessian method) | Keys `freq_hessian_method`/`freq.hessian_method`, section `freq`, value type `string` | `adapter.py:3469-3476` |
+| Scan coordinate indices | `coordinate_index` and `coordinate_values[].coordinate_index` = 1 | `adapter.py:171`, `:210` |
+| Adapter-minted local keys | `conf0`, `alt<i>`, `r<i>_<label>`, `ts_geom`, `<actor>_geom`, `<actor>_conf0`, and calc keys | `adapter.py:977`, `:1355`, `:5664-5686`, `:2596-2603` |
+
+**Defaults that mask absence:**
+
+| Field | Default | Site |
+|---|---|---|
+| `thermo.reference_pressure_bar` | **1.01325 bar**, used when `standard_state_pressure_pa` is absent or falls outside [0.5, 2.0] bar. Otherwise the value is Pa/1e5. The argument is that RMG hard-codes P0 = 1 atm. | `adapter.py:5132-5165` |
+| `species_entry.charge` / `.multiplicity` | 0 / 1. A record without a multiplicity uploads as a singlet. | `adapter.py:3253-3254` |
+| TS `charge` | 0 | `adapter.py:2889` |
+| TS multiplicity | The reaction multiplicity | `adapter.py:2879-2886` |
+| Freq and sp level of theory | `opt_level` when `freq_level`/`sp_level` is null (`_resolve_level`). Scan has no fallback: without `scan_level` the scan calc is skipped. | `adapter.py:4383-4404` |
+| `software_release.version` | `ess_versions['opt']`, but only when the software names match, and never for scan | `adapter.py:3432-3441` |
+| `software_release.name` | The requested level's software when no observed `ess_software[job]` exists | `adapter.py:3400` |
+| `freq_scale_factor.software.name` | `opt_level.software` | `adapter.py:5851-5856` |
+| Scan `dimension` / `is_relaxed` / `value_unit` / `index_base` | 1 / `True` / `'degree'` / 1 | `adapter.py:149`, `:174`, `:212`, `:223-224` |
+| Kinetics `T0_k` | 1 K when absent | `adapter.py:6797` |
+| Labels | `'unlabeled'` and `'unlabeled-ts'` | `adapter.py:976`, `:3034` |
+
+## 6. Refusal and omission behaviour
+
+**Thermo enthalpy guard** (`adapter.py:5240-5514`). H298, NASA, and point H and G are stripped, while S298, Cp and point S are kept. It triggers in these cases:
+
+- ARC recorded `atom_corrections_applied=false`.
+- `atom_corrections_level` differs from the energy level, compared by normalized method plus dispersion and basis.
+- Either level sets a dispersion or solvation field that ARC's matching ignores (`…_level_unverifiable`).
+- A value is non-finite.
+- The **magnitude guard** fires: |H298|, point H, or NASA H(298 K) above 2×10⁴ kJ/mol.
+
+Each refusal adds a sidecar warning with action `thermo_enthalpy_omitted`, or `thermo_omitted` if nothing is left. The finished block is then checked with the shared `enthalpy_reference_error`, and a block that rule refuses is dropped whole.
+
+Observed on `arc_1_2`:
+
+| Species | Warning |
+|---|---|
+| `CH4_standin` | `level_mismatch` |
+| `CH4_uncorrected`, `H`, `H2` | `not_applied` |
+| `CH4_yml` | `not_formation_magnitude` |
+
+The `atom_corrections_*` flags exist only on ARC branch `feature_export_atom_corrections_applied` (`a10e8ae0`), with output schema 1.2. ARC `main` `db0934d5` exports output 1.1 and does not have them. There the guard is only the finiteness and magnitude checks, so H and H2 (below 2×10⁴) would pass uncorrected.
+
+**Scan provenance omission** (`adapter.py:6008-6019`, `:1241`). A scan calc without `scan_level` is skipped, and any torsion `source_scan_calculation_key` pointing at it is removed. Unknown keys are left for TCKDB to reject, and the adapter does not repair them.
+
+**Frequency contradictions** (`adapter.py:4604-4785`). The adapter raises `ValueError` and refuses the **whole record** (a sweep failure) in these cases:
+
+- A minimum has `n_imag>0`, or its harmonic list contains a negative value.
+- A TS has `n_imag≤0`.
+- A TS has `n_imag>1` with no unique in-window designation.
+
+When the mode count does not match `n_imag`, only `modes` is omitted, with a warning.
+
+**Kinetics units:**
+
+- A or Ea with an unmapped or null unit drops the value and its unit together (a warning). The rest of the kinetics block is kept.
+- `dEa` is sent only when its unit matches the `reported_ea_units` on the wire.
+- `dA<1`, and `Tmin`/`Tmax≤0`, are omitted.
+
+**Energy corrections.** A correction without `total.unit` is dropped rather than given an assumed unit (C-6). Components lacking `parameter_value` or `contribution_value` are dropped, and `parameter_unit` is always stripped.
+
+**Hessian, IRC and GSM** read ARC parser evidence first. A sidecar state of `unavailable` suppresses the sub-payload. A state of `fallback` reparses the on-disk logs through the optional-ARC boundary.
+
+- IRC parse failure still emits a bare `type=irc` calc.
+- NEB, and GSM without parseable frames, collapse to a single-point path from `opt_input_xyz`.
+- GSM absolute energies and gradients come **only** from geometry-matched evidence. `_read_gsm_node_outputs` (`adapter.py:7420`) is now dead code: nothing calls it, and a warning at `:7559` says archived node energies are omitted.
+
+**Sweep gating** (`sweep.py`):
+
+- Only `converged` species and TSs are uploaded.
+- Reactions with a missing or non-converged TS become partial bundles when `allow_partial_uploads` is set. `ts_label` and `kinetics` are stripped from these bundles, and they are never POSTed.
+- Conformer mode never receives TS records.
+
+## 7. `transport_upload`
+
+The adapter has **no transport path at all**. No builder emits `transport`, and the only mention is a docstring in `__init__.py`. ARC `db0934d5` exports no Lennard-Jones, dipole or polarizability data (none in `arc/output.py` or the output schema). The real transport home, `conformer_upload.transport.*`, is therefore ARC-absent as well as adapter-absent. The adapter never POSTs to `/api/v1/uploads/transport` and never fills `conformer_upload.transport`. All 30 v2 `transport_upload.*` leaves, and the backend-only request fields noted in §3.1, are ARC-absent and adapter-absent. No A4 row exists for them.
+
+## 8. Changes from the previous A4 (0.22-era, 775 rows)
+
+- **Roots:** `transition_state_upload.*` became `ts_upload.*`. 726 paths carry over, 106 are new and 49 were dropped.
+- **Container rows dropped (for example `species_upload.thermo`, `reaction_upload.species[]`).** The shared path list has leaves only.
+- **Old rows that were wrong and are now removed:**
+  - `ts_upload.additional_calculations[].opt_result.*` and `reaction_upload.transition_state.calculations[].opt_*`: the TS block never builds an opt as an *additional* calc.
+  - `…transition_state.calculations[].output_geometries[]` / `ts_upload.additional_calculations[].output_geometries[]`: only opt and opt_coarse roles get output geometries.
+  - `conformer_upload.calculation.parameters_json`: the conformer-mode opt gets neither a marker nor `final_settings`.
+- **New since the 0.22 audit:**
+  - `thermo.enthalpy_reference_kind` and `thermo.reference_pressure_bar`
+  - `level_of_theory.spin_treatment`
+  - `parameters[]` (the freq Hessian method)
+  - `freq_result.reaction_coordinate_mode_index`, `modes[].imaginary_disposition`, and their flat forms `freq_reaction_coordinate_mode_index` and `freq_imaginary_dispositions`
+  - `reaction_upload.species[].calculations[].conformer_key`
+  - `freq_scale_factor.workflow_tool_release.*`
+  - `scheme.note`, which now also carries a legacy scheme `version`
+  - scan coverage on the reaction-TS route
+  - the AEC `scheme.level_of_theory.*` leaves
+- **Semantic changes worth re-checking downstream:**
+  - `species_entry_kind` is now a constant `'minimum'`.
+  - The observed `ess_software[job]` now takes precedence over the requested level's software.
+  - Kinetics `a` is now normalized by `T0`.
+  - `constraints` require an explicit `index_base`: legacy mappings without it are dropped, where the old behaviour assumed 1-based.
+  - A thermo block now carries `source_calculations` on *both* roots.
+
+## 9. Self-assessment of coverage
+
+**Confident:**
+
+- The row set is complete for every builder in `adapter.py`. The generator fails if any empirically populated path is missing from the catalog, and every catalog path exists in 0.51.
+- `emission_route` and `source` lines were re-read at `0913124`.
+
+**Less certain:**
+
+1. **Code-only rows (209).** I reasoned about their reachability rather than observing it. I removed the routes I could show to be impossible: TS-additional output geometries, TS-additional opt results, and the conformer opt's `parameters_json`. The others rest on `_calculation_payload` being shared.
+2. **Pass-through surfaces.** The legacy record-level `additional_calculations[].scan_result` (`adapter.py:106-108`) and legacy `applied_energy_corrections[].scheme` (`adapter.py:5032-5035`) are copied **verbatim**. Such a record could therefore place other `scan_result.*` or `scheme.*` keys (for example `scan_result.note`, `scheme.software.*` or `scheme.component_params`) on the wire. I added rows only for keys the adapter itself constructs, plus the pass-through keys seen in the corpora. Current ARC emits only the neutral shapes.
+3. **Sources the adapter reads that ARC `main` does not export.** These rows will read as SOURCE_UNCONFIRMED in the join. That is correct: the adapter code handles them, but ARC does not supply them.
+
+   | Adapter source | Where ARC stands |
+   |---|---|
+   | `unmapped_smiles`, `reactions[].reversible`, `kinetics.degeneracy`, `kinetics.note`, `sp_spin_diagnostic.note`, `irc_final_settings`, `thermo.cp_data`, and `electronic_energy_hartree` as an sp fallback | Not exported |
+   | `thermo.atom_corrections_applied` / `atom_corrections_level` | ARC branch `a10e8ae0` only |
+
+4. **Fixture realism.** "fixture" means a checked-in fixture, but only the golden `phase3` corpus derives from a real ARC run. `arc_1_2` is a hand-assembled 1.2 thermo corpus, and `current_arc` builds nothing. No fixture exercises any of these: statmech/torsions, kinetics, scans, constraints, AEC, spin diagnostics, `scf_reference`, artifacts, or coarse opt. Those rows are `synthetic` or `code_only`.
+5. **Line numbers** point at the line that assigns the key. Where one assignment writes several keys (NASA `a1..a7` at `:5574`, LoT fields at `:4967`, components at `:5028`), several rows share a line.
+
+The generator (`gen.py`), capture plugin, fixture builder and flattener lived in the A4 scratch directory and are not committed. To rebuild, run the adapter suite with a builder-wrapping pytest plugin, flatten the payloads against `paths_0_51.tsv`, and diff the result against this YAML.
