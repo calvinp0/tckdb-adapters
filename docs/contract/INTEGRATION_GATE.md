@@ -106,7 +106,7 @@ counts are taken only once two consecutive snapshots agree (see T4).
 
 | Corpus | Modes | Read back |
 |---|---|---|
-| `golden` (Phase 3, `tckdb_evidence.json`) | species, conformer, reaction, TS | calculation owners and types, thermo reference kind, pressure and source calculations, Hessian; conformer-mode log and input artifacts |
+| `golden` (Phase 3, `tckdb_evidence.json`) | species, conformer, reaction, TS | calculation owners and types; H2 thermo stored as S and Cp only (no H298, NASA, point H or G, or reference kind), because pre-1.2 output cannot show the enthalpy is a formation enthalpy and H2 is too light for the magnitude guard, with the `enthalpy_formation_unverifiable_light_species` warning; reference pressure and source calculations; Hessian values; conformer-mode log and input artifacts |
 | `golden` + kinetics at T0 = 300 K and Arkane commit | reaction, TS | Arrhenius `a = A/T0**n`, `n`, `Ea`, kinetics source-calculation roles and owners, TS composition against both sides, IRC and GSM results, the standalone TS's calculations |
 | `arc_1_2` (output 1.2 atom-correction flags) | species, conformer | formation enthalpy kept for CH4, stripped to S and Cp (no H298, NASA, point H or G, or reference kind) for the other five, with the producer warning |
 | `arc_1_2` CH4 + `energy_corrections` | species | applied AEC and BAC totals, units, components, source `sp` calculation |

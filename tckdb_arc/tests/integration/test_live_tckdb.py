@@ -231,7 +231,12 @@ def _ts_validation(live, entry_id):
 
 
 def test_golden_species_calculations_thermo_and_hessian(live_tckdb, tmp_path):
-    outcomes = _submit_species(live_tckdb, tmp_path, "golden")
+    project, doc = materialize(tmp_path, "golden")
+    adapter = make_adapter(live_tckdb.url, project, "golden", "computed_species")
+    outcomes = {
+        record["label"]: adapter.submit_computed_species_from_output(output_doc=doc, species_record=record)
+        for record in doc["species"] if record.get("converged")
+    }
     response = _uploaded(live_tckdb, outcomes["H2"])
     calcs = _species_calcs(response)
     assert set(calcs) == {"opt", "freq", "sp"}
@@ -241,11 +246,26 @@ def test_golden_species_calculations_thermo_and_hessian(live_tckdb, tmp_path):
         assert stored["species_entry_id"] == response["species_entry_id"]
         assert stored["transition_state_entry_id"] is None
 
+    # Golden output.yml predates the 1.2 atom-correction flags, and H2 is too
+    # light for the magnitude guard, so its formation enthalpy cannot be
+    # verified: H298, NASA and point H/G are withheld, S and Cp are kept.
+    unverifiable = "enthalpy_formation_unverifiable_light_species"
+    assert unverifiable in _codes(outcomes["H2"].warnings)
+    assert unverifiable in _codes(json.loads(outcomes["H2"].sidecar_path.read_text())["warnings"])
+    source = next(r for r in doc["species"] if r["label"] == "H2")["thermo"]
     thermo = live_tckdb.get(f"/thermo/{response['thermo']['thermo_id']}")
     assert thermo["species_entry_id"] == response["species_entry_id"]
-    assert thermo["enthalpy_reference_kind"] == "formation_298k"
+    assert thermo["h298_kj_mol"] is None
+    assert thermo["enthalpy_reference_kind"] is None
+    assert thermo["nasa"] is None
+    assert thermo["s298_j_mol_k"] == pytest.approx(source["s298_j_mol_k"])
+    assert (thermo["tmin_k"], thermo["tmax_k"]) == (source["tmin_k"], source["tmax_k"])
     assert thermo["reference_pressure_bar"] == pytest.approx(1.01325)
-    assert thermo["nasa"] is not None
+    assert [(p["temperature_k"], p["cp_j_mol_k"], p["s_j_mol_k"], p["h_kj_mol"], p["g_kj_mol"])
+            for p in thermo["points"]] == [
+        (p["temperature_k"], p["cp_j_mol_k"], p["s_j_mol_k"], None, None)
+        for p in source["thermo_points"]
+    ]
     assert {(s["role"], s["calculation_id"]) for s in thermo["source_calculations"]} == {
         (calc_type, calc_id) for calc_type, calc_id in calcs.items()
     }
