@@ -18,6 +18,10 @@ and schema versions; their percentages are not current coverage measurements.
 - **Adapter 0.6.0 (2026-09-29):** pins and CI move to TCKDB `11cc43d7`
   (tckdb-client 0.95.0, tckdb-schemas 0.52.0, the first release shipping the
   producer contract). See [the 0.52 section](#tckdb-schemas-052-producer-contract-adapter-060).
+- **Adapter 0.6.2:** pins and CI move to TCKDB `4adf7ff4` (tckdb-client 0.95.1,
+  tckdb-schemas 0.53.0). `--since 0.52.0` changes only the submission-supersede
+  route (public refs, `new_submission_ref`), which the adapter never calls; no
+  model changes.
 - Adapter: working tree including substantial pre-existing uncommitted work.
   Those changes were retained.
 
