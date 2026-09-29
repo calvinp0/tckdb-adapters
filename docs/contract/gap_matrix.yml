@@ -3966,7 +3966,7 @@
   drift: []
 - path: conformer_upload.additional_calculations[].opt_result.converged
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].opt_result.converged
@@ -3996,7 +3996,7 @@
   drift: []
 - path: conformer_upload.additional_calculations[].opt_result.final_energy_hartree
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].opt_result.final_energy_hartree
@@ -4026,7 +4026,7 @@
   drift: []
 - path: conformer_upload.additional_calculations[].opt_result.n_steps
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].opt_result.n_steps
@@ -4587,7 +4587,7 @@
   drift: []
 - path: conformer_upload.additional_calculations[].parameters_extracted_at
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -4665,7 +4665,7 @@
   drift: []
 - path: conformer_upload.additional_calculations[].parameters_parser_version
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -5352,7 +5352,7 @@
   drift: []
 - path: conformer_upload.additional_calculations[].quality
   verdict: SOURCE_UNCONFIRMED
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].quality
@@ -5430,7 +5430,7 @@
   drift: []
 - path: conformer_upload.additional_calculations[].scf_stability.instability_count
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -5463,7 +5463,7 @@
   drift: []
 - path: conformer_upload.additional_calculations[].scf_stability.instability_type
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -5496,7 +5496,7 @@
   drift: []
 - path: conformer_upload.additional_calculations[].scf_stability.lowest_eigenvalue
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -5556,7 +5556,7 @@
   drift: []
 - path: conformer_upload.additional_calculations[].scf_stability.reoptimized_wavefunction
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -5590,7 +5590,7 @@
   drift: []
 - path: conformer_upload.additional_calculations[].scf_stability.source_artifact_id
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -5617,7 +5617,7 @@
   drift: []
 - path: conformer_upload.additional_calculations[].scf_stability.source_calculation_id
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -5645,7 +5645,7 @@
   drift: []
 - path: conformer_upload.additional_calculations[].scf_stability.status
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -13588,7 +13588,7 @@
   drift: []
 - path: conformer_upload.calculation.opt_result.converged
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags: []
   ruling: null
@@ -13660,7 +13660,7 @@
   drift: []
 - path: conformer_upload.calculation.opt_result.final_energy_hartree
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags: []
   ruling: null
@@ -13732,7 +13732,7 @@
   drift: []
 - path: conformer_upload.calculation.opt_result.n_steps
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags: []
   ruling: null
@@ -14222,7 +14222,7 @@
   drift: []
 - path: conformer_upload.calculation.parameters_extracted_at
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -14284,7 +14284,7 @@
   drift: []
 - path: conformer_upload.calculation.parameters_parser_version
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -14971,7 +14971,7 @@
   drift: []
 - path: conformer_upload.calculation.quality
   verdict: ARC_LATENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].primary_calculation.quality
@@ -15050,7 +15050,7 @@
   drift: []
 - path: conformer_upload.calculation.scf_stability.instability_count
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count
@@ -15078,7 +15078,7 @@
   drift: []
 - path: conformer_upload.calculation.scf_stability.instability_type
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type
@@ -15106,7 +15106,7 @@
   drift: []
 - path: conformer_upload.calculation.scf_stability.lowest_eigenvalue
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue
@@ -15161,7 +15161,7 @@
   drift: []
 - path: conformer_upload.calculation.scf_stability.reoptimized_wavefunction
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction
@@ -15190,7 +15190,7 @@
   drift: []
 - path: conformer_upload.calculation.scf_stability.source_artifact_id
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -15217,7 +15217,7 @@
   drift: []
 - path: conformer_upload.calculation.scf_stability.source_calculation_id
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -15245,7 +15245,7 @@
   drift: []
 - path: conformer_upload.calculation.scf_stability.status
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.status
@@ -17354,7 +17354,7 @@
   drift: []
 - path: conformer_upload.statmech.energy_level_of_theory.aux_basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -17392,7 +17392,7 @@
   drift: []
 - path: conformer_upload.statmech.energy_level_of_theory.basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.basis
@@ -17421,7 +17421,7 @@
   drift: []
 - path: conformer_upload.statmech.energy_level_of_theory.cabs_basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -17458,7 +17458,7 @@
   drift: []
 - path: conformer_upload.statmech.energy_level_of_theory.dispersion
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -17495,7 +17495,7 @@
   drift: []
 - path: conformer_upload.statmech.energy_level_of_theory.keywords
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -17532,7 +17532,7 @@
   drift: []
 - path: conformer_upload.statmech.energy_level_of_theory.method
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -17566,7 +17566,7 @@
   drift: []
 - path: conformer_upload.statmech.energy_level_of_theory.solvent
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -17603,7 +17603,7 @@
   drift: []
 - path: conformer_upload.statmech.energy_level_of_theory.solvent_model
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -17641,7 +17641,7 @@
   drift: []
 - path: conformer_upload.statmech.energy_level_of_theory.spin_treatment
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -33147,7 +33147,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/literature.py:45
 - path: reaction_upload.species[].calculations[].opt_converged
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.converged
@@ -33195,7 +33195,7 @@
   drift: []
 - path: reaction_upload.species[].calculations[].opt_final_energy_hartree
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.final_energy_hartree
@@ -33243,7 +33243,7 @@
   drift: []
 - path: reaction_upload.species[].calculations[].opt_n_steps
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.n_steps
@@ -33850,7 +33850,7 @@
   drift: []
 - path: reaction_upload.species[].calculations[].parameters_extracted_at
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -33928,7 +33928,7 @@
   drift: []
 - path: reaction_upload.species[].calculations[].parameters_parser_version
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -34615,7 +34615,7 @@
   drift: []
 - path: reaction_upload.species[].calculations[].quality
   verdict: SOURCE_UNCONFIRMED
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:reaction_upload.transition_state.calculations[].quality
@@ -36275,7 +36275,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:152
 - path: reaction_upload.species[].calculations[].scf_stability.instability_count
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count
@@ -36310,7 +36310,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:429
 - path: reaction_upload.species[].calculations[].scf_stability.instability_type
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type
@@ -36345,7 +36345,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:430
 - path: reaction_upload.species[].calculations[].scf_stability.lowest_eigenvalue
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue
@@ -36414,7 +36414,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:432
 - path: reaction_upload.species[].calculations[].scf_stability.reoptimized_wavefunction
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction
@@ -36450,7 +36450,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:431
 - path: reaction_upload.species[].calculations[].scf_stability.status
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.status
@@ -41531,7 +41531,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/literature.py:45
 - path: reaction_upload.species[].conformers[].calculation.opt_converged
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags:
   - SUPPLIED_AT:conformer_upload.calculation.opt_result.converged
@@ -41579,7 +41579,7 @@
   drift: []
 - path: reaction_upload.species[].conformers[].calculation.opt_final_energy_hartree
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags:
   - SUPPLIED_AT:conformer_upload.calculation.opt_result.final_energy_hartree
@@ -41627,7 +41627,7 @@
   drift: []
 - path: reaction_upload.species[].conformers[].calculation.opt_n_steps
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags:
   - SUPPLIED_AT:conformer_upload.calculation.opt_result.n_steps
@@ -42115,7 +42115,7 @@
   drift: []
 - path: reaction_upload.species[].conformers[].calculation.parameters_extracted_at
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -42194,7 +42194,7 @@
   drift: []
 - path: reaction_upload.species[].conformers[].calculation.parameters_parser_version
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -42881,7 +42881,7 @@
   drift: []
 - path: reaction_upload.species[].conformers[].calculation.quality
   verdict: ARC_LATENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].primary_calculation.quality
@@ -44036,7 +44036,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:152
 - path: reaction_upload.species[].conformers[].calculation.scf_stability.instability_count
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count
@@ -44071,7 +44071,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:429
 - path: reaction_upload.species[].conformers[].calculation.scf_stability.instability_type
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type
@@ -44106,7 +44106,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:430
 - path: reaction_upload.species[].conformers[].calculation.scf_stability.lowest_eigenvalue
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue
@@ -44175,7 +44175,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:432
 - path: reaction_upload.species[].conformers[].calculation.scf_stability.reoptimized_wavefunction
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction
@@ -44211,7 +44211,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:431
 - path: reaction_upload.species[].conformers[].calculation.scf_stability.status
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.status
@@ -46086,7 +46086,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:553
 - path: reaction_upload.species[].statmech.energy_level_of_theory.aux_basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.aux_basis
@@ -46121,7 +46121,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:337
 - path: reaction_upload.species[].statmech.energy_level_of_theory.basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.basis
@@ -46157,7 +46157,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:336
 - path: reaction_upload.species[].statmech.energy_level_of_theory.cabs_basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.cabs_basis
@@ -46192,7 +46192,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:338
 - path: reaction_upload.species[].statmech.energy_level_of_theory.dispersion
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.dispersion
@@ -46227,7 +46227,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:339
 - path: reaction_upload.species[].statmech.energy_level_of_theory.keywords
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.keywords
@@ -46262,7 +46262,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:342
 - path: reaction_upload.species[].statmech.energy_level_of_theory.method
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.method
@@ -46297,7 +46297,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:335
 - path: reaction_upload.species[].statmech.energy_level_of_theory.solvent
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.solvent
@@ -46332,7 +46332,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:340
 - path: reaction_upload.species[].statmech.energy_level_of_theory.solvent_model
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.solvent_model
@@ -46367,7 +46367,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:341
 - path: reaction_upload.species[].statmech.energy_level_of_theory.spin_treatment
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.spin_treatment
@@ -50190,7 +50190,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:358
 - path: reaction_upload.species[].thermo.energy_level_of_theory.aux_basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.aux_basis
@@ -50225,7 +50225,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:337
 - path: reaction_upload.species[].thermo.energy_level_of_theory.basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.basis
@@ -50261,7 +50261,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:336
 - path: reaction_upload.species[].thermo.energy_level_of_theory.cabs_basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.cabs_basis
@@ -50296,7 +50296,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:338
 - path: reaction_upload.species[].thermo.energy_level_of_theory.dispersion
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.dispersion
@@ -50331,7 +50331,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:339
 - path: reaction_upload.species[].thermo.energy_level_of_theory.keywords
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.keywords
@@ -50366,7 +50366,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:342
 - path: reaction_upload.species[].thermo.energy_level_of_theory.method
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.method
@@ -50401,7 +50401,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:335
 - path: reaction_upload.species[].thermo.energy_level_of_theory.solvent
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.solvent
@@ -50436,7 +50436,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:340
 - path: reaction_upload.species[].thermo.energy_level_of_theory.solvent_model
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.solvent_model
@@ -50471,7 +50471,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:341
 - path: reaction_upload.species[].thermo.energy_level_of_theory.spin_treatment
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.spin_treatment
@@ -62063,7 +62063,7 @@
   drift: []
 - path: reaction_upload.transition_state.calculation.parameters_extracted_at
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -62140,7 +62140,7 @@
   drift: []
 - path: reaction_upload.transition_state.calculation.parameters_parser_version
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -62827,7 +62827,7 @@
   drift: []
 - path: reaction_upload.transition_state.calculation.quality
   verdict: SOURCE_UNCONFIRMED
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:reaction_upload.species[].conformers[].calculation.quality
@@ -63980,7 +63980,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:152
 - path: reaction_upload.transition_state.calculation.scf_stability.instability_count
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count
@@ -64015,7 +64015,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:429
 - path: reaction_upload.transition_state.calculation.scf_stability.instability_type
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type
@@ -64050,7 +64050,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:430
 - path: reaction_upload.transition_state.calculation.scf_stability.lowest_eigenvalue
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue
@@ -64119,7 +64119,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:432
 - path: reaction_upload.transition_state.calculation.scf_stability.reoptimized_wavefunction
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction
@@ -64155,7 +64155,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:431
 - path: reaction_upload.transition_state.calculation.scf_stability.status
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:reaction_upload.transition_state.calculations[].scf_stability.status
@@ -70604,7 +70604,7 @@
   drift: []
 - path: reaction_upload.transition_state.calculations[].parameters_extracted_at
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -70682,7 +70682,7 @@
   drift: []
 - path: reaction_upload.transition_state.calculations[].parameters_parser_version
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -71831,7 +71831,7 @@
   drift: []
 - path: reaction_upload.transition_state.calculations[].quality
   verdict: SOURCE_UNCONFIRMED
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:reaction_upload.species[].calculations[].quality
@@ -73449,7 +73449,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:152
 - path: reaction_upload.transition_state.calculations[].scf_stability.instability_count
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count
@@ -73484,7 +73484,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:429
 - path: reaction_upload.transition_state.calculations[].scf_stability.instability_type
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type
@@ -73519,7 +73519,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:430
 - path: reaction_upload.transition_state.calculations[].scf_stability.lowest_eigenvalue
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue
@@ -73588,7 +73588,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:432
 - path: reaction_upload.transition_state.calculations[].scf_stability.reoptimized_wavefunction
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction
@@ -73624,7 +73624,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:431
 - path: reaction_upload.transition_state.calculations[].scf_stability.status
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -84380,7 +84380,7 @@
   drift: []
 - path: species_upload.conformers[].additional_calculations[].opt_result.converged
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.converged
@@ -84427,7 +84427,7 @@
   drift: []
 - path: species_upload.conformers[].additional_calculations[].opt_result.final_energy_hartree
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.final_energy_hartree
@@ -84473,7 +84473,7 @@
   drift: []
 - path: species_upload.conformers[].additional_calculations[].opt_result.n_steps
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.n_steps
@@ -85092,7 +85092,7 @@
   drift: []
 - path: species_upload.conformers[].additional_calculations[].parameters_extracted_at
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -85170,7 +85170,7 @@
   drift: []
 - path: species_upload.conformers[].additional_calculations[].parameters_parser_version
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -85857,7 +85857,7 @@
   drift: []
 - path: species_upload.conformers[].additional_calculations[].quality
   verdict: SOURCE_UNCONFIRMED
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:conformer_upload.additional_calculations[].quality
@@ -87740,7 +87740,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:164
 - path: species_upload.conformers[].additional_calculations[].scf_stability.instability_count
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -87780,7 +87780,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:429
 - path: species_upload.conformers[].additional_calculations[].scf_stability.instability_type
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -87820,7 +87820,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:430
 - path: species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -87894,7 +87894,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:432
 - path: species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -87935,7 +87935,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:431
 - path: species_upload.conformers[].additional_calculations[].scf_stability.status
   verdict: ADAPTER_GAP
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -93758,7 +93758,7 @@
   drift: []
 - path: species_upload.conformers[].primary_calculation.opt_result.converged
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags: []
   ruling: null
@@ -93811,7 +93811,7 @@
   drift: []
 - path: species_upload.conformers[].primary_calculation.opt_result.final_energy_hartree
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags: []
   ruling: null
@@ -93862,7 +93862,7 @@
   drift: []
 - path: species_upload.conformers[].primary_calculation.opt_result.n_steps
   verdict: WIRED
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags: []
   ruling: null
@@ -94423,7 +94423,7 @@
   drift: []
 - path: species_upload.conformers[].primary_calculation.parameters_extracted_at
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -94528,7 +94528,7 @@
   drift: []
 - path: species_upload.conformers[].primary_calculation.parameters_parser_version
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -95215,7 +95215,7 @@
   drift: []
 - path: species_upload.conformers[].primary_calculation.quality
   verdict: ARC_LATENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: medium
   flags: []
   ruling: null
@@ -96383,7 +96383,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:164
 - path: species_upload.conformers[].primary_calculation.scf_stability.instability_count
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count
@@ -96418,7 +96418,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:429
 - path: species_upload.conformers[].primary_calculation.scf_stability.instability_type
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type
@@ -96453,7 +96453,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:430
 - path: species_upload.conformers[].primary_calculation.scf_stability.lowest_eigenvalue
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue
@@ -96522,7 +96522,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:432
 - path: species_upload.conformers[].primary_calculation.scf_stability.reoptimized_wavefunction
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction
@@ -96558,7 +96558,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:431
 - path: species_upload.conformers[].primary_calculation.scf_stability.status
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.status
@@ -98461,7 +98461,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:575
 - path: species_upload.statmech.energy_level_of_theory.aux_basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -98506,7 +98506,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:337
 - path: species_upload.statmech.energy_level_of_theory.basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.basis
@@ -98542,7 +98542,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:336
 - path: species_upload.statmech.energy_level_of_theory.cabs_basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -98586,7 +98586,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:338
 - path: species_upload.statmech.energy_level_of_theory.dispersion
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -98630,7 +98630,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:339
 - path: species_upload.statmech.energy_level_of_theory.keywords
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -98674,7 +98674,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:342
 - path: species_upload.statmech.energy_level_of_theory.method
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -98737,7 +98737,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:335
 - path: species_upload.statmech.energy_level_of_theory.solvent
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -98781,7 +98781,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:340
 - path: species_upload.statmech.energy_level_of_theory.solvent_model
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -98826,7 +98826,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:341
 - path: species_upload.statmech.energy_level_of_theory.spin_treatment
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -106092,7 +106092,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:392
 - path: species_upload.thermo.energy_level_of_theory.aux_basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -106137,7 +106137,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:337
 - path: species_upload.thermo.energy_level_of_theory.basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -106178,7 +106178,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:336
 - path: species_upload.thermo.energy_level_of_theory.cabs_basis
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -106222,7 +106222,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:338
 - path: species_upload.thermo.energy_level_of_theory.dispersion
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -106266,7 +106266,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:339
 - path: species_upload.thermo.energy_level_of_theory.keywords
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -106310,7 +106310,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:342
 - path: species_upload.thermo.energy_level_of_theory.method
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -106365,7 +106365,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:335
 - path: species_upload.thermo.energy_level_of_theory.solvent
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -106409,7 +106409,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:340
 - path: species_upload.thermo.energy_level_of_theory.solvent_model
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -106454,7 +106454,7 @@
     source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:341
 - path: species_upload.thermo.energy_level_of_theory.spin_treatment
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -113452,7 +113452,7 @@
   drift: []
 - path: transport_upload.calculations[].calculation.opt_result.converged
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags:
   - RULE:AP-4-transport-gated
@@ -113479,7 +113479,7 @@
   drift: []
 - path: transport_upload.calculations[].calculation.opt_result.final_energy_hartree
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags:
   - RULE:AP-4-transport-gated
@@ -113506,7 +113506,7 @@
   drift: []
 - path: transport_upload.calculations[].calculation.opt_result.n_steps
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_1_kinetics_lookup
   cost: n/a
   flags:
   - RULE:AP-4-transport-gated
@@ -113928,7 +113928,7 @@
   drift: []
 - path: transport_upload.calculations[].calculation.parameters_extracted_at
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - RULE:AP-4-transport-gated
@@ -113985,7 +113985,7 @@
   drift: []
 - path: transport_upload.calculations[].calculation.parameters_parser_version
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - RULE:AP-4-transport-gated
@@ -114673,7 +114673,7 @@
   drift: []
 - path: transport_upload.calculations[].calculation.quality
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - RULE:AP-4-transport-gated
@@ -114733,7 +114733,7 @@
   drift: []
 - path: transport_upload.calculations[].calculation.scf_stability.instability_count
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - RULE:AP-4-transport-gated
@@ -114760,7 +114760,7 @@
   drift: []
 - path: transport_upload.calculations[].calculation.scf_stability.instability_type
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - RULE:AP-4-transport-gated
@@ -114787,7 +114787,7 @@
   drift: []
 - path: transport_upload.calculations[].calculation.scf_stability.lowest_eigenvalue
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - RULE:AP-4-transport-gated
@@ -114842,7 +114842,7 @@
   drift: []
 - path: transport_upload.calculations[].calculation.scf_stability.reoptimized_wavefunction
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - RULE:AP-4-transport-gated
@@ -114870,7 +114870,7 @@
   drift: []
 - path: transport_upload.calculations[].calculation.scf_stability.source_artifact_id
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - RULE:AP-4-transport-gated
@@ -114898,7 +114898,7 @@
   drift: []
 - path: transport_upload.calculations[].calculation.scf_stability.source_calculation_id
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - RULE:AP-4-transport-gated
@@ -114927,7 +114927,7 @@
   drift: []
 - path: transport_upload.calculations[].calculation.scf_stability.status
   verdict: ARC_ABSENT
-  tier: untiered
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - RULE:AP-4-transport-gated
@@ -122696,7 +122696,7 @@
   drift: []
 - path: ts_upload.additional_calculations[].parameters_extracted_at
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -122774,7 +122774,7 @@
   drift: []
 - path: ts_upload.additional_calculations[].parameters_parser_version
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -123881,7 +123881,7 @@
   drift: []
 - path: ts_upload.additional_calculations[].quality
   verdict: SOURCE_UNCONFIRMED
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].quality
@@ -123959,7 +123959,7 @@
   drift: []
 - path: ts_upload.additional_calculations[].scf_stability.instability_count
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count
@@ -123987,7 +123987,7 @@
   drift: []
 - path: ts_upload.additional_calculations[].scf_stability.instability_type
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type
@@ -124015,7 +124015,7 @@
   drift: []
 - path: ts_upload.additional_calculations[].scf_stability.lowest_eigenvalue
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue
@@ -124070,7 +124070,7 @@
   drift: []
 - path: ts_upload.additional_calculations[].scf_stability.reoptimized_wavefunction
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction
@@ -124099,7 +124099,7 @@
   drift: []
 - path: ts_upload.additional_calculations[].scf_stability.source_artifact_id
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -124126,7 +124126,7 @@
   drift: []
 - path: ts_upload.additional_calculations[].scf_stability.source_calculation_id
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -124154,7 +124154,7 @@
   drift: []
 - path: ts_upload.additional_calculations[].scf_stability.status
   verdict: ADAPTER_GAP
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: low
   flags: []
   ruling: null
@@ -129828,7 +129828,7 @@
   drift: []
 - path: ts_upload.primary_opt.parameters_extracted_at
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -129905,7 +129905,7 @@
   drift: []
 - path: ts_upload.primary_opt.parameters_parser_version
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -130594,7 +130594,7 @@
   drift: []
 - path: ts_upload.primary_opt.quality
   verdict: SOURCE_UNCONFIRMED
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags: []
   ruling: null
@@ -130670,7 +130670,7 @@
   drift: []
 - path: ts_upload.primary_opt.scf_stability.instability_count
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count
@@ -130698,7 +130698,7 @@
   drift: []
 - path: ts_upload.primary_opt.scf_stability.instability_type
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type
@@ -130726,7 +130726,7 @@
   drift: []
 - path: ts_upload.primary_opt.scf_stability.lowest_eigenvalue
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue
@@ -130781,7 +130781,7 @@
   drift: []
 - path: ts_upload.primary_opt.scf_stability.reoptimized_wavefunction
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction
@@ -130810,7 +130810,7 @@
   drift: []
 - path: ts_upload.primary_opt.scf_stability.source_artifact_id
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -130837,7 +130837,7 @@
   drift: []
 - path: ts_upload.primary_opt.scf_stability.source_calculation_id
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - NO_ARC_EVIDENCE
@@ -130865,7 +130865,7 @@
   drift: []
 - path: ts_upload.primary_opt.scf_stability.status
   verdict: ARC_ABSENT
-  tier: tier_1_kinetics_lookup
+  tier: tier_2_reproducibility
   cost: n/a
   flags:
   - SUPPLIED_AT:reaction_upload.transition_state.calculations[].scf_stability.status

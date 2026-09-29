@@ -96,11 +96,11 @@ policy amendment:
 
 | Tier | Populated leaves | Share |
 |---|---:|---:|
-| Kinetics lookup | 356 of 926 | 38.4% |
-| Reproducibility | 321 of 1,382 | 23.2% |
+| Kinetics lookup | 367 of 866 | 42.4% |
+| Reproducibility | 328 of 1,525 | 21.5% |
 | Atom mapping | 72 of 94 | 76.6% |
 | Completeness | 20 of 105 | 19.0% |
-| Untiered | 38 of 140 | 27.1% |
+| Untiered | 20 of 57 | 35.1% |
 
 The atom-mapping share looks high because the tier is small and mostly scan, IRC and
 path-search results; the atom map itself is latent.

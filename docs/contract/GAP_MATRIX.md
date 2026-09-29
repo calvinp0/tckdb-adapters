@@ -291,9 +291,9 @@ index flag is a prompt to check the row, not a finding by itself.
 
 ## Matrix by tier (leaf rows)
 
-### tier_1_kinetics_lookup (1059 rows)
+### tier_1_kinetics_lookup (999 rows)
 
-`ARC_ABSENT`×363  `WIRED`×256  `ADAPTER_GAP`×147  `NOT_APPLICABLE`×130  `SOURCE_UNCONFIRMED`×100  `ARC_LATENT`×60  `BROKEN`×3
+`ARC_ABSENT`×344  `WIRED`×271  `NOT_APPLICABLE`×130  `SOURCE_UNCONFIRMED`×96  `ADAPTER_GAP`×95  `ARC_LATENT`×60  `BROKEN`×3
 
 | Path | Verdict | Cost | ARC source | Flags |
 |---|---|---|---|---|
@@ -304,6 +304,9 @@ index flag is a prompt to check the row, not a finding by itself.
 | `conformer_upload.additional_calculations[].hessian.lower_triangle_hartree_bohr2` | `ADAPTER_GAP` | low | parser_evidence.json: records[].freq_hessian.value.lower_tri |  |
 | `conformer_upload.additional_calculations[].hessian.parser_version` | `ADAPTER_GAP` | low | parser_evidence.json: records[].freq_hessian.value.parser_ve |  |
 | `conformer_upload.additional_calculations[].hessian.source` | `ADAPTER_GAP` | low | parser_evidence.json: records[].freq_hessian.value.source |  |
+| `conformer_upload.additional_calculations[].opt_result.converged` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].opt_result.converged | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].opt_result.converged, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
+| `conformer_upload.additional_calculations[].opt_result.final_energy_hartree` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].opt_result.final_ene | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].opt_result.final_energy_hartree, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
+| `conformer_upload.additional_calculations[].opt_result.n_steps` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].opt_result.n_steps`) | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].opt_result.n_steps, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
 | `conformer_upload.applied_energy_corrections[].application_role` | `ADAPTER_GAP` | low | output.yml: species[].energy_corrections[].correction_type |  |
 | `conformer_upload.applied_energy_corrections[].components[].component_kind` | `ADAPTER_GAP` | low | output.yml: species[].energy_corrections[].components[].comp |  |
 | `conformer_upload.applied_energy_corrections[].components[].contribution_value` | `ADAPTER_GAP` | low | output.yml: species[].energy_corrections[].components[].cont |  |
@@ -323,15 +326,6 @@ index flag is a prompt to check the row, not a finding by itself.
 | `conformer_upload.applied_energy_corrections[].source_calculation_key` | `ADAPTER_GAP` | low | (via `species_upload.applied_energy_corrections[].source_calculation_key`) | SUPPLIED_AT:species_upload.applied_energy_corrections[].source_calculation_key, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED, BLOCK_CHECK |
 | `conformer_upload.applied_energy_corrections[].value` | `ADAPTER_GAP` | low | output.yml: species[].energy_corrections[].total.value |  |
 | `conformer_upload.applied_energy_corrections[].value_unit` | `ADAPTER_GAP` | low | output.yml: species[].energy_corrections[].total.unit |  |
-| `conformer_upload.statmech.energy_level_of_theory.aux_basis` | `ADAPTER_GAP` | low | output.yml: composite_method.auxiliary_basis or sp_level.aux |  |
-| `conformer_upload.statmech.energy_level_of_theory.basis` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.basis`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.basis, ADJUDICATED:GENERALISES |
-| `conformer_upload.statmech.energy_level_of_theory.cabs_basis` | `ADAPTER_GAP` | low | output.yml: composite_method.cabs or sp_level.cabs |  |
-| `conformer_upload.statmech.energy_level_of_theory.dispersion` | `ADAPTER_GAP` | low | output.yml: composite_method.dispersion or sp_level.dispersi |  |
-| `conformer_upload.statmech.energy_level_of_theory.keywords` | `ADAPTER_GAP` | low | output.yml: composite_method.args or sp_level.args |  |
-| `conformer_upload.statmech.energy_level_of_theory.method` | `ADAPTER_GAP` | low | output.yml: composite_method.method or sp_level.method |  |
-| `conformer_upload.statmech.energy_level_of_theory.solvent` | `ADAPTER_GAP` | low | output.yml: composite_method.solvent or sp_level.solvent |  |
-| `conformer_upload.statmech.energy_level_of_theory.solvent_model` | `ADAPTER_GAP` | low | output.yml: composite_method.solvation_method or sp_level.so |  |
-| `conformer_upload.statmech.energy_level_of_theory.spin_treatment` | `ADAPTER_GAP` | low | output.yml: <record>.scf_reference.sp_reference |  |
 | `conformer_upload.statmech.external_symmetry` | `ADAPTER_GAP` | low | output.yml: species[].statmech.external_symmetry |  |
 | `conformer_upload.statmech.is_linear` | `ADAPTER_GAP` | low | output.yml: species[].statmech.is_linear |  |
 | `conformer_upload.statmech.optical_isomers` | `ADAPTER_GAP` | low | output.yml: species[].statmech.optical_isomers |  |
@@ -355,24 +349,6 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.species[].applied_energy_corrections[].scheme.component_params[].component_kind` | `ADAPTER_GAP` | low | (via `species_upload.applied_energy_corrections[].scheme.component_params[].comp | SUPPLIED_AT:species_upload.applied_energy_corrections[].scheme.component_params[].component_kind, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].applied_energy_corrections[].scheme.component_params[].key` | `ADAPTER_GAP` | low | (via `species_upload.applied_energy_corrections[].scheme.component_params[].key` | SUPPLIED_AT:species_upload.applied_energy_corrections[].scheme.component_params[].key, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].applied_energy_corrections[].scheme.component_params[].value` | `ADAPTER_GAP` | low | (via `species_upload.applied_energy_corrections[].scheme.component_params[].valu | SUPPLIED_AT:species_upload.applied_energy_corrections[].scheme.component_params[].value, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].statmech.energy_level_of_theory.aux_basis` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.aux_basis`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.aux_basis, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].statmech.energy_level_of_theory.basis` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.basis`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.basis, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].statmech.energy_level_of_theory.cabs_basis` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.cabs_basis`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.cabs_basis, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].statmech.energy_level_of_theory.dispersion` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.dispersion`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.dispersion, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].statmech.energy_level_of_theory.keywords` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.keywords`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.keywords, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].statmech.energy_level_of_theory.method` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.method`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.method, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].statmech.energy_level_of_theory.solvent` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.solvent`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.solvent, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].statmech.energy_level_of_theory.solvent_model` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.solvent_model`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.solvent_model, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].statmech.energy_level_of_theory.spin_treatment` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.spin_treatment`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.spin_treatment, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].thermo.energy_level_of_theory.aux_basis` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.aux_basis`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.aux_basis, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].thermo.energy_level_of_theory.basis` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.basis`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.basis, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].thermo.energy_level_of_theory.cabs_basis` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.cabs_basis`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.cabs_basis, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].thermo.energy_level_of_theory.dispersion` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.dispersion`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.dispersion, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].thermo.energy_level_of_theory.keywords` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.keywords`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.keywords, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].thermo.energy_level_of_theory.method` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.method`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.method, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].thermo.energy_level_of_theory.solvent` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.solvent`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.solvent, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].thermo.energy_level_of_theory.solvent_model` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.solvent_model`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.solvent_model, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].thermo.energy_level_of_theory.spin_treatment` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.spin_treatment`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.spin_treatment, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].thermo.phase` | `ADAPTER_GAP` | low | (via `species_upload.thermo.phase`) | SUPPLIED_AT:species_upload.thermo.phase, ADJUDICATED:GENERALISES, SEMANTIC_SHIFT |
 | `reaction_upload.transition_state.applied_energy_corrections[].scheme.atom_params[].element` | `ADAPTER_GAP` | low |  | SUPPLIED_AT:species_upload.applied_energy_corrections[].scheme.atom_params[].element, MAPPING_REVIEW:MR-1-aec-atom-params-read-dead-key |
 | `reaction_upload.transition_state.applied_energy_corrections[].scheme.atom_params[].value` | `ADAPTER_GAP` | low |  | SUPPLIED_AT:species_upload.applied_energy_corrections[].scheme.atom_params[].value, UNIT_CONVERSION, MAPPING_REVIEW:MR-1-aec-atom-params-read-dead-key |
@@ -385,11 +361,6 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.transition_state.calculations[].opt_n_steps` | `ADAPTER_GAP` | low | (via `ts_upload.primary_opt.opt_result.n_steps`) | SUPPLIED_AT:ts_upload.primary_opt.opt_result.n_steps, ADJUDICATED:GENERALISES |
 | `reaction_upload.transition_state.calculations[].output_geometries[].geometry.xyz_text` | `ADAPTER_GAP` | low | (via `reaction_upload.species[].calculations[].output_geometries[].geometry.xyz_ | SUPPLIED_AT:reaction_upload.species[].calculations[].output_geometries[].geometry.xyz_text, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
 | `reaction_upload.transition_state.calculations[].output_geometries[].role` | `ADAPTER_GAP` | low | (via `reaction_upload.species[].calculations[].output_geometries[].role`) | SUPPLIED_AT:reaction_upload.species[].calculations[].output_geometries[].role, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
-| `reaction_upload.transition_state.calculations[].scf_stability.instability_count` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.instab | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:GENERALISES |
-| `reaction_upload.transition_state.calculations[].scf_stability.instability_type` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.instab | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:GENERALISES |
-| `reaction_upload.transition_state.calculations[].scf_stability.lowest_eigenvalue` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.lowest | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:GENERALISES |
-| `reaction_upload.transition_state.calculations[].scf_stability.reoptimized_wavefunction` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.reopti | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:GENERALISES |
-| `reaction_upload.transition_state.calculations[].scf_stability.status` | `ADAPTER_GAP` | low | output.yml: transition_states[].wavefunction_stability.verdi |  |
 | `reaction_upload.transition_state.validation_evidence[].kind` | `ADAPTER_GAP` | low | output.yml: transition_states[].ts_checks.IRC (presence of a |  |
 | `reaction_upload.transition_state.validation_evidence[].passed` | `ADAPTER_GAP` | low | output.yml: transition_states[].ts_checks.IRC |  |
 | `reaction_upload.transition_state.validation_evidence[].rationale` | `ADAPTER_GAP` | low | output.yml: transition_states[].ts_checks.warnings |  |
@@ -398,15 +369,6 @@ index flag is a prompt to check the row, not a finding by itself.
 | `species_upload.applied_energy_corrections[].scheme.component_params[].component_kind` | `ADAPTER_GAP` | low | output.yml: bond_additivity_corrections (Melius nested table |  |
 | `species_upload.applied_energy_corrections[].scheme.component_params[].key` | `ADAPTER_GAP` | low | output.yml: bond_additivity_corrections (Melius nested table |  |
 | `species_upload.applied_energy_corrections[].scheme.component_params[].value` | `ADAPTER_GAP` | low | output.yml: bond_additivity_corrections (Melius nested table |  |
-| `species_upload.statmech.energy_level_of_theory.aux_basis` | `ADAPTER_GAP` | low | output.yml: composite_method.auxiliary_basis or sp_level.aux |  |
-| `species_upload.statmech.energy_level_of_theory.basis` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.basis`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.basis, ADJUDICATED:GENERALISES |
-| `species_upload.statmech.energy_level_of_theory.cabs_basis` | `ADAPTER_GAP` | low | output.yml: composite_method.cabs or sp_level.cabs |  |
-| `species_upload.statmech.energy_level_of_theory.dispersion` | `ADAPTER_GAP` | low | output.yml: composite_method.dispersion or sp_level.dispersi |  |
-| `species_upload.statmech.energy_level_of_theory.keywords` | `ADAPTER_GAP` | low | output.yml: composite_method.args or sp_level.args |  |
-| `species_upload.statmech.energy_level_of_theory.method` | `ADAPTER_GAP` | low | output.yml: composite_method.method or sp_level.method |  |
-| `species_upload.statmech.energy_level_of_theory.solvent` | `ADAPTER_GAP` | low | output.yml: composite_method.solvent or sp_level.solvent |  |
-| `species_upload.statmech.energy_level_of_theory.solvent_model` | `ADAPTER_GAP` | low | output.yml: composite_method.solvation_method or sp_level.so |  |
-| `species_upload.statmech.energy_level_of_theory.spin_treatment` | `ADAPTER_GAP` | low | output.yml: <record>.scf_reference.sp_reference |  |
 | `species_upload.thermo.applied_energy_corrections[].application_role` | `ADAPTER_GAP` | low | output.yml: species[].energy_corrections[].correction_type |  |
 | `species_upload.thermo.applied_energy_corrections[].components[].component_kind` | `ADAPTER_GAP` | low | output.yml: species[].energy_corrections[].components[].comp |  |
 | `species_upload.thermo.applied_energy_corrections[].components[].contribution_value` | `ADAPTER_GAP` | low | output.yml: species[].energy_corrections[].components[].cont |  |
@@ -426,24 +388,10 @@ index flag is a prompt to check the row, not a finding by itself.
 | `species_upload.thermo.applied_energy_corrections[].source_calculation_key` | `ADAPTER_GAP` | low | (via `species_upload.applied_energy_corrections[].source_calculation_key`) | SUPPLIED_AT:species_upload.applied_energy_corrections[].source_calculation_key, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED, BLOCK_CHECK |
 | `species_upload.thermo.applied_energy_corrections[].value` | `ADAPTER_GAP` | low | output.yml: species[].energy_corrections[].total.value |  |
 | `species_upload.thermo.applied_energy_corrections[].value_unit` | `ADAPTER_GAP` | low | output.yml: species[].energy_corrections[].total.unit |  |
-| `species_upload.thermo.energy_level_of_theory.aux_basis` | `ADAPTER_GAP` | low | output.yml: composite_method.auxiliary_basis or sp_level.aux |  |
-| `species_upload.thermo.energy_level_of_theory.basis` | `ADAPTER_GAP` | low | output.yml: species[].thermo.atom_corrections_level.basis |  |
-| `species_upload.thermo.energy_level_of_theory.cabs_basis` | `ADAPTER_GAP` | low | output.yml: composite_method.cabs or sp_level.cabs (1.2: spe |  |
-| `species_upload.thermo.energy_level_of_theory.dispersion` | `ADAPTER_GAP` | low | output.yml: composite_method.dispersion or sp_level.dispersi |  |
-| `species_upload.thermo.energy_level_of_theory.keywords` | `ADAPTER_GAP` | low | output.yml: composite_method.args or sp_level.args (1.2: spe |  |
-| `species_upload.thermo.energy_level_of_theory.method` | `ADAPTER_GAP` | low | output.yml: species[].thermo.atom_corrections_level.method |  |
-| `species_upload.thermo.energy_level_of_theory.solvent` | `ADAPTER_GAP` | low | output.yml: composite_method.solvent or sp_level.solvent (1. |  |
-| `species_upload.thermo.energy_level_of_theory.solvent_model` | `ADAPTER_GAP` | low | output.yml: composite_method.solvation_method or sp_level.so |  |
-| `species_upload.thermo.energy_level_of_theory.spin_treatment` | `ADAPTER_GAP` | low | output.yml: <record>.scf_reference.sp_reference |  |
 | `species_upload.thermo.phase` | `ADAPTER_GAP` | low | (implied: gas-phase Arkane statmech) | SEMANTIC_SHIFT |
 | `ts_upload.additional_calculations[].opt_result.converged` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].opt_result.converged | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].opt_result.converged, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
 | `ts_upload.additional_calculations[].opt_result.final_energy_hartree` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].opt_result.final_ene | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].opt_result.final_energy_hartree, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
 | `ts_upload.additional_calculations[].opt_result.n_steps` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].opt_result.n_steps`) | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].opt_result.n_steps, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
-| `ts_upload.additional_calculations[].scf_stability.instability_count` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.instab | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:GENERALISES |
-| `ts_upload.additional_calculations[].scf_stability.instability_type` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.instab | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:GENERALISES |
-| `ts_upload.additional_calculations[].scf_stability.lowest_eigenvalue` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.lowest | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:GENERALISES |
-| `ts_upload.additional_calculations[].scf_stability.reoptimized_wavefunction` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.reopti | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:GENERALISES |
-| `ts_upload.additional_calculations[].scf_stability.status` | `ADAPTER_GAP` | low | output.yml: transition_states[].wavefunction_stability.verdi |  |
 | `ts_upload.validation_evidence[].kind` | `ADAPTER_GAP` | low | output.yml: transition_states[].ts_checks.IRC (presence of a |  |
 | `ts_upload.validation_evidence[].passed` | `ADAPTER_GAP` | low | output.yml: transition_states[].ts_checks.IRC |  |
 | `ts_upload.validation_evidence[].rationale` | `ADAPTER_GAP` | low | output.yml: transition_states[].ts_checks.warnings |  |
@@ -530,7 +478,6 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.transition_state.calculation.depends_on[].parent_calculation_key` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].conformers[].calculation.depends_on[].parent_calculation_key |
 | `reaction_upload.transition_state.calculation.depends_on[].role` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].conformers[].calculation.depends_on[].role |
 | `reaction_upload.transition_state.calculation.key` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.species[].conformers[].calculation.key`) | SUPPLIED_AT:reaction_upload.species[].conformers[].calculation.key, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
-| `reaction_upload.transition_state.calculation.quality` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].conformers[].calculation.quality |
 | `reaction_upload.transition_state.calculation.type` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:conformer_upload.calculation.type, BLOCK_CHECK |
 | `reaction_upload.transition_state.calculations[].artifacts[].bytes` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].calculations[].artifacts[].bytes |
 | `reaction_upload.transition_state.calculations[].artifacts[].content_base64` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].calculations[].artifacts[].content_base64 |
@@ -561,7 +508,6 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.transition_state.calculations[].path_search_result.converged` | `SOURCE_UNCONFIRMED` | n/a | (via `ts_upload.additional_calculations[].path_search_result.converged`) | SUPPLIED_AT:ts_upload.additional_calculations[].path_search_result.converged, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.transition_state.calculations[].path_search_result.points[].is_climbing_image` | `SOURCE_UNCONFIRMED` | n/a | (via `ts_upload.additional_calculations[].path_search_result.points[].is_climbin | SUPPLIED_AT:ts_upload.additional_calculations[].path_search_result.points[].is_climbing_image, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.transition_state.calculations[].path_search_result.zero_energy_reference_hartree` | `SOURCE_UNCONFIRMED` | n/a | (via `ts_upload.additional_calculations[].path_search_result.zero_energy_referen | SUPPLIED_AT:ts_upload.additional_calculations[].path_search_result.zero_energy_reference_hartree, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
-| `reaction_upload.transition_state.calculations[].quality` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].calculations[].quality |
 | `reaction_upload.transition_state.calculations[].scan_result.coordinates[].atom1_index` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].calculations[].scan_result.coordinates[].atom1_index, ADJUDICATED:DIFFERENT_INSTANCE, INDEX_BASE |
 | `reaction_upload.transition_state.calculations[].scan_result.coordinates[].atom2_index` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].calculations[].scan_result.coordinates[].atom2_index, ADJUDICATED:DIFFERENT_INSTANCE, INDEX_BASE |
 | `reaction_upload.transition_state.calculations[].scan_result.coordinates[].atom3_index` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].calculations[].scan_result.coordinates[].atom3_index, ADJUDICATED:DIFFERENT_INSTANCE, INDEX_BASE |
@@ -594,8 +540,6 @@ index flag is a prompt to check the row, not a finding by itself.
 | `species_upload.statmech.source_calculations[].calculation_key` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.species[].statmech.source_calculations[].calculation_key`) | SUPPLIED_AT:reaction_upload.species[].statmech.source_calculations[].calculation_key, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, BLOCK_CHECK |
 | `species_upload.thermo.source_calculations[].calculation_key` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].thermo.source_calculations[].calculation_key, BLOCK_CHECK |
 | `species_upload.thermo.source_calculations[].role` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].thermo.source_calculations[].role, SEMANTIC_SHIFT, BLOCK_CHECK |
-| `ts_upload.additional_calculations[].quality` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].quality |
-| `ts_upload.primary_opt.quality` | `SOURCE_UNCONFIRMED` | n/a |  |  |
 | `ts_upload.primary_opt.type` | `SOURCE_UNCONFIRMED` | n/a |  | BLOCK_CHECK |
 | `ts_upload.reaction.products[].species_entry.charge` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:ts_upload.reaction.reactants[].species_entry.charge |
 | `ts_upload.reaction.products[].species_entry.electronic_state_kind` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:ts_upload.reaction.reactants[].species_entry.electronic_state_kind |
@@ -776,13 +720,6 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.transition_state.calculation.parameters[].raw_value` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:reaction_upload.transition_state.calculations[].parameters[].raw_value, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculation.parameters[].unit` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculation.parameters[].value_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:reaction_upload.transition_state.calculations[].parameters[].value_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `reaction_upload.transition_state.calculation.parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `reaction_upload.transition_state.calculation.parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `reaction_upload.transition_state.calculation.scf_stability.instability_count` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `reaction_upload.transition_state.calculation.scf_stability.instability_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `reaction_upload.transition_state.calculation.scf_stability.lowest_eigenvalue` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `reaction_upload.transition_state.calculation.scf_stability.reoptimized_wavefunction` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `reaction_upload.transition_state.calculation.scf_stability.status` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:reaction_upload.transition_state.calculations[].scf_stability.status, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculation.spin_diagnostic.s_squared` | `ARC_ABSENT` | n/a |  | RULE:AP-11-freq-sp-evidence-on-opt-primary, NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculation.spin_diagnostic.s_squared_annihilated` | `ARC_ABSENT` | n/a |  | RULE:AP-11-freq-sp-evidence-on-opt-primary, NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculation.spin_diagnostic.s_squared_expected` | `ARC_ABSENT` | n/a |  | RULE:AP-11-freq-sp-evidence-on-opt-primary, NO_ARC_EVIDENCE |
@@ -792,8 +729,6 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.transition_state.calculations[].input_geometries[].isotopes` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculations[].parameters[].parameter_index` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculations[].parameters[].unit` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `reaction_upload.transition_state.calculations[].parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `reaction_upload.transition_state.calculations[].parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculations[].path_search_result.climbing_image_index` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculations[].path_search_result.points[].max_force` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculations[].path_search_result.points[].rms_force` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
@@ -925,6 +860,9 @@ index flag is a prompt to check the row, not a finding by itself.
 | `transport_upload.calculations[].calculation.hessian.lower_triangle_hartree_bohr2` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
 | `transport_upload.calculations[].calculation.hessian.parser_version` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
 | `transport_upload.calculations[].calculation.hessian.source` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
+| `transport_upload.calculations[].calculation.opt_result.converged` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
+| `transport_upload.calculations[].calculation.opt_result.final_energy_hartree` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
+| `transport_upload.calculations[].calculation.opt_result.n_steps` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
 | `transport_upload.calculations[].calculation.sp_result.electronic_energy_hartree` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
 | `transport_upload.species_entry.charge` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE, BLOCK_CHECK |
 | `transport_upload.species_entry.electronic_state_kind` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
@@ -943,24 +881,11 @@ index flag is a prompt to check the row, not a finding by itself.
 | `ts_upload.additional_calculations[].freq_result.modes[].raman_activity` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `ts_upload.additional_calculations[].freq_result.modes[].reduced_mass_amu` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `ts_upload.additional_calculations[].freq_result.modes[].symmetry_label` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `ts_upload.additional_calculations[].parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `ts_upload.additional_calculations[].parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `ts_upload.additional_calculations[].scf_stability.source_artifact_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `ts_upload.additional_calculations[].scf_stability.source_calculation_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `ts_upload.primary_opt.hessian.geometry.isotopes` | `ARC_ABSENT` | n/a |  | RULE:AP-11-freq-sp-evidence-on-opt-primary, NO_ARC_EVIDENCE |
 | `ts_upload.primary_opt.hessian.geometry.xyz_text` | `ARC_ABSENT` | n/a |  | RULE:AP-11-freq-sp-evidence-on-opt-primary, NO_ARC_EVIDENCE |
 | `ts_upload.primary_opt.hessian.lower_triangle_hartree_bohr2` | `ARC_ABSENT` | n/a |  | RULE:AP-11-freq-sp-evidence-on-opt-primary, NO_ARC_EVIDENCE |
 | `ts_upload.primary_opt.hessian.parser_version` | `ARC_ABSENT` | n/a |  | RULE:AP-11-freq-sp-evidence-on-opt-primary, NO_ARC_EVIDENCE |
 | `ts_upload.primary_opt.hessian.source` | `ARC_ABSENT` | n/a |  | RULE:AP-11-freq-sp-evidence-on-opt-primary, NO_ARC_EVIDENCE |
-| `ts_upload.primary_opt.parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `ts_upload.primary_opt.parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `ts_upload.primary_opt.scf_stability.instability_count` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `ts_upload.primary_opt.scf_stability.instability_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `ts_upload.primary_opt.scf_stability.lowest_eigenvalue` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `ts_upload.primary_opt.scf_stability.reoptimized_wavefunction` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `ts_upload.primary_opt.scf_stability.source_artifact_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `ts_upload.primary_opt.scf_stability.source_calculation_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `ts_upload.primary_opt.scf_stability.status` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:reaction_upload.transition_state.calculations[].scf_stability.status, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `ts_upload.reaction.products[].species_entry.electronic_state_label` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `ts_upload.reaction.products[].species_entry.term_symbol` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `ts_upload.reaction.products[].species_entry.term_symbol_raw` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
@@ -977,6 +902,9 @@ index flag is a prompt to check the row, not a finding by itself.
 | `conformer_upload.additional_calculations[].freq_result.n_imag` | `WIRED` | n/a | output.yml: species[].freq_n_imag | BLOCK_CHECK |
 | `conformer_upload.additional_calculations[].freq_result.zpe_hartree` | `WIRED` | n/a | output.yml: species[].zpe_hartree |  |
 | `conformer_upload.additional_calculations[].sp_result.electronic_energy_hartree` | `WIRED` | n/a | output.yml: species[].sp_energy_hartree |  |
+| `conformer_upload.calculation.opt_result.converged` | `WIRED` | n/a | output.yml: species[].opt_converged |  |
+| `conformer_upload.calculation.opt_result.final_energy_hartree` | `WIRED` | n/a | output.yml: species[].opt_final_energy_hartree |  |
+| `conformer_upload.calculation.opt_result.n_steps` | `WIRED` | n/a | output.yml: species[].opt_n_steps |  |
 | `conformer_upload.species_entry.charge` | `WIRED` | n/a | output.yml: species[].charge | BLOCK_CHECK |
 | `conformer_upload.species_entry.multiplicity` | `WIRED` | n/a | output.yml: species[].multiplicity |  |
 | `conformer_upload.species_entry.smiles` | `WIRED` | n/a | output.yml: species[].smiles |  |
@@ -1020,7 +948,13 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.species[].calculations[].hessian.lower_triangle_hartree_bohr2` | `WIRED` | n/a | (via `species_upload.conformers[].additional_calculations[].hessian.lower_triang | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].hessian.lower_triangle_hartree_bohr2, ADJUDICATED:GENERALISES, UNIT_CONVERSION |
 | `reaction_upload.species[].calculations[].hessian.parser_version` | `WIRED` | n/a | (via `species_upload.conformers[].additional_calculations[].hessian.parser_versi | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].hessian.parser_version, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].calculations[].hessian.source` | `WIRED` | n/a | (via `species_upload.conformers[].additional_calculations[].hessian.source`) | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].hessian.source, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].calculations[].opt_converged` | `WIRED` | n/a | (via `species_upload.conformers[].primary_calculation.opt_result.converged`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.converged, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].calculations[].opt_final_energy_hartree` | `WIRED` | n/a | (via `species_upload.conformers[].primary_calculation.opt_result.final_energy_ha | SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.final_energy_hartree, ADJUDICATED:GENERALISES, UNIT_CONVERSION |
+| `reaction_upload.species[].calculations[].opt_n_steps` | `WIRED` | n/a | (via `species_upload.conformers[].primary_calculation.opt_result.n_steps`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.n_steps, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].calculations[].sp_electronic_energy_hartree` | `WIRED` | n/a | (via `species_upload.conformers[].additional_calculations[].sp_result.electronic | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].sp_result.electronic_energy_hartree, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].conformers[].calculation.opt_converged` | `WIRED` | n/a | (via `conformer_upload.calculation.opt_result.converged`) | SUPPLIED_AT:conformer_upload.calculation.opt_result.converged, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].conformers[].calculation.opt_final_energy_hartree` | `WIRED` | n/a | (via `conformer_upload.calculation.opt_result.final_energy_hartree`) | SUPPLIED_AT:conformer_upload.calculation.opt_result.final_energy_hartree, ADJUDICATED:GENERALISES, UNIT_CONVERSION |
+| `reaction_upload.species[].conformers[].calculation.opt_n_steps` | `WIRED` | n/a | (via `conformer_upload.calculation.opt_result.n_steps`) | SUPPLIED_AT:conformer_upload.calculation.opt_result.n_steps, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].species_entry.charge` | `WIRED` | n/a | (via `species_upload.species_entry.charge`) | SUPPLIED_AT:species_upload.species_entry.charge, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].species_entry.multiplicity` | `WIRED` | n/a | (via `species_upload.species_entry.multiplicity`) | SUPPLIED_AT:species_upload.species_entry.multiplicity, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].species_entry.smiles` | `WIRED` | n/a | (via `species_upload.species_entry.smiles`) | SUPPLIED_AT:species_upload.species_entry.smiles, ADJUDICATED:GENERALISES |
@@ -1152,7 +1086,13 @@ index flag is a prompt to check the row, not a finding by itself.
 | `species_upload.conformers[].additional_calculations[].hessian.lower_triangle_hartree_bohr2` | `WIRED` | n/a | parser_evidence.json: records[].freq_hessian.value.lower_tri | UNIT_CONVERSION |
 | `species_upload.conformers[].additional_calculations[].hessian.parser_version` | `WIRED` | n/a | parser_evidence.json: records[].freq_hessian.value.parser_ve |  |
 | `species_upload.conformers[].additional_calculations[].hessian.source` | `WIRED` | n/a | parser_evidence.json: records[].freq_hessian.value.source |  |
+| `species_upload.conformers[].additional_calculations[].opt_result.converged` | `WIRED` | n/a | (via `species_upload.conformers[].primary_calculation.opt_result.converged`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.converged, ADJUDICATED:GENERALISES |
+| `species_upload.conformers[].additional_calculations[].opt_result.final_energy_hartree` | `WIRED` | n/a | (via `species_upload.conformers[].primary_calculation.opt_result.final_energy_ha | SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.final_energy_hartree, ADJUDICATED:GENERALISES |
+| `species_upload.conformers[].additional_calculations[].opt_result.n_steps` | `WIRED` | n/a | (via `species_upload.conformers[].primary_calculation.opt_result.n_steps`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.n_steps, ADJUDICATED:GENERALISES |
 | `species_upload.conformers[].additional_calculations[].sp_result.electronic_energy_hartree` | `WIRED` | n/a | output.yml: species[].sp_energy_hartree |  |
+| `species_upload.conformers[].primary_calculation.opt_result.converged` | `WIRED` | n/a | output.yml: species[].opt_converged |  |
+| `species_upload.conformers[].primary_calculation.opt_result.final_energy_hartree` | `WIRED` | n/a | output.yml: species[].opt_final_energy_hartree |  |
+| `species_upload.conformers[].primary_calculation.opt_result.n_steps` | `WIRED` | n/a | output.yml: species[].opt_n_steps |  |
 | `species_upload.species_entry.charge` | `WIRED` | n/a | output.yml: species[].charge | BLOCK_CHECK |
 | `species_upload.species_entry.multiplicity` | `WIRED` | n/a | output.yml: species[].multiplicity |  |
 | `species_upload.species_entry.smiles` | `WIRED` | n/a | output.yml: species[].smiles |  |
@@ -1357,9 +1297,9 @@ index flag is a prompt to check the row, not a finding by itself.
 | `ts_upload.primary_opt.freq_result.zpe_hartree` | `NOT_APPLICABLE` | n/a |  | RULE:AP-1-result-block-on-opt-primary |
 | `ts_upload.primary_opt.sp_result.electronic_energy_hartree` | `NOT_APPLICABLE` | n/a |  | RULE:AP-1-result-block-on-opt-primary |
 
-### tier_2_reproducibility (1397 rows)
+### tier_2_reproducibility (1540 rows)
 
-`ARC_ABSENT`×912  `WIRED`×170  `SOURCE_UNCONFIRMED`×151  `ADAPTER_GAP`×115  `ARC_LATENT`×34  `NOT_APPLICABLE`×14  `SURPLUS`×1
+`ARC_ABSENT`×975  `ADAPTER_GAP`×185  `WIRED`×170  `SOURCE_UNCONFIRMED`×158  `ARC_LATENT`×37  `NOT_APPLICABLE`×14  `SURPLUS`×1
 
 | Path | Verdict | Cost | ARC source | Flags |
 |---|---|---|---|---|
@@ -1372,6 +1312,11 @@ index flag is a prompt to check the row, not a finding by itself.
 | `conformer_upload.additional_calculations[].constraints[].target_value` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].constraints[].target | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].constraints[].target_value, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
 | `conformer_upload.additional_calculations[].output_geometries[].geometry.xyz_text` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].output_geometries[]. | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].output_geometries[].geometry.xyz_text, ADJUDICATED:GENERALISES |
 | `conformer_upload.additional_calculations[].output_geometries[].role` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].output_geometries[]. | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].output_geometries[].role, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
+| `conformer_upload.additional_calculations[].scf_stability.instability_count` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.negative_eigenv |  |
+| `conformer_upload.additional_calculations[].scf_stability.instability_type` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.verdict / .rela |  |
+| `conformer_upload.additional_calculations[].scf_stability.lowest_eigenvalue` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.lowest_eigenval |  |
+| `conformer_upload.additional_calculations[].scf_stability.reoptimized_wavefunction` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.followed_to_sta |  |
+| `conformer_upload.additional_calculations[].scf_stability.status` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.verdict |  |
 | `conformer_upload.additional_calculations[].software_release.revision` | `ADAPTER_GAP` | low |  | SUPPLIED_AT:species_upload.thermo.software_release.revision, ADJUDICATED:DIFFERENT_INSTANCE |
 | `conformer_upload.applied_energy_corrections[].scheme.level_of_theory.aux_basis` | `ADAPTER_GAP` | low | (via `species_upload.applied_energy_corrections[].scheme.level_of_theory.aux_bas | SUPPLIED_AT:species_upload.applied_energy_corrections[].scheme.level_of_theory.aux_basis, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
 | `conformer_upload.applied_energy_corrections[].scheme.level_of_theory.basis` | `ADAPTER_GAP` | low | output.yml: species[].energy_corrections[].level_of_theory.b |  |
@@ -1393,6 +1338,15 @@ index flag is a prompt to check the row, not a finding by itself.
 | `conformer_upload.calculation.output_geometries[].role` | `ADAPTER_GAP` | low | (implied: species[].xyz is the opt output) |  |
 | `conformer_upload.calculation.parameters_json` | `ADAPTER_GAP` | low | output.yml: species[].opt_final_settings |  |
 | `conformer_upload.calculation.software_release.revision` | `ADAPTER_GAP` | low |  | SUPPLIED_AT:species_upload.thermo.software_release.revision, ADJUDICATED:DIFFERENT_INSTANCE |
+| `conformer_upload.statmech.energy_level_of_theory.aux_basis` | `ADAPTER_GAP` | low | output.yml: composite_method.auxiliary_basis or sp_level.aux |  |
+| `conformer_upload.statmech.energy_level_of_theory.basis` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.basis`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.basis, ADJUDICATED:GENERALISES |
+| `conformer_upload.statmech.energy_level_of_theory.cabs_basis` | `ADAPTER_GAP` | low | output.yml: composite_method.cabs or sp_level.cabs |  |
+| `conformer_upload.statmech.energy_level_of_theory.dispersion` | `ADAPTER_GAP` | low | output.yml: composite_method.dispersion or sp_level.dispersi |  |
+| `conformer_upload.statmech.energy_level_of_theory.keywords` | `ADAPTER_GAP` | low | output.yml: composite_method.args or sp_level.args |  |
+| `conformer_upload.statmech.energy_level_of_theory.method` | `ADAPTER_GAP` | low | output.yml: composite_method.method or sp_level.method |  |
+| `conformer_upload.statmech.energy_level_of_theory.solvent` | `ADAPTER_GAP` | low | output.yml: composite_method.solvent or sp_level.solvent |  |
+| `conformer_upload.statmech.energy_level_of_theory.solvent_model` | `ADAPTER_GAP` | low | output.yml: composite_method.solvation_method or sp_level.so |  |
+| `conformer_upload.statmech.energy_level_of_theory.spin_treatment` | `ADAPTER_GAP` | low | output.yml: <record>.scf_reference.sp_reference |  |
 | `conformer_upload.statmech.freq_scale_factor.level_of_theory.aux_basis` | `ADAPTER_GAP` | low | (via `species_upload.statmech.freq_scale_factor.level_of_theory.aux_basis`) | SUPPLIED_AT:species_upload.statmech.freq_scale_factor.level_of_theory.aux_basis, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
 | `conformer_upload.statmech.freq_scale_factor.level_of_theory.basis` | `ADAPTER_GAP` | low | (via `species_upload.statmech.freq_scale_factor.level_of_theory.basis`) | SUPPLIED_AT:species_upload.statmech.freq_scale_factor.level_of_theory.basis, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
 | `conformer_upload.statmech.freq_scale_factor.level_of_theory.cabs_basis` | `ADAPTER_GAP` | low | (via `species_upload.statmech.freq_scale_factor.level_of_theory.cabs_basis`) | SUPPLIED_AT:species_upload.statmech.freq_scale_factor.level_of_theory.cabs_basis, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
@@ -1425,8 +1379,22 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.species[].calculations[].scan_result.constraints[].constraint_index` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].primary_calculation.constraints[].constraint_i | SUPPLIED_AT:species_upload.conformers[].primary_calculation.constraints[].constraint_index, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].calculations[].scan_result.constraints[].constraint_kind` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scan_result.constrai | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scan_result.constraints[].constraint_kind, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].calculations[].scan_result.constraints[].target_value` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scan_result.constrai | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scan_result.constraints[].target_value, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].calculations[].scf_stability.instability_count` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.instab | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].calculations[].scf_stability.instability_type` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.instab | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].calculations[].scf_stability.lowest_eigenvalue` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.lowest | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].calculations[].scf_stability.reoptimized_wavefunction` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.reopti | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].calculations[].scf_stability.status` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.status | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.status, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].calculations[].software_release.revision` | `ADAPTER_GAP` | low |  | SUPPLIED_AT:species_upload.thermo.software_release.revision, ADJUDICATED:DIFFERENT_INSTANCE |
 | `reaction_upload.species[].conformers[].calculation.software_release.revision` | `ADAPTER_GAP` | low |  | SUPPLIED_AT:species_upload.thermo.software_release.revision, ADJUDICATED:DIFFERENT_INSTANCE |
+| `reaction_upload.species[].statmech.energy_level_of_theory.aux_basis` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.aux_basis`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.aux_basis, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].statmech.energy_level_of_theory.basis` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.basis`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.basis, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].statmech.energy_level_of_theory.cabs_basis` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.cabs_basis`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.cabs_basis, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].statmech.energy_level_of_theory.dispersion` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.dispersion`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.dispersion, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].statmech.energy_level_of_theory.keywords` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.keywords`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.keywords, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].statmech.energy_level_of_theory.method` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.method`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.method, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].statmech.energy_level_of_theory.solvent` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.solvent`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.solvent, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].statmech.energy_level_of_theory.solvent_model` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.solvent_model`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.solvent_model, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].statmech.energy_level_of_theory.spin_treatment` | `ADAPTER_GAP` | low | (via `species_upload.statmech.energy_level_of_theory.spin_treatment`) | SUPPLIED_AT:species_upload.statmech.energy_level_of_theory.spin_treatment, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].statmech.freq_scale_factor.level_of_theory.spin_treatment` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].level_of_theory.spin | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].level_of_theory.spin_treatment, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].statmech.freq_scale_factor.source_literature.title` | `ADAPTER_GAP` | low | (via `species_upload.statmech.freq_scale_factor.source_literature.title`) | SUPPLIED_AT:species_upload.statmech.freq_scale_factor.source_literature.title, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].statmech.software_release.name` | `ADAPTER_GAP` | low | (via `species_upload.statmech.software_release.name`) | SUPPLIED_AT:species_upload.statmech.software_release.name, ADJUDICATED:GENERALISES |
@@ -1435,6 +1403,15 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.species[].statmech.workflow_tool_release.git_commit` | `ADAPTER_GAP` | low | (via `species_upload.workflow_tool_release.git_commit`) | SUPPLIED_AT:species_upload.workflow_tool_release.git_commit, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].statmech.workflow_tool_release.name` | `ADAPTER_GAP` | low | (via `species_upload.workflow_tool_release.name`) | SUPPLIED_AT:species_upload.workflow_tool_release.name, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].statmech.workflow_tool_release.version` | `ADAPTER_GAP` | low | (via `species_upload.workflow_tool_release.version`) | SUPPLIED_AT:species_upload.workflow_tool_release.version, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].thermo.energy_level_of_theory.aux_basis` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.aux_basis`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.aux_basis, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].thermo.energy_level_of_theory.basis` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.basis`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.basis, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].thermo.energy_level_of_theory.cabs_basis` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.cabs_basis`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.cabs_basis, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].thermo.energy_level_of_theory.dispersion` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.dispersion`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.dispersion, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].thermo.energy_level_of_theory.keywords` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.keywords`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.keywords, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].thermo.energy_level_of_theory.method` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.method`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.method, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].thermo.energy_level_of_theory.solvent` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.solvent`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.solvent, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].thermo.energy_level_of_theory.solvent_model` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.solvent_model`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.solvent_model, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].thermo.energy_level_of_theory.spin_treatment` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.spin_treatment`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.spin_treatment, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].thermo.software_release.name` | `ADAPTER_GAP` | low | (via `species_upload.thermo.software_release.name`) | SUPPLIED_AT:species_upload.thermo.software_release.name, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].thermo.software_release.revision` | `ADAPTER_GAP` | low | (via `species_upload.thermo.software_release.revision`) | SUPPLIED_AT:species_upload.thermo.software_release.revision, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].thermo.software_release.version` | `ADAPTER_GAP` | low | (via `species_upload.thermo.software_release.version`) | SUPPLIED_AT:species_upload.thermo.software_release.version, ADJUDICATED:GENERALISES, SEMANTIC_SHIFT |
@@ -1442,6 +1419,11 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.species[].thermo.workflow_tool_release.name` | `ADAPTER_GAP` | low | (via `species_upload.workflow_tool_release.name`) | SUPPLIED_AT:species_upload.workflow_tool_release.name, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].thermo.workflow_tool_release.version` | `ADAPTER_GAP` | low | (via `species_upload.workflow_tool_release.version`) | SUPPLIED_AT:species_upload.workflow_tool_release.version, ADJUDICATED:GENERALISES |
 | `reaction_upload.transition_state.calculation.software_release.revision` | `ADAPTER_GAP` | low |  | SUPPLIED_AT:species_upload.thermo.software_release.revision, ADJUDICATED:DIFFERENT_INSTANCE |
+| `reaction_upload.transition_state.calculations[].scf_stability.instability_count` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.instab | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:GENERALISES |
+| `reaction_upload.transition_state.calculations[].scf_stability.instability_type` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.instab | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:GENERALISES |
+| `reaction_upload.transition_state.calculations[].scf_stability.lowest_eigenvalue` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.lowest | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:GENERALISES |
+| `reaction_upload.transition_state.calculations[].scf_stability.reoptimized_wavefunction` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.reopti | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:GENERALISES |
+| `reaction_upload.transition_state.calculations[].scf_stability.status` | `ADAPTER_GAP` | low | output.yml: transition_states[].wavefunction_stability.verdi |  |
 | `reaction_upload.transition_state.calculations[].software_release.revision` | `ADAPTER_GAP` | low |  | SUPPLIED_AT:species_upload.thermo.software_release.revision, ADJUDICATED:DIFFERENT_INSTANCE |
 | `species_upload.conformers[].additional_calculations[].scan_result.constraints[].atom1_index` | `ADAPTER_GAP` | low | output.yml: species[].rotor_scans[].constraints[].atom_indic | INDEX_BASE |
 | `species_upload.conformers[].additional_calculations[].scan_result.constraints[].atom2_index` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].primary_calculation.constraints[].atom2_index` | SUPPLIED_AT:species_upload.conformers[].primary_calculation.constraints[].atom2_index, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
@@ -1450,8 +1432,22 @@ index flag is a prompt to check the row, not a finding by itself.
 | `species_upload.conformers[].additional_calculations[].scan_result.constraints[].constraint_index` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].primary_calculation.constraints[].constraint_i | SUPPLIED_AT:species_upload.conformers[].primary_calculation.constraints[].constraint_index, ADJUDICATED:GENERALISES |
 | `species_upload.conformers[].additional_calculations[].scan_result.constraints[].constraint_kind` | `ADAPTER_GAP` | low | output.yml: species[].rotor_scans[].constraints[].coordinate |  |
 | `species_upload.conformers[].additional_calculations[].scan_result.constraints[].target_value` | `ADAPTER_GAP` | low | output.yml: species[].rotor_scans[].constraints[].target_val |  |
+| `species_upload.conformers[].additional_calculations[].scf_stability.instability_count` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.negative_eigenv |  |
+| `species_upload.conformers[].additional_calculations[].scf_stability.instability_type` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.verdict / .rela |  |
+| `species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.lowest_eigenval |  |
+| `species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.followed_to_sta |  |
+| `species_upload.conformers[].additional_calculations[].scf_stability.status` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.verdict |  |
 | `species_upload.conformers[].additional_calculations[].software_release.revision` | `ADAPTER_GAP` | low |  | SUPPLIED_AT:species_upload.thermo.software_release.revision, ADJUDICATED:DIFFERENT_INSTANCE |
 | `species_upload.conformers[].primary_calculation.software_release.revision` | `ADAPTER_GAP` | low |  | SUPPLIED_AT:species_upload.thermo.software_release.revision, ADJUDICATED:DIFFERENT_INSTANCE |
+| `species_upload.statmech.energy_level_of_theory.aux_basis` | `ADAPTER_GAP` | low | output.yml: composite_method.auxiliary_basis or sp_level.aux |  |
+| `species_upload.statmech.energy_level_of_theory.basis` | `ADAPTER_GAP` | low | (via `species_upload.thermo.energy_level_of_theory.basis`) | SUPPLIED_AT:species_upload.thermo.energy_level_of_theory.basis, ADJUDICATED:GENERALISES |
+| `species_upload.statmech.energy_level_of_theory.cabs_basis` | `ADAPTER_GAP` | low | output.yml: composite_method.cabs or sp_level.cabs |  |
+| `species_upload.statmech.energy_level_of_theory.dispersion` | `ADAPTER_GAP` | low | output.yml: composite_method.dispersion or sp_level.dispersi |  |
+| `species_upload.statmech.energy_level_of_theory.keywords` | `ADAPTER_GAP` | low | output.yml: composite_method.args or sp_level.args |  |
+| `species_upload.statmech.energy_level_of_theory.method` | `ADAPTER_GAP` | low | output.yml: composite_method.method or sp_level.method |  |
+| `species_upload.statmech.energy_level_of_theory.solvent` | `ADAPTER_GAP` | low | output.yml: composite_method.solvent or sp_level.solvent |  |
+| `species_upload.statmech.energy_level_of_theory.solvent_model` | `ADAPTER_GAP` | low | output.yml: composite_method.solvation_method or sp_level.so |  |
+| `species_upload.statmech.energy_level_of_theory.spin_treatment` | `ADAPTER_GAP` | low | output.yml: <record>.scf_reference.sp_reference |  |
 | `species_upload.statmech.freq_scale_factor.level_of_theory.spin_treatment` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].level_of_theory.spin | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].level_of_theory.spin_treatment, ADJUDICATED:GENERALISES |
 | `species_upload.statmech.freq_scale_factor.source_literature.title` | `ADAPTER_GAP` | low | output.yml: freq_scale_factor_source |  |
 | `species_upload.statmech.software_release.name` | `ADAPTER_GAP` | low | (implied by output.yml: arkane_version) |  |
@@ -1468,6 +1464,15 @@ index flag is a prompt to check the row, not a finding by itself.
 | `species_upload.thermo.applied_energy_corrections[].scheme.level_of_theory.method` | `ADAPTER_GAP` | low | output.yml: species[].energy_corrections[].level_of_theory.m |  |
 | `species_upload.thermo.applied_energy_corrections[].scheme.level_of_theory.solvent` | `ADAPTER_GAP` | low | (via `species_upload.applied_energy_corrections[].scheme.level_of_theory.solvent | SUPPLIED_AT:species_upload.applied_energy_corrections[].scheme.level_of_theory.solvent, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
 | `species_upload.thermo.applied_energy_corrections[].scheme.level_of_theory.solvent_model` | `ADAPTER_GAP` | low | (via `species_upload.applied_energy_corrections[].scheme.level_of_theory.solvent | SUPPLIED_AT:species_upload.applied_energy_corrections[].scheme.level_of_theory.solvent_model, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
+| `species_upload.thermo.energy_level_of_theory.aux_basis` | `ADAPTER_GAP` | low | output.yml: composite_method.auxiliary_basis or sp_level.aux |  |
+| `species_upload.thermo.energy_level_of_theory.basis` | `ADAPTER_GAP` | low | output.yml: species[].thermo.atom_corrections_level.basis |  |
+| `species_upload.thermo.energy_level_of_theory.cabs_basis` | `ADAPTER_GAP` | low | output.yml: composite_method.cabs or sp_level.cabs (1.2: spe |  |
+| `species_upload.thermo.energy_level_of_theory.dispersion` | `ADAPTER_GAP` | low | output.yml: composite_method.dispersion or sp_level.dispersi |  |
+| `species_upload.thermo.energy_level_of_theory.keywords` | `ADAPTER_GAP` | low | output.yml: composite_method.args or sp_level.args (1.2: spe |  |
+| `species_upload.thermo.energy_level_of_theory.method` | `ADAPTER_GAP` | low | output.yml: species[].thermo.atom_corrections_level.method |  |
+| `species_upload.thermo.energy_level_of_theory.solvent` | `ADAPTER_GAP` | low | output.yml: composite_method.solvent or sp_level.solvent (1. |  |
+| `species_upload.thermo.energy_level_of_theory.solvent_model` | `ADAPTER_GAP` | low | output.yml: composite_method.solvation_method or sp_level.so |  |
+| `species_upload.thermo.energy_level_of_theory.spin_treatment` | `ADAPTER_GAP` | low | output.yml: <record>.scf_reference.sp_reference |  |
 | `species_upload.thermo.software_release.name` | `ADAPTER_GAP` | low | (implied by output.yml: arkane_version) |  |
 | `species_upload.thermo.software_release.revision` | `ADAPTER_GAP` | low | output.yml: arkane_git_commit |  |
 | `species_upload.thermo.software_release.version` | `ADAPTER_GAP` | low | output.yml: arkane_version | SEMANTIC_SHIFT |
@@ -1476,6 +1481,11 @@ index flag is a prompt to check the row, not a finding by itself.
 | `species_upload.thermo.workflow_tool_release.version` | `ADAPTER_GAP` | low | (via `species_upload.workflow_tool_release.version`) | SUPPLIED_AT:species_upload.workflow_tool_release.version, ADJUDICATED:GENERALISES |
 | `ts_upload.additional_calculations[].output_geometries[].geometry.xyz_text` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].output_geometries[]. | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].output_geometries[].geometry.xyz_text, ADJUDICATED:GENERALISES |
 | `ts_upload.additional_calculations[].output_geometries[].role` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].output_geometries[]. | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].output_geometries[].role, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
+| `ts_upload.additional_calculations[].scf_stability.instability_count` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.instab | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:GENERALISES |
+| `ts_upload.additional_calculations[].scf_stability.instability_type` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.instab | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:GENERALISES |
+| `ts_upload.additional_calculations[].scf_stability.lowest_eigenvalue` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.lowest | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:GENERALISES |
+| `ts_upload.additional_calculations[].scf_stability.reoptimized_wavefunction` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.reopti | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:GENERALISES |
+| `ts_upload.additional_calculations[].scf_stability.status` | `ADAPTER_GAP` | low | output.yml: transition_states[].wavefunction_stability.verdi |  |
 | `ts_upload.additional_calculations[].software_release.revision` | `ADAPTER_GAP` | low |  | SUPPLIED_AT:species_upload.thermo.software_release.revision, ADJUDICATED:DIFFERENT_INSTANCE |
 | `ts_upload.primary_opt.software_release.revision` | `ADAPTER_GAP` | low |  | SUPPLIED_AT:species_upload.thermo.software_release.revision, ADJUDICATED:DIFFERENT_INSTANCE |
 | `conformer_upload.additional_calculations[].input_geometries[].xyz_text` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].additional_calculations[].input_geometries[].x | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].input_geometries[].xyz_text, ADJUDICATED:GENERALISES |
@@ -1484,6 +1494,7 @@ index flag is a prompt to check the row, not a finding by itself.
 | `conformer_upload.calculation.output_geometries[].geometry.isotopes` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].geometry.isotopes`) | SUPPLIED_AT:species_upload.conformers[].geometry.isotopes, ADJUDICATED:GENERALISES, INDEX_BASE, UNIT_CONVERSION |
 | `conformer_upload.calculation.parameters[].raw_key` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].primary_calculation.parameters[].raw_key`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.parameters[].raw_key, ADJUDICATED:GENERALISES |
 | `conformer_upload.calculation.parameters[].section` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].primary_calculation.parameters[].section`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.parameters[].section, ADJUDICATED:GENERALISES |
+| `conformer_upload.calculation.quality` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].primary_calculation.quality`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.quality, ADJUDICATED:GENERALISES |
 | `conformer_upload.calculation.wavefunction_diagnostic.t1_diagnostic` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].primary_calculation.wavefunction_diagnostic.t1 | SUPPLIED_AT:species_upload.conformers[].primary_calculation.wavefunction_diagnostic.t1_diagnostic, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].calculations[].input_geometries[].xyz_text` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].additional_calculations[].input_geometries[].x | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].input_geometries[].xyz_text, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].calculations[].output_geometries[].geometry.isotopes` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].geometry.isotopes`) | SUPPLIED_AT:species_upload.conformers[].geometry.isotopes, ADJUDICATED:GENERALISES, INDEX_BASE, UNIT_CONVERSION |
@@ -1492,6 +1503,7 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.species[].conformers[].calculation.output_geometries[].geometry.isotopes` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].geometry.isotopes`) | SUPPLIED_AT:species_upload.conformers[].geometry.isotopes, ADJUDICATED:GENERALISES, INDEX_BASE, UNIT_CONVERSION |
 | `reaction_upload.species[].conformers[].calculation.parameters[].raw_key` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].primary_calculation.parameters[].raw_key`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.parameters[].raw_key, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].conformers[].calculation.parameters[].section` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].primary_calculation.parameters[].section`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.parameters[].section, ADJUDICATED:GENERALISES |
+| `reaction_upload.species[].conformers[].calculation.quality` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].primary_calculation.quality`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.quality, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].conformers[].calculation.wavefunction_diagnostic.t1_diagnostic` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].primary_calculation.wavefunction_diagnostic.t1 | SUPPLIED_AT:species_upload.conformers[].primary_calculation.wavefunction_diagnostic.t1_diagnostic, ADJUDICATED:GENERALISES |
 | `species_upload.conformers[].additional_calculations[].input_geometries[].xyz_text` | `ARC_LATENT` | low | arc/job/adapter.py:JobAdapter.xyz (as_dict:867); freq/sp dec |  |
 | `species_upload.conformers[].additional_calculations[].output_geometries[].geometry.isotopes` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].geometry.isotopes`) | SUPPLIED_AT:species_upload.conformers[].geometry.isotopes, ADJUDICATED:GENERALISES, INDEX_BASE, UNIT_CONVERSION |
@@ -1504,6 +1516,7 @@ index flag is a prompt to check the row, not a finding by itself.
 | `species_upload.conformers[].primary_calculation.output_geometries[].geometry.isotopes` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].geometry.isotopes`) | SUPPLIED_AT:species_upload.conformers[].geometry.isotopes, ADJUDICATED:GENERALISES, INDEX_BASE, UNIT_CONVERSION |
 | `species_upload.conformers[].primary_calculation.parameters[].raw_key` | `ARC_LATENT` | medium | arc/output.py:_gaussian_route_text:918, _orca_route_text:104 |  |
 | `species_upload.conformers[].primary_calculation.parameters[].section` | `ARC_LATENT` | low | arc/job/adapters/gaussian.py:input_template:61-63 (%mem, %NP |  |
+| `species_upload.conformers[].primary_calculation.quality` | `ARC_LATENT` | medium | none |  |
 | `species_upload.conformers[].primary_calculation.wavefunction_diagnostic.t1_diagnostic` | `ARC_LATENT` | low | arc/scheduler.py:post_sp_actions:4102-4103 -> ARCSpecies.t1  |  |
 | `ts_upload.additional_calculations[].input_geometries[].xyz_text` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].additional_calculations[].input_geometries[].x | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].input_geometries[].xyz_text, ADJUDICATED:GENERALISES |
 | `ts_upload.additional_calculations[].output_geometries[].geometry.isotopes` | `ARC_LATENT` | n/a | (via `reaction_upload.transition_state.geometry.isotopes`) | SUPPLIED_AT:reaction_upload.transition_state.geometry.isotopes, ADJUDICATED:GENERALISES, UNIT_CONVERSION |
@@ -1518,6 +1531,7 @@ index flag is a prompt to check the row, not a finding by itself.
 | `conformer_upload.additional_calculations[].parameters[].section` | `SOURCE_UNCONFIRMED` | n/a | (via `species_upload.conformers[].additional_calculations[].parameters[].section | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].parameters[].section, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `conformer_upload.additional_calculations[].parameters[].value_type` | `SOURCE_UNCONFIRMED` | n/a | (via `species_upload.conformers[].additional_calculations[].parameters[].value_t | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].parameters[].value_type, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `conformer_upload.additional_calculations[].parameters_json` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].parameters_json |
+| `conformer_upload.additional_calculations[].quality` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].quality |
 | `conformer_upload.additional_calculations[].workflow_tool_release.git_commit` | `SOURCE_UNCONFIRMED` | n/a | (via `species_upload.conformers[].additional_calculations[].workflow_tool_releas | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].workflow_tool_release.git_commit, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `conformer_upload.additional_calculations[].workflow_tool_release.name` | `SOURCE_UNCONFIRMED` | n/a | (via `species_upload.conformers[].additional_calculations[].workflow_tool_releas | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].workflow_tool_release.name, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `conformer_upload.additional_calculations[].workflow_tool_release.version` | `SOURCE_UNCONFIRMED` | n/a | (via `species_upload.conformers[].additional_calculations[].workflow_tool_releas | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].workflow_tool_release.version, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
@@ -1548,6 +1562,7 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.species[].calculations[].parameters[].section` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.transition_state.calculations[].parameters[].section`) | SUPPLIED_AT:reaction_upload.transition_state.calculations[].parameters[].section, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.species[].calculations[].parameters[].value_type` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.transition_state.calculations[].parameters[].value_type`) | SUPPLIED_AT:reaction_upload.transition_state.calculations[].parameters[].value_type, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.species[].calculations[].parameters_json` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.transition_state.calculations[].parameters_json |
+| `reaction_upload.species[].calculations[].quality` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.transition_state.calculations[].quality |
 | `reaction_upload.species[].calculations[].workflow_tool_release.git_commit` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.transition_state.calculations[].workflow_tool_release.git_ | SUPPLIED_AT:reaction_upload.transition_state.calculations[].workflow_tool_release.git_commit, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.species[].calculations[].workflow_tool_release.name` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.transition_state.calculations[].workflow_tool_release.name | SUPPLIED_AT:reaction_upload.transition_state.calculations[].workflow_tool_release.name, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.species[].calculations[].workflow_tool_release.version` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.transition_state.calculations[].workflow_tool_release.vers | SUPPLIED_AT:reaction_upload.transition_state.calculations[].workflow_tool_release.version, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
@@ -1585,6 +1600,7 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.transition_state.calculation.level_of_theory.cabs_basis` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.species[].conformers[].calculation.level_of_theory.cabs_ba | SUPPLIED_AT:reaction_upload.species[].conformers[].calculation.level_of_theory.cabs_basis, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.transition_state.calculation.level_of_theory.solvent` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.species[].conformers[].calculation.level_of_theory.solvent | SUPPLIED_AT:reaction_upload.species[].conformers[].calculation.level_of_theory.solvent, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.transition_state.calculation.parameters_json` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:conformer_upload.calculation.parameters_json |
+| `reaction_upload.transition_state.calculation.quality` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].conformers[].calculation.quality |
 | `reaction_upload.transition_state.calculation.workflow_tool_release.git_commit` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.species[].conformers[].calculation.workflow_tool_release.g | SUPPLIED_AT:reaction_upload.species[].conformers[].calculation.workflow_tool_release.git_commit, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.transition_state.calculation.workflow_tool_release.name` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.species[].conformers[].calculation.workflow_tool_release.n | SUPPLIED_AT:reaction_upload.species[].conformers[].calculation.workflow_tool_release.name, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.transition_state.calculation.workflow_tool_release.version` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.species[].conformers[].calculation.workflow_tool_release.v | SUPPLIED_AT:reaction_upload.species[].conformers[].calculation.workflow_tool_release.version, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
@@ -1592,6 +1608,7 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.transition_state.calculations[].level_of_theory.cabs_basis` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.species[].calculations[].level_of_theory.cabs_basis`) | SUPPLIED_AT:reaction_upload.species[].calculations[].level_of_theory.cabs_basis, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.transition_state.calculations[].level_of_theory.solvent` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.species[].calculations[].level_of_theory.solvent`) | SUPPLIED_AT:reaction_upload.species[].calculations[].level_of_theory.solvent, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.transition_state.calculations[].parameters_json` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].calculations[].parameters_json |
+| `reaction_upload.transition_state.calculations[].quality` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].calculations[].quality |
 | `reaction_upload.transition_state.calculations[].workflow_tool_release.git_commit` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.species[].calculations[].workflow_tool_release.git_commit` | SUPPLIED_AT:reaction_upload.species[].calculations[].workflow_tool_release.git_commit, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.transition_state.calculations[].workflow_tool_release.name` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.species[].calculations[].workflow_tool_release.name`) | SUPPLIED_AT:reaction_upload.species[].calculations[].workflow_tool_release.name, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.transition_state.calculations[].workflow_tool_release.version` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.species[].calculations[].workflow_tool_release.version`) | SUPPLIED_AT:reaction_upload.species[].calculations[].workflow_tool_release.version, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
@@ -1619,6 +1636,7 @@ index flag is a prompt to check the row, not a finding by itself.
 | `species_upload.conformers[].additional_calculations[].parameters[].section` | `SOURCE_UNCONFIRMED` | n/a | (via `conformer_upload.additional_calculations[].parameters[].section`) | SUPPLIED_AT:conformer_upload.additional_calculations[].parameters[].section, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `species_upload.conformers[].additional_calculations[].parameters[].value_type` | `SOURCE_UNCONFIRMED` | n/a | (via `conformer_upload.additional_calculations[].parameters[].value_type`) | SUPPLIED_AT:conformer_upload.additional_calculations[].parameters[].value_type, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `species_upload.conformers[].additional_calculations[].parameters_json` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:conformer_upload.additional_calculations[].parameters_json |
+| `species_upload.conformers[].additional_calculations[].quality` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:conformer_upload.additional_calculations[].quality |
 | `species_upload.conformers[].additional_calculations[].workflow_tool_release.git_commit` | `SOURCE_UNCONFIRMED` | n/a | (via `conformer_upload.additional_calculations[].workflow_tool_release.git_commi | SUPPLIED_AT:conformer_upload.additional_calculations[].workflow_tool_release.git_commit, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `species_upload.conformers[].additional_calculations[].workflow_tool_release.name` | `SOURCE_UNCONFIRMED` | n/a | (via `conformer_upload.additional_calculations[].workflow_tool_release.name`) | SUPPLIED_AT:conformer_upload.additional_calculations[].workflow_tool_release.name, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `species_upload.conformers[].additional_calculations[].workflow_tool_release.version` | `SOURCE_UNCONFIRMED` | n/a | (via `conformer_upload.additional_calculations[].workflow_tool_release.version`) | SUPPLIED_AT:conformer_upload.additional_calculations[].workflow_tool_release.version, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
@@ -1656,6 +1674,7 @@ index flag is a prompt to check the row, not a finding by itself.
 | `ts_upload.additional_calculations[].parameters[].section` | `SOURCE_UNCONFIRMED` | n/a | (via `species_upload.conformers[].additional_calculations[].parameters[].section | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].parameters[].section, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `ts_upload.additional_calculations[].parameters[].value_type` | `SOURCE_UNCONFIRMED` | n/a | (via `species_upload.conformers[].additional_calculations[].parameters[].value_t | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].parameters[].value_type, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `ts_upload.additional_calculations[].parameters_json` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].parameters_json |
+| `ts_upload.additional_calculations[].quality` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].quality |
 | `ts_upload.additional_calculations[].workflow_tool_release.git_commit` | `SOURCE_UNCONFIRMED` | n/a | (via `species_upload.conformers[].additional_calculations[].workflow_tool_releas | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].workflow_tool_release.git_commit, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `ts_upload.additional_calculations[].workflow_tool_release.name` | `SOURCE_UNCONFIRMED` | n/a | (via `species_upload.conformers[].additional_calculations[].workflow_tool_releas | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].workflow_tool_release.name, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `ts_upload.additional_calculations[].workflow_tool_release.version` | `SOURCE_UNCONFIRMED` | n/a | (via `species_upload.conformers[].additional_calculations[].workflow_tool_releas | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].workflow_tool_release.version, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
@@ -1663,6 +1682,7 @@ index flag is a prompt to check the row, not a finding by itself.
 | `ts_upload.primary_opt.constraints[].atom3_index` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.transition_state.calculation.constraints[].atom3_index`) | SUPPLIED_AT:reaction_upload.transition_state.calculation.constraints[].atom3_index, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, INDEX_BASE |
 | `ts_upload.primary_opt.constraints[].atom4_index` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.transition_state.calculation.constraints[].atom4_index`) | SUPPLIED_AT:reaction_upload.transition_state.calculation.constraints[].atom4_index, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, INDEX_BASE |
 | `ts_upload.primary_opt.parameters_json` | `SOURCE_UNCONFIRMED` | n/a |  |  |
+| `ts_upload.primary_opt.quality` | `SOURCE_UNCONFIRMED` | n/a |  |  |
 | `conformer_upload.additional_calculations[].execution_environment.closure[].digest` | `ARC_ABSENT` | n/a |  | RULE:AP-5-execution-environment, NO_ARC_EVIDENCE |
 | `conformer_upload.additional_calculations[].execution_environment.closure[].locator` | `ARC_ABSENT` | n/a |  | RULE:AP-5-execution-environment, NO_ARC_EVIDENCE |
 | `conformer_upload.additional_calculations[].execution_environment.closure[].role` | `ARC_ABSENT` | n/a |  | RULE:AP-5-execution-environment, NO_ARC_EVIDENCE |
@@ -1705,6 +1725,10 @@ index flag is a prompt to check the row, not a finding by itself.
 | `conformer_upload.additional_calculations[].literature.year` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `conformer_upload.additional_calculations[].parameters[].parameter_index` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `conformer_upload.additional_calculations[].parameters[].unit` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `conformer_upload.additional_calculations[].parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `conformer_upload.additional_calculations[].parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `conformer_upload.additional_calculations[].scf_stability.source_artifact_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `conformer_upload.additional_calculations[].scf_stability.source_calculation_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `conformer_upload.additional_calculations[].software_release.build` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `conformer_upload.additional_calculations[].software_release.notes` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `conformer_upload.additional_calculations[].software_release.release_date` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
@@ -1780,6 +1804,15 @@ index flag is a prompt to check the row, not a finding by itself.
 | `conformer_upload.calculation.parameters[].raw_value` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].parameters[].raw_value, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `conformer_upload.calculation.parameters[].unit` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `conformer_upload.calculation.parameters[].value_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].parameters[].value_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `conformer_upload.calculation.parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `conformer_upload.calculation.parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `conformer_upload.calculation.scf_stability.instability_count` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `conformer_upload.calculation.scf_stability.instability_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `conformer_upload.calculation.scf_stability.lowest_eigenvalue` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `conformer_upload.calculation.scf_stability.reoptimized_wavefunction` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `conformer_upload.calculation.scf_stability.source_artifact_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `conformer_upload.calculation.scf_stability.source_calculation_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `conformer_upload.calculation.scf_stability.status` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.status, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `conformer_upload.calculation.software_release.build` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `conformer_upload.calculation.software_release.notes` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `conformer_upload.calculation.software_release.release_date` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
@@ -1930,6 +1963,8 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.species[].calculations[].literature.year` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.species[].calculations[].parameters[].parameter_index` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.species[].calculations[].parameters[].unit` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `reaction_upload.species[].calculations[].parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `reaction_upload.species[].calculations[].parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.species[].calculations[].software_release.build` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.species[].calculations[].software_release.notes` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.species[].calculations[].software_release.release_date` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
@@ -1985,6 +2020,13 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.species[].conformers[].calculation.parameters[].raw_value` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].parameters[].raw_value, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `reaction_upload.species[].conformers[].calculation.parameters[].unit` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.species[].conformers[].calculation.parameters[].value_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].parameters[].value_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `reaction_upload.species[].conformers[].calculation.parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `reaction_upload.species[].conformers[].calculation.parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `reaction_upload.species[].conformers[].calculation.scf_stability.instability_count` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `reaction_upload.species[].conformers[].calculation.scf_stability.instability_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `reaction_upload.species[].conformers[].calculation.scf_stability.lowest_eigenvalue` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `reaction_upload.species[].conformers[].calculation.scf_stability.reoptimized_wavefunction` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `reaction_upload.species[].conformers[].calculation.scf_stability.status` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.status, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `reaction_upload.species[].conformers[].calculation.software_release.build` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.species[].conformers[].calculation.software_release.notes` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.species[].conformers[].calculation.software_release.release_date` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
@@ -2108,6 +2150,13 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.transition_state.calculation.literature.url` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculation.literature.volume` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculation.literature.year` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `reaction_upload.transition_state.calculation.parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `reaction_upload.transition_state.calculation.parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `reaction_upload.transition_state.calculation.scf_stability.instability_count` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `reaction_upload.transition_state.calculation.scf_stability.instability_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `reaction_upload.transition_state.calculation.scf_stability.lowest_eigenvalue` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `reaction_upload.transition_state.calculation.scf_stability.reoptimized_wavefunction` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `reaction_upload.transition_state.calculation.scf_stability.status` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:reaction_upload.transition_state.calculations[].scf_stability.status, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculation.software_release.build` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculation.software_release.notes` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculation.software_release.release_date` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
@@ -2152,6 +2201,8 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.transition_state.calculations[].literature.url` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculations[].literature.volume` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculations[].literature.year` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `reaction_upload.transition_state.calculations[].parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `reaction_upload.transition_state.calculations[].parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculations[].software_release.build` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculations[].software_release.notes` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.transition_state.calculations[].software_release.release_date` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
@@ -2221,6 +2272,8 @@ index flag is a prompt to check the row, not a finding by itself.
 | `species_upload.conformers[].additional_calculations[].literature.year` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `species_upload.conformers[].additional_calculations[].parameters[].parameter_index` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `species_upload.conformers[].additional_calculations[].parameters[].unit` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `species_upload.conformers[].additional_calculations[].parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `species_upload.conformers[].additional_calculations[].parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `species_upload.conformers[].additional_calculations[].software_release.build` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `species_upload.conformers[].additional_calculations[].software_release.notes` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `species_upload.conformers[].additional_calculations[].software_release.release_date` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
@@ -2272,6 +2325,13 @@ index flag is a prompt to check the row, not a finding by itself.
 | `species_upload.conformers[].primary_calculation.parameters[].raw_value` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].parameters[].raw_value, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `species_upload.conformers[].primary_calculation.parameters[].unit` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `species_upload.conformers[].primary_calculation.parameters[].value_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].parameters[].value_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `species_upload.conformers[].primary_calculation.parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `species_upload.conformers[].primary_calculation.parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `species_upload.conformers[].primary_calculation.scf_stability.instability_count` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `species_upload.conformers[].primary_calculation.scf_stability.instability_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `species_upload.conformers[].primary_calculation.scf_stability.lowest_eigenvalue` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `species_upload.conformers[].primary_calculation.scf_stability.reoptimized_wavefunction` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `species_upload.conformers[].primary_calculation.scf_stability.status` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.status, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `species_upload.conformers[].primary_calculation.software_release.build` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `species_upload.conformers[].primary_calculation.software_release.notes` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `species_upload.conformers[].primary_calculation.software_release.release_date` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
@@ -2425,7 +2485,17 @@ index flag is a prompt to check the row, not a finding by itself.
 | `transport_upload.calculations[].calculation.parameters[].section` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
 | `transport_upload.calculations[].calculation.parameters[].unit` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
 | `transport_upload.calculations[].calculation.parameters[].value_type` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
+| `transport_upload.calculations[].calculation.parameters_extracted_at` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
 | `transport_upload.calculations[].calculation.parameters_json` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
+| `transport_upload.calculations[].calculation.parameters_parser_version` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
+| `transport_upload.calculations[].calculation.quality` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
+| `transport_upload.calculations[].calculation.scf_stability.instability_count` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
+| `transport_upload.calculations[].calculation.scf_stability.instability_type` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
+| `transport_upload.calculations[].calculation.scf_stability.lowest_eigenvalue` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
+| `transport_upload.calculations[].calculation.scf_stability.reoptimized_wavefunction` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
+| `transport_upload.calculations[].calculation.scf_stability.source_artifact_id` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
+| `transport_upload.calculations[].calculation.scf_stability.source_calculation_id` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
+| `transport_upload.calculations[].calculation.scf_stability.status` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
 | `transport_upload.calculations[].calculation.software_release.build` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
 | `transport_upload.calculations[].calculation.software_release.name` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE, BLOCK_CHECK |
 | `transport_upload.calculations[].calculation.software_release.notes` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
@@ -2509,6 +2579,10 @@ index flag is a prompt to check the row, not a finding by itself.
 | `ts_upload.additional_calculations[].literature.year` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `ts_upload.additional_calculations[].parameters[].parameter_index` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `ts_upload.additional_calculations[].parameters[].unit` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `ts_upload.additional_calculations[].parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `ts_upload.additional_calculations[].parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `ts_upload.additional_calculations[].scf_stability.source_artifact_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `ts_upload.additional_calculations[].scf_stability.source_calculation_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `ts_upload.additional_calculations[].software_release.build` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `ts_upload.additional_calculations[].software_release.notes` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `ts_upload.additional_calculations[].software_release.release_date` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
@@ -2564,6 +2638,15 @@ index flag is a prompt to check the row, not a finding by itself.
 | `ts_upload.primary_opt.parameters[].raw_value` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:reaction_upload.transition_state.calculations[].parameters[].raw_value, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `ts_upload.primary_opt.parameters[].unit` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `ts_upload.primary_opt.parameters[].value_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:reaction_upload.transition_state.calculations[].parameters[].value_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `ts_upload.primary_opt.parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `ts_upload.primary_opt.parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `ts_upload.primary_opt.scf_stability.instability_count` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `ts_upload.primary_opt.scf_stability.instability_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `ts_upload.primary_opt.scf_stability.lowest_eigenvalue` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `ts_upload.primary_opt.scf_stability.reoptimized_wavefunction` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
+| `ts_upload.primary_opt.scf_stability.source_artifact_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `ts_upload.primary_opt.scf_stability.source_calculation_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
+| `ts_upload.primary_opt.scf_stability.status` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:reaction_upload.transition_state.calculations[].scf_stability.status, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `ts_upload.primary_opt.software_release.build` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `ts_upload.primary_opt.software_release.notes` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `ts_upload.primary_opt.software_release.release_date` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
@@ -3360,67 +3443,30 @@ index flag is a prompt to check the row, not a finding by itself.
 | `arc_only.output_yml.species.label` | `SURPLUS` | n/a | output.yml: species[].label | NO_TCKDB_HOME |
 | `arc_only.parser_evidence.records.label` | `SURPLUS` | n/a | parser_evidence.json: records[].label | NO_TCKDB_HOME |
 
-### untiered (274 rows)
+### untiered (191 rows)
 
-`SURPLUS`×134  `ARC_ABSENT`×71  `WIRED`×27  `ADAPTER_GAP`×20  `SOURCE_UNCONFIRMED`×11  `ARC_LATENT`×11
+`SURPLUS`×134  `ARC_ABSENT`×27  `WIRED`×12  `ARC_LATENT`×8  `SOURCE_UNCONFIRMED`×8  `ADAPTER_GAP`×2
 
 | Path | Verdict | Cost | ARC source | Flags |
 |---|---|---|---|---|
 | `conformer_upload.additional_calculations[].key` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].key`) | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].key, ADJUDICATED:GENERALISES |
-| `conformer_upload.additional_calculations[].opt_result.converged` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].opt_result.converged | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].opt_result.converged, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
-| `conformer_upload.additional_calculations[].opt_result.final_energy_hartree` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].opt_result.final_ene | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].opt_result.final_energy_hartree, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
-| `conformer_upload.additional_calculations[].opt_result.n_steps` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].opt_result.n_steps`) | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].opt_result.n_steps, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
-| `conformer_upload.additional_calculations[].scf_stability.instability_count` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.negative_eigenv |  |
-| `conformer_upload.additional_calculations[].scf_stability.instability_type` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.verdict / .rela |  |
-| `conformer_upload.additional_calculations[].scf_stability.lowest_eigenvalue` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.lowest_eigenval |  |
-| `conformer_upload.additional_calculations[].scf_stability.reoptimized_wavefunction` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.followed_to_sta |  |
-| `conformer_upload.additional_calculations[].scf_stability.status` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.verdict |  |
 | `conformer_upload.calculation.key` | `ADAPTER_GAP` | low | (via `reaction_upload.species[].conformers[].calculation.key`) | SUPPLIED_AT:reaction_upload.species[].conformers[].calculation.key, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED, ARC_SUPPLY_UNCONFIRMED |
-| `reaction_upload.species[].calculations[].scf_stability.instability_count` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.instab | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].calculations[].scf_stability.instability_type` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.instab | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].calculations[].scf_stability.lowest_eigenvalue` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.lowest | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].calculations[].scf_stability.reoptimized_wavefunction` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.reopti | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].calculations[].scf_stability.status` | `ADAPTER_GAP` | low | (via `species_upload.conformers[].additional_calculations[].scf_stability.status | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.status, ADJUDICATED:GENERALISES |
-| `species_upload.conformers[].additional_calculations[].scf_stability.instability_count` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.negative_eigenv |  |
-| `species_upload.conformers[].additional_calculations[].scf_stability.instability_type` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.verdict / .rela |  |
-| `species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.lowest_eigenval |  |
-| `species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.followed_to_sta |  |
-| `species_upload.conformers[].additional_calculations[].scf_stability.status` | `ADAPTER_GAP` | low | output.yml: species[].wavefunction_stability.verdict |  |
-| `conformer_upload.calculation.quality` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].primary_calculation.quality`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.quality, ADJUDICATED:GENERALISES |
 | `conformer_upload.geometry.isotopes` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].geometry.isotopes`) | SUPPLIED_AT:species_upload.conformers[].geometry.isotopes, ADJUDICATED:GENERALISES, INDEX_BASE, UNIT_CONVERSION |
-| `reaction_upload.species[].conformers[].calculation.quality` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].primary_calculation.quality`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.quality, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].conformers[].geometry.isotopes` | `ARC_LATENT` | n/a | (via `species_upload.conformers[].geometry.isotopes`) | SUPPLIED_AT:species_upload.conformers[].geometry.isotopes, ADJUDICATED:GENERALISES, INDEX_BASE, UNIT_CONVERSION |
 | `species_upload.conformers[].geometry.isotopes` | `ARC_LATENT` | low | arc/species/converter.py xyz dict 'isotopes' tuple (str_to_x | INDEX_BASE, UNIT_CONVERSION |
-| `species_upload.conformers[].primary_calculation.quality` | `ARC_LATENT` | medium | none |  |
 | `transport_upload.dipole_debye` | `ARC_LATENT` | medium | arc/parser/parser.py:parse_dipole_moment:269 (per-ESS parse_ |  |
 | `transport_upload.epsilon_over_k_k` | `ARC_LATENT` | high | ARCSpecies.set_transport_data (arc/species/species.py:2080-2 | UNIT_CONVERSION |
 | `transport_upload.polarizability_angstrom3` | `ARC_LATENT` | medium | arc/parser/adapters/gaussian.py:parse_polarizability:1280 (' |  |
 | `transport_upload.rotational_relaxation` | `ARC_LATENT` | high | ARCSpecies.set_transport_data (arc/species/species.py:2114 r |  |
 | `transport_upload.sigma_angstrom` | `ARC_LATENT` | high | ARCSpecies.set_transport_data (arc/species/species.py:2055-2 | UNIT_CONVERSION |
-| `conformer_upload.additional_calculations[].quality` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].quality |
 | `conformer_upload.scientific_origin` | `SOURCE_UNCONFIRMED` | n/a |  |  |
 | `reaction_upload.species[].calculations[].conformer_key` | `SOURCE_UNCONFIRMED` | n/a |  | BLOCK_CHECK |
 | `reaction_upload.species[].calculations[].geometry_key` | `SOURCE_UNCONFIRMED` | n/a |  | SEMANTIC_SHIFT, BLOCK_CHECK |
-| `reaction_upload.species[].calculations[].quality` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.transition_state.calculations[].quality |
 | `reaction_upload.species[].conformers[].calculation.key` | `SOURCE_UNCONFIRMED` | n/a | (via `reaction_upload.transition_state.calculation.key`) | SUPPLIED_AT:reaction_upload.transition_state.calculation.key, ADJUDICATED:GENERALISES, SIBLING_SOURCE_UNCONFIRMED |
 | `reaction_upload.species[].conformers[].geometry.key` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.transition_state.geometry.key, BLOCK_CHECK |
 | `reaction_upload.species[].conformers[].key` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:species_upload.conformers[].key, BLOCK_CHECK |
-| `species_upload.conformers[].additional_calculations[].quality` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:conformer_upload.additional_calculations[].quality |
 | `species_upload.conformers[].key` | `SOURCE_UNCONFIRMED` | n/a |  | SUPPLIED_AT:reaction_upload.species[].conformers[].key |
 | `species_upload.conformers[].primary_calculation.key` | `SOURCE_UNCONFIRMED` | n/a |  |  |
-| `conformer_upload.additional_calculations[].parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `conformer_upload.additional_calculations[].parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `conformer_upload.additional_calculations[].scf_stability.source_artifact_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `conformer_upload.additional_calculations[].scf_stability.source_calculation_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `conformer_upload.calculation.parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `conformer_upload.calculation.parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `conformer_upload.calculation.scf_stability.instability_count` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `conformer_upload.calculation.scf_stability.instability_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `conformer_upload.calculation.scf_stability.lowest_eigenvalue` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `conformer_upload.calculation.scf_stability.reoptimized_wavefunction` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `conformer_upload.calculation.scf_stability.source_artifact_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `conformer_upload.calculation.scf_stability.source_calculation_id` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `conformer_upload.calculation.scf_stability.status` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.status, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `conformer_upload.conformer_key` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `conformer_upload.rights.depositor_attests_right_to_license` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `conformer_upload.rights.license` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE, BLOCK_CHECK |
@@ -3434,43 +3480,12 @@ index flag is a prompt to check the row, not a finding by itself.
 | `reaction_upload.rights.depositor_attests_right_to_license` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.rights.license` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.rights.source_terms` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `reaction_upload.species[].calculations[].parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `reaction_upload.species[].calculations[].parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.species[].conformers[].calculation.conformer_key` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `reaction_upload.species[].conformers[].calculation.geometry_key` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `reaction_upload.species[].conformers[].calculation.parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `reaction_upload.species[].conformers[].calculation.parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `reaction_upload.species[].conformers[].calculation.scf_stability.instability_count` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `reaction_upload.species[].conformers[].calculation.scf_stability.instability_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `reaction_upload.species[].conformers[].calculation.scf_stability.lowest_eigenvalue` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `reaction_upload.species[].conformers[].calculation.scf_stability.reoptimized_wavefunction` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `reaction_upload.species[].conformers[].calculation.scf_stability.status` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.status, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `reaction_upload.species[].conformers[].scientific_origin` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `species_upload.conformers[].additional_calculations[].parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `species_upload.conformers[].additional_calculations[].parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `species_upload.conformers[].primary_calculation.parameters_extracted_at` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `species_upload.conformers[].primary_calculation.parameters_parser_version` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `species_upload.conformers[].primary_calculation.scf_stability.instability_count` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_count, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `species_upload.conformers[].primary_calculation.scf_stability.instability_type` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.instability_type, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `species_upload.conformers[].primary_calculation.scf_stability.lowest_eigenvalue` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `species_upload.conformers[].primary_calculation.scf_stability.reoptimized_wavefunction` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
-| `species_upload.conformers[].primary_calculation.scf_stability.status` | `ARC_ABSENT` | n/a |  | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].scf_stability.status, ADJUDICATED:DIFFERENT_INSTANCE, NO_ARC_EVIDENCE |
 | `species_upload.rights.depositor_attests_right_to_license` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
 | `species_upload.rights.license` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE, BLOCK_CHECK |
 | `species_upload.rights.source_terms` | `ARC_ABSENT` | n/a |  | NO_ARC_EVIDENCE |
-| `transport_upload.calculations[].calculation.opt_result.converged` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
-| `transport_upload.calculations[].calculation.opt_result.final_energy_hartree` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
-| `transport_upload.calculations[].calculation.opt_result.n_steps` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
-| `transport_upload.calculations[].calculation.parameters_extracted_at` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
-| `transport_upload.calculations[].calculation.parameters_parser_version` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
-| `transport_upload.calculations[].calculation.quality` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
-| `transport_upload.calculations[].calculation.scf_stability.instability_count` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
-| `transport_upload.calculations[].calculation.scf_stability.instability_type` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
-| `transport_upload.calculations[].calculation.scf_stability.lowest_eigenvalue` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
-| `transport_upload.calculations[].calculation.scf_stability.reoptimized_wavefunction` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
-| `transport_upload.calculations[].calculation.scf_stability.source_artifact_id` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
-| `transport_upload.calculations[].calculation.scf_stability.source_calculation_id` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
-| `transport_upload.calculations[].calculation.scf_stability.status` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
 | `transport_upload.calculations[].calculation.type` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
 | `transport_upload.calculations[].key` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
 | `transport_upload.rights.depositor_attests_right_to_license` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
@@ -3480,31 +3495,16 @@ index flag is a prompt to check the row, not a finding by itself.
 | `transport_upload.source_calculations[].calculation_key` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE, BLOCK_CHECK |
 | `transport_upload.source_calculations[].role` | `ARC_ABSENT` | n/a |  | RULE:AP-4-transport-gated, NO_ARC_EVIDENCE |
 | `conformer_upload.additional_calculations[].type` | `WIRED` | n/a | (implied by the freq_* / sp_* key prefix) |  |
-| `conformer_upload.calculation.opt_result.converged` | `WIRED` | n/a | output.yml: species[].opt_converged |  |
-| `conformer_upload.calculation.opt_result.final_energy_hartree` | `WIRED` | n/a | output.yml: species[].opt_final_energy_hartree |  |
-| `conformer_upload.calculation.opt_result.n_steps` | `WIRED` | n/a | output.yml: species[].opt_n_steps |  |
 | `conformer_upload.calculation.type` | `WIRED` | n/a | (implied by the opt_* key prefix) |  |
 | `conformer_upload.geometry.xyz_text` | `WIRED` | n/a | output.yml: species[].xyz |  |
 | `reaction_upload.species[].calculations[].key` | `WIRED` | n/a | (via `species_upload.conformers[].additional_calculations[].key`) | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].key, ADJUDICATED:GENERALISES, BLOCK_CHECK |
-| `reaction_upload.species[].calculations[].opt_converged` | `WIRED` | n/a | (via `species_upload.conformers[].primary_calculation.opt_result.converged`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.converged, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].calculations[].opt_final_energy_hartree` | `WIRED` | n/a | (via `species_upload.conformers[].primary_calculation.opt_result.final_energy_ha | SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.final_energy_hartree, ADJUDICATED:GENERALISES, UNIT_CONVERSION |
-| `reaction_upload.species[].calculations[].opt_n_steps` | `WIRED` | n/a | (via `species_upload.conformers[].primary_calculation.opt_result.n_steps`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.n_steps, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].calculations[].type` | `WIRED` | n/a | (via `species_upload.conformers[].additional_calculations[].type`) | SUPPLIED_AT:species_upload.conformers[].additional_calculations[].type, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].conformers[].calculation.opt_converged` | `WIRED` | n/a | (via `conformer_upload.calculation.opt_result.converged`) | SUPPLIED_AT:conformer_upload.calculation.opt_result.converged, ADJUDICATED:GENERALISES |
-| `reaction_upload.species[].conformers[].calculation.opt_final_energy_hartree` | `WIRED` | n/a | (via `conformer_upload.calculation.opt_result.final_energy_hartree`) | SUPPLIED_AT:conformer_upload.calculation.opt_result.final_energy_hartree, ADJUDICATED:GENERALISES, UNIT_CONVERSION |
-| `reaction_upload.species[].conformers[].calculation.opt_n_steps` | `WIRED` | n/a | (via `conformer_upload.calculation.opt_result.n_steps`) | SUPPLIED_AT:conformer_upload.calculation.opt_result.n_steps, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].conformers[].calculation.type` | `WIRED` | n/a | (via `species_upload.conformers[].primary_calculation.type`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.type, ADJUDICATED:GENERALISES, BLOCK_CHECK |
 | `reaction_upload.species[].conformers[].geometry.xyz_text` | `WIRED` | n/a | (via `species_upload.conformers[].geometry.xyz_text`) | SUPPLIED_AT:species_upload.conformers[].geometry.xyz_text, ADJUDICATED:GENERALISES |
 | `reaction_upload.species[].key` | `WIRED` | n/a | output.yml: species[].label | BLOCK_CHECK |
 | `species_upload.conformers[].additional_calculations[].key` | `WIRED` | n/a | output.yml: species[].rotor_scans[].key |  |
-| `species_upload.conformers[].additional_calculations[].opt_result.converged` | `WIRED` | n/a | (via `species_upload.conformers[].primary_calculation.opt_result.converged`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.converged, ADJUDICATED:GENERALISES |
-| `species_upload.conformers[].additional_calculations[].opt_result.final_energy_hartree` | `WIRED` | n/a | (via `species_upload.conformers[].primary_calculation.opt_result.final_energy_ha | SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.final_energy_hartree, ADJUDICATED:GENERALISES |
-| `species_upload.conformers[].additional_calculations[].opt_result.n_steps` | `WIRED` | n/a | (via `species_upload.conformers[].primary_calculation.opt_result.n_steps`) | SUPPLIED_AT:species_upload.conformers[].primary_calculation.opt_result.n_steps, ADJUDICATED:GENERALISES |
 | `species_upload.conformers[].additional_calculations[].type` | `WIRED` | n/a | (implied by the freq_* / sp_* key prefix) |  |
 | `species_upload.conformers[].geometry.xyz_text` | `WIRED` | n/a | output.yml: species[].xyz |  |
-| `species_upload.conformers[].primary_calculation.opt_result.converged` | `WIRED` | n/a | output.yml: species[].opt_converged |  |
-| `species_upload.conformers[].primary_calculation.opt_result.final_energy_hartree` | `WIRED` | n/a | output.yml: species[].opt_final_energy_hartree |  |
-| `species_upload.conformers[].primary_calculation.opt_result.n_steps` | `WIRED` | n/a | output.yml: species[].opt_n_steps |  |
 | `species_upload.conformers[].primary_calculation.type` | `WIRED` | n/a | (implied by the opt_* key prefix) |  |
 | `arc_only.job.ess_trsh_methods` | `SURPLUS` | n/a | arc/job/adapter.py:JobAdapter.ess_trsh_methods (as_dict:834; | NO_TCKDB_HOME |
 | `arc_only.job.job_id` | `SURPLUS` | n/a | arc/job/adapter.py:execute:332-338 (queue id from submit_job | NO_TCKDB_HOME |

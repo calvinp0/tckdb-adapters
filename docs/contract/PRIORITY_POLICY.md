@@ -126,6 +126,14 @@ tier_1_kinetics_lookup:
   - "**.freq_frequencies_cm1"
   - "**.freq_reaction_coordinate_mode_index"
   - "**.freq_imaginary_dispositions"
+  # Decided by the maintainer, 2026-09-29 (formerly "proposed"). Leaves are listed so the
+  # globs end in a literal and beat every subtree rule: one tier on every route.
+  - "**.opt_result.converged"
+  - "**.opt_result.n_steps"
+  - "**.opt_result.final_energy_hartree"
+  - "**.opt_converged"                            # flattened opt_result on the reaction bundle
+  - "**.opt_n_steps"
+  - "**.opt_final_energy_hartree"
 
 tier_2_reproducibility:
   # **.level_of_theory / **.software_release / **.workflow_tool_release were literal-ending
@@ -169,32 +177,47 @@ tier_2_reproducibility:
   - reaction_upload.species.statmech.literature.*
   - conformer_upload.statmech.literature.*
   - reaction_upload.kinetics.literature.*
+  # Decided by the maintainer, 2026-09-29 (formerly "proposed"). Leaves are listed, as for
+  # level_of_theory, so the tier-1 TS, thermo and statmech subtree rules cannot override
+  # them. scf_stability.note is deliberately absent: notes stay tier 4 (**.note) everywhere.
+  - "**.scf_stability.status"
+  - "**.scf_stability.instability_count"
+  - "**.scf_stability.instability_type"
+  - "**.scf_stability.lowest_eigenvalue"
+  - "**.scf_stability.reoptimized_wavefunction"
+  - "**.scf_stability.source_calculation_id"
+  - "**.scf_stability.source_artifact_id"
+  - "**.quality"
+  - "**.parameters_extracted_at"
+  - "**.parameters_parser_version"
+  - "**.energy_level_of_theory.method"
+  - "**.energy_level_of_theory.basis"
+  - "**.energy_level_of_theory.aux_basis"
+  - "**.energy_level_of_theory.cabs_basis"
+  - "**.energy_level_of_theory.dispersion"
+  - "**.energy_level_of_theory.keywords"
+  - "**.energy_level_of_theory.solvent"
+  - "**.energy_level_of_theory.solvent_model"
+  - "**.energy_level_of_theory.spin_treatment"
 ```
 
-After this block, 176 demand rows (140 leaves) remain untiered. They are:
+After this block, 93 demand rows (57 leaves) remain untiered. They are:
 
-- the proposed items below, on the routes the subtree rules do not reach;
 - deposit rights and transport;
 - local keys, calculation `type`, `scientific_origin`, and the conformer and TS
   `geometry` / `isotopes`.
 
-**Proposed, needs your decision (left untiered).** These have no 0.22 counterpart in
-the policy, so a tier would be a new value judgement:
+**Decided by the maintainer, 2026-09-29.** Four value questions the first version of
+this amendment left open are now settled and encoded above:
 
 - `**.opt_result.*` and its flattened `opt_converged` / `opt_n_steps` /
-  `opt_final_energy_hartree`. Tier 1 would parallel `sp_result` and `freq_result`.
-  Tier 2 would treat optimisation convergence as reproducibility evidence.
-- `**.scf_stability.*`. Tier 2 would treat it like `spin_diagnostic` and
-  `wavefunction_diagnostic`.
-- `**.quality`, `**.parameters_extracted_at`, `**.parameters_parser_version`.
-  Tier 2 would put them beside `parameters.*`.
-- `**.energy_level_of_theory.*`. It sits only under thermo and statmech, so their
-  tier-1 subtree rules tier it. A tier-2 glob would treat it like `level_of_theory`,
-  but it is a distinct field, so that is your call.
-
-Under the original globs, the TS routes and `species_upload.thermo` / `statmech` place
-`opt_result` and `scf_stability` in tier 1 through their subtree rules; the list above
-concerns the other routes.
+  `opt_final_energy_hartree`: **tier 1**, parallel to `sp_result` and `freq_result`.
+- `**.scf_stability.*`: **tier 2**, like `spin_diagnostic` and
+  `wavefunction_diagnostic`. Its `note` stays tier 4 with every other note.
+- `**.quality`, `**.parameters_extracted_at`, `**.parameters_parser_version`:
+  **tier 2**, beside `parameters.*`.
+- `**.energy_level_of_theory.*`: **tier 2**, like `level_of_theory`. Its leaves are
+  listed, so the tier-1 thermo and statmech subtree rules no longer claim it.
 
 Patterns use `**.` to match a field wherever it occurs in the tree — the same field
 (`level_of_theory`, `sp_result`) is reachable by several routes and carries the same
