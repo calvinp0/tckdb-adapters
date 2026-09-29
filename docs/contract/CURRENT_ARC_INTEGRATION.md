@@ -22,6 +22,8 @@ and schema versions; their percentages are not current coverage measurements.
   tckdb-schemas 0.53.0). `--since 0.52.0` changes only the submission-supersede
   route (public refs, `new_submission_ref`), which the adapter never calls; no
   model changes.
+- **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
+  evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - Adapter: working tree including substantial pre-existing uncommitted work.
   Those changes were retained.
 
@@ -222,7 +224,90 @@ provenance warnings for data output.yml already held. Status by roadmap item:
 - **Literature, known gap.** `missing_literature_provenance` remains advisory:
   ARC records no citation for its thermo, statmech or schemes.
 
-Also seen on the fixture: the atom-energy scheme's `atom_params` are not sent,
-because ARC writes that table as `reference_atom_energies`, not
-`parameter_table`, and the screened alternative conformer's opt is labelled
-with `opt_level` and the opt banner (roadmap A4).
+Also seen on the fixture: the screened alternative conformer's opt is labelled
+with `opt_level` and the opt banner (roadmap A4). The atom-energy scheme's
+`atom_params` were not sent at 0.6.1 and are since 0.6.3 (A12 below).
+
+## Corrections and statmech evidence (adapter 0.6.3)
+
+- **A1, done.** The producer contract's `bac_total_requires_components` (422,
+  `assert_bac_total_has_required_components`) refuses a `bac_petersson`
+  `bac_total` without a component of kind `bond` when it targets a transition
+  state or a species whose SMILES has a bond; a monatomic species is the only
+  honest componentless case, and `bac_melius` is exempt. TCKDB does not check
+  that components sum to the total. The adapter therefore omits a Petersson
+  BAC, keeping the AEC and everything else, when there is no bond component
+  (ARC drops the list when any bond lacks a parameter, `arc/output.py`
+  1592-1596), when any component lacks `parameter_value` or
+  `contribution_value` (the old per-component null filter could send a partial
+  decomposition), or on a TS with no bond component. A componentless BAC is
+  kept only for a species whose composition is a single atom; an unknown
+  composition is treated as bonded. The warning is
+  `bac_correction_omitted_components_incomplete`, field
+  `[species[<key>].|transition_state.]applied_energy_corrections`, context
+  `reason` (`no_components`, `component_unusable`, `no_bond_component`),
+  `target_kind` and `species`. Every route that carries the block uses the one
+  helper `_build_applied_energy_corrections` (computed-species bundle, reaction
+  participants, reaction TS block); the standalone TS route sends no
+  corrections. The benzene fixture's complete BAC (3 C-C, 3 C=C, 6 C-H) is
+  unchanged; the componentless variants are synthetic.
+- **A5, done.** A rotor-aware `statmech_treatment` (`rrho_1d`, `rrho_nd`,
+  `rrho_1d_nd`) and each torsion's `treatment_kind` are sent only when
+  `_freq_hessian_available` finds a freq Hessian for the species (parser
+  evidence, or the log fallback), since Arkane drops every rotor without a
+  force-constant matrix (RMG-Py `arkane/statmech.py` 647-667). Plain `rrho` (an
+  empty rotor list) does not depend on the Hessian and is always sent, so
+  monatomics keep it. Without a Hessian the rotor-aware treatment and the
+  torsions' `treatment_kind` (nullable in the contract) are omitted; the torsions
+  themselves (atom quartet, symmetry, scan link) are recorded facts and are
+  still sent. One `statmech_treatment_not_stated` warning covers both (context
+  `reason: no_freq_hessian`, `inferred_treatment`, `omitted`, `torsion_count`).
+  The contract: "an absent field is honest where an invented one would not be".
+- **A12, done.** For an `atom_energy` record the adapter maps ARC's
+  `reference_atom_energies` (`{unit, applied_as: subtracted, values}`, hartree
+  per element) to `scheme.atom_params[]` (`element`, `value`) and sets
+  `scheme.units` to the table's own unit. It matches: TCKDB's
+  `EnergyCorrectionSchemeAtomParam` is the "element-keyed scalar parameter
+  within a correction scheme ... atom_energies", and `scheme.units` is "the
+  unit `atom_params` ... are expressed in", converted before comparison. These
+  are the scheme's parameters, never per-atom corrections: the total and
+  components are ARC's own and are not rebuilt from them. The table is omitted
+  (scheme still sent, without parameters) when its unit is missing or not
+  `hartree`/`kj_mol`/`kcal_mol`, or when any element or value is unusable. The
+  adapter no longer reads `parameter_table` on atom-energy records (ARC writes
+  it only on the Petersson record, where it still becomes `bond_params`). The
+  benzene fixture now sends 8 atom params in hartree, and the scheme `note`
+  records ARC's convention ("atom energies are subtracted from the molecular
+  electronic energy (Arkane)"; `applied_as: subtracted`). Atom-energy,
+  Petersson and Melius schemes also carry `workflow_tool_release` = Arkane (`version` from
+  `arkane_version`, `git_commit` from `arkane_git_commit`, each only when
+  recorded and, for the commit, at most 40 characters). It is part of scheme
+  identity, so a later Arkane build that changes a table value creates a new
+  scheme instead of 422ing on the stored parameter; it is the contract's
+  "workflow tool whose data file was the proximate source", not a calculation's
+  software.
+- **Limit of the Arkane stamp.** Arkane's correction tables come from
+  RMG-database (`RMG_DB_PATH/input/quantum_corrections/data.py`; ARC
+  `arc/statmech/arkane.py` ~817-821), but `arkane_git_commit` is the RMG-Py
+  HEAD (ARC `arc/output.py` ~348-366) and ARC records no RMG-database commit.
+  So (a) a database-only revision of an atom energy (or bond parameter) for the
+  same key still resolves to the stored scheme row and TCKDB refuses it as a
+  parameter conflict (422); (b) every new RMG-Py commit creates a new scheme row
+  even when the tables are unchanged. Separately, the first 0.6.3 upload of an
+  already-deposited scheme creates a new scheme row, because identity now
+  includes the workflow tool; the older null-tool row remains. That is
+  expected. The durable fix is ARC-side (BRIDGE_ROADMAP.md B12).
+- **A1 provenance note.** Arkane skips bond types missing from its Petersson
+  table and applies the rest, so an omitted BAC can still be inside the thermo
+  H298. The thermo record's `note` (appended, never overwritten) follows
+  output 1.2's `thermo.bond_corrections_applied`: `true` says a Petersson BAC
+  was applied by Arkane but is not deposited because its bond decomposition was
+  incomplete (with the reason); `false` writes no note (the BAC was not applied,
+  so nothing is missing from the deposit); absent or null says only that ARC
+  exported a Petersson BAC total that is not deposited for that reason,
+  without asserting Arkane applied it.
+
+Upgrading to 0.6.3 changes the payload hash (and idempotency key) of uploads
+that gain `atom_params`, lose a BAC, or lose a `statmech_treatment`. The
+golden corpus hashes are unchanged (its records neither carry a Petersson BAC
+or atom-energy table nor lose a treatment).

@@ -235,6 +235,43 @@ def _neutral_scan_result_to_tckdb(result: Mapping[str, Any]) -> dict[str, Any] |
     return out
 
 
+_ENERGY_UNITS = frozenset({"hartree", "kj_mol", "kcal_mol"})
+
+
+def _atom_params_from_reference_atom_energies(
+    table: Any,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """``(atom_params, unit)`` from ARC's ``reference_atom_energies`` block.
+
+    The block is ``{unit, applied_as, values: {element: energy}}``. Returns
+    ``([], None)`` (so the scheme is sent without parameters, which the
+    contract allows) when the unit is missing or not a TCKDB energy unit
+    (never guessed: ``scheme.units`` decides how TCKDB reads every value), or
+    when any element or value is unusable (a partial table would misstate
+    the scheme).
+    """
+    if not isinstance(table, Mapping):
+        return [], None
+    unit = table.get("unit")
+    values = table.get("values")
+    if unit not in _ENERGY_UNITS or not isinstance(values, Mapping) or not values:
+        return [], None
+    params: list[dict[str, Any]] = []
+    for key, value in sorted(values.items(), key=lambda kv: str(kv[0])):
+        element = str(key).strip()
+        if (
+            not 1 <= len(element) <= 3
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            return [], None
+        params.append({"element": element, "value": float(value)})
+    if len({p["element"] for p in params}) != len(params):
+        return [], None
+    return params, str(unit)
+
+
 def _correction_records_from_record(record: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Translate neutral ARC correction facts to the legacy adapter boundary."""
     legacy = record.get("applied_energy_corrections")
@@ -287,18 +324,44 @@ def _correction_records_from_record(record: Mapping[str, Any]) -> list[dict[str,
             "level_of_theory": correction.get("level_of_theory"),
             "units": unit,
         }
-        table = correction.get("parameter_table")
-        if isinstance(table, Mapping) and isinstance(table.get("values"), Mapping):
-            values = table["values"]
-            if correction_type == "atom_energy":
-                scheme["atom_params"] = [
-                    {"element": str(key), "value": float(value)}
-                    for key, value in sorted(values.items())
-                ]
-            elif model == "petersson":
+        if correction_type == "atom_energy":
+            # ARC writes Arkane's per-element reference atomic energies as
+            # ``reference_atom_energies`` (never ``parameter_table``, which only
+            # the Petersson record carries). TCKDB's ``scheme.atom_params[]``
+            # for an ``atom_energy`` scheme is the element-keyed atomic-energy
+            # table (backend ``EnergyCorrectionSchemeAtomParam``: "atom_hf,
+            # atom_thermal, SOC, atom_energies"), which is what these are: the
+            # bare atomic electronic energies Arkane subtracts. They are the
+            # scheme's parameters, not per-atom corrections; the applied total
+            # and its components are sent separately and never rebuilt from them.
+            reference = correction.get("reference_atom_energies")
+            if not isinstance(reference, Mapping):
+                reference = {}
+            atom_params, params_unit = _atom_params_from_reference_atom_energies(
+                reference
+            )
+            if atom_params:
+                scheme["atom_params"] = atom_params
+                if reference.get("applied_as") == "subtracted":
+                    # Sign convention ARC records; the atom_params themselves
+                    # are bare atomic energies.
+                    scheme["note"] = (
+                        "Atom energies are subtracted from the molecular "
+                        "electronic energy (Arkane)."
+                    )
+                # ``scheme.units`` is the unit the scheme's parameter values
+                # are expressed in; the applied total keeps its own value_unit.
+                scheme["units"] = params_unit
+        else:
+            table = correction.get("parameter_table")
+            if (
+                model == "petersson"
+                and isinstance(table, Mapping)
+                and isinstance(table.get("values"), Mapping)
+            ):
                 scheme["bond_params"] = [
                     {"bond_key": str(key), "value": float(value)}
-                    for key, value in sorted(values.items())
+                    for key, value in sorted(table["values"].items())
                 ]
         out.append({
             "application_role": application_role,
@@ -1070,12 +1133,18 @@ class TCKDBAdapter:
             "conformers": [conformer_block, *alt_blocks],
         }
 
+        omitted_bacs: list[str] = []
         applied_corrections = _build_applied_energy_corrections(
             _correction_records_from_record(species_record),
             source_calculation_key=(
                 _CALC_KEY_SP if _CALC_KEY_SP in included_keys else None
             ),
             warnings=warnings,
+            target_kind="species",
+            element_symbols=_species_element_symbols(species_record),
+            target_label=str(species_record.get("label") or "") or None,
+            arkane_release=_arkane_workflow_tool_release(output_doc),
+            omitted_bac_reasons=omitted_bacs,
         )
         if applied_corrections:
             bundle["applied_energy_corrections"] = applied_corrections
@@ -1099,6 +1168,8 @@ class TCKDBAdapter:
         # reaction bundle does, and its thermo/statmech inherit it), so the
         # Arkane release goes on the thermo and statmech blocks themselves.
         arkane_release = _arc_analysis_software_release(output_doc)
+        _note_omitted_bac_on_thermo(
+            thermo_block, omitted_bacs, _bond_corrections_flag(species_record))
         if thermo_block is not None:
             if arkane_release is not None:
                 thermo_block["software_release"] = dict(arkane_release)
@@ -1133,6 +1204,9 @@ class TCKDBAdapter:
             # statmech field is ``StatmechInBundle``.
             target_model="StatmechInBundle",
             unbuilt_scans=unbuilt_scans,
+            freq_hessian_available=self._freq_hessian_available(
+                output_doc=output_doc, species_record=species_record,
+            ),
             warnings=warnings,
             warning_field="statmech",
         )
@@ -1835,6 +1909,24 @@ class TCKDBAdapter:
         if self._project_directory is not None:
             return Path(self._project_directory) / path
         return path.resolve()
+
+    def _freq_hessian_available(
+        self,
+        *,
+        output_doc: Mapping[str, Any],
+        species_record: Mapping[str, Any],
+    ) -> bool:
+        """Whether parser evidence (or the log fallback) yields a freq Hessian.
+
+        This is the evidence that Arkane had a force-constant matrix for the
+        species, which ``statmech_treatment`` depends on. It reuses
+        ``_build_freq_hessian_payload``, so it is True exactly when a
+        Hessian payload can be built for the freq calculation.
+        """
+        return self._build_freq_hessian_payload(
+            output_doc=output_doc, species_record=species_record,
+            geometry_xyz_text=None,
+        ) is not None
 
     def _build_freq_hessian_payload(
         self,
@@ -2554,12 +2646,21 @@ class TCKDBAdapter:
         # species's SP key — the server enforces ownership in
         # ``_persist_species_applied_corrections`` and would 422 on a
         # cross-species reference.
+        omitted_bacs: list[str] = []
         applied_corrections = _build_applied_energy_corrections(
             _correction_records_from_record(species_record),
             source_calculation_key=calc_keys.get(_CALC_KEY_SP),
             warnings=warnings,
             warning_field=f"species[{actor_key}].applied_energy_corrections",
+            target_kind="species",
+            element_symbols=_species_element_symbols(species_record),
+            target_label=str(species_record.get("label") or "") or None,
+            arkane_release=_arkane_workflow_tool_release(output_doc),
+            omitted_bac_reasons=omitted_bacs,
         )
+        _note_omitted_bac_on_thermo(
+            species_block.get("thermo"), omitted_bacs,
+            _bond_corrections_flag(species_record))
         if applied_corrections:
             species_block["applied_energy_corrections"] = applied_corrections
 
@@ -2590,6 +2691,9 @@ class TCKDBAdapter:
             workflow_tool_release=_arc_workflow_tool_release(output_doc),
             target_model="BundleStatmechIn",
             scan_key_renames=scan_key_renames or None,
+            freq_hessian_available=self._freq_hessian_available(
+                output_doc=output_doc, species_record=species_record,
+            ),
             unbuilt_scans=unbuilt_scans,
             warnings=warnings,
             warning_field=f"species[{actor_key}].statmech",
@@ -2963,6 +3067,9 @@ class TCKDBAdapter:
             source_calculation_key=calc_keys.get(_CALC_KEY_SP),
             warnings=warnings,
             warning_field="transition_state.applied_energy_corrections",
+            target_kind="transition_state",
+            target_label=str(ts_label) or None,
+            arkane_release=_arkane_workflow_tool_release(output_doc),
         )
         if applied_corrections:
             ts_block["applied_energy_corrections"] = applied_corrections
@@ -5167,12 +5274,112 @@ def _arkane_key_software(matched_arkane_key: Any) -> str | None:
     return names[0]
 
 
+_W_BAC_CORRECTION_OMITTED_COMPONENTS_INCOMPLETE = (
+    "bac_correction_omitted_components_incomplete"
+)
+
+
+def _bond_corrections_flag(record: Mapping[str, Any]) -> bool | None:
+    """``thermo.bond_corrections_applied`` (output.yml 1.2) when a bool, else None."""
+    thermo = record.get("thermo")
+    flag = thermo.get("bond_corrections_applied") if isinstance(thermo, Mapping) else None
+    return flag if isinstance(flag, bool) else None
+
+
+def _note_omitted_bac_on_thermo(
+    thermo_block: dict[str, Any] | None,
+    reasons: list[str],
+    bond_corrections_applied: Any = None,
+) -> None:
+    """Record on the thermo ``note`` that an exported BAC is not deposited.
+
+    Arkane skips bond types missing from its Petersson table and applies the
+    rest, so the thermo enthalpy can include a partial BAC while the deposit
+    holds no applied correction. ``bond_corrections_applied`` is output.yml
+    1.2's ``thermo.bond_corrections_applied``: True asserts Arkane applied it;
+    False means nothing is missing from the deposit, so no note; absent (None)
+    keeps the inference and words the note as what ARC exported. Appended,
+    never overwriting.
+    """
+    if thermo_block is None or not reasons or bond_corrections_applied is False:
+        return
+    if bond_corrections_applied is True:
+        subject = "A Petersson bond additivity correction was applied by Arkane to this species"
+    else:
+        subject = "ARC exported a Petersson bond additivity correction total for this species"
+    text = (
+        f"{subject} but it is not deposited as an applied correction because its "
+        f"bond decomposition was incomplete ({reasons[0]})."
+    )
+    existing = thermo_block.get("note")
+    thermo_block["note"] = f"{existing}; {text}" if existing else text
+
+
+def _component_is_usable(component: Any) -> bool:
+    return (
+        isinstance(component, Mapping)
+        and component.get("parameter_value") is not None
+        and component.get("contribution_value") is not None
+    )
+
+
+def _petersson_bac_omission_reason(
+    rec: Mapping[str, Any],
+    components: Any,
+    *,
+    target_kind: str,
+    element_symbols: Any,
+) -> tuple[str, str] | None:
+    """``(reason, detail)`` when a Petersson ``bac_total`` must not be sent.
+
+    TCKDB's ``assert_bac_total_has_required_components`` refuses a
+    ``bac_petersson`` total with no component of kind ``bond`` when it
+    targets a transition state or a species with at least one bond; only a
+    monatomic species has an honest componentless total. It does not check
+    that the components sum to the total, so a partial decomposition (a
+    component missing ``parameter_value``/``contribution_value``) would be
+    stored silently. ARC itself drops the whole list when any bond lacks a
+    parameter. ``None`` means send it (also for every other role or kind:
+    ``bac_melius`` is exempt on TCKDB's side).
+    """
+    scheme = rec.get("scheme")
+    if rec.get("application_role") != "bac_total" or not isinstance(scheme, Mapping):
+        return None
+    if scheme.get("kind") != "bac_petersson":
+        return None
+    items = components if isinstance(components, list) else []
+    if any(not _component_is_usable(c) for c in items):
+        return ("component_unusable",
+                "a bond component lacks a parameter or contribution value, so the "
+                "decomposition would not sum to the total.")
+    has_bond = any(c.get("component_kind") == "bond" for c in items)
+    if has_bond:
+        return None
+    monatomic = (
+        target_kind == "species"
+        and isinstance(element_symbols, (list, tuple))
+        and len(element_symbols) == 1
+    )
+    if monatomic:
+        return None
+    if not items:
+        return ("no_components",
+                "the record carries no bond components (ARC drops them all when a "
+                "bond has no parameter in Arkane's Petersson table).")
+    return ("no_bond_component", "the record carries no component of kind 'bond'.")
+
+
 def _build_applied_energy_corrections(
     applied_records: Any,
     *,
     source_calculation_key: str | None = None,
     warnings: list[dict[str, Any]] | None = None,
     warning_field: str = "applied_energy_corrections",
+    target_kind: Literal["species", "transition_state"] = "species",
+    element_symbols: Any = None,
+    target_label: str | None = None,
+    arkane_release: Mapping[str, Any] | None = None,
+    omitted_bac_reasons: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Translate ``output.yml`` per-species ``applied_energy_corrections``
     into the TCKDB ``AppliedEnergyCorrectionUploadPayload`` shape.
@@ -5196,6 +5403,22 @@ def _build_applied_energy_corrections(
     ``"p0_sp"`` / ``"ts_sp"``) for computed-reaction. The helper does
     not know about modes; it just takes the resolved key (or ``None``)
     and stamps it on every emitted entry.
+
+    A Petersson ``bac_total`` is only sent with a complete bond
+    decomposition (see ``_petersson_bac_omission_reason``): TCKDB refuses
+    the whole upload for a componentless one (``bac_total_requires_components``)
+    and does not check that a partial decomposition sums to the total. When
+    the decomposition is unusable the BAC correction alone is omitted, with a
+    ``bac_correction_omitted_components_incomplete`` warning; the AEC
+    correction and the rest of the payload are unaffected. ``target_kind``
+    and ``element_symbols`` (the species' composition, ``None`` when
+    unknown) say whether a componentless total is honest: only a monatomic
+    species has no bond to decompose. ``omitted_bac_reasons`` collects the
+    reason of each omitted BAC so the caller can note it on the thermo record.
+
+    ``arkane_release`` (see ``_arkane_workflow_tool_release``) is stamped as
+    ``scheme.workflow_tool_release`` on ``atom_energy``, ``bac_petersson`` and
+    ``bac_melius`` schemes, the kinds built from Arkane's tables.
     """
     if not isinstance(applied_records, list):
         return []
@@ -5208,6 +5431,35 @@ def _build_applied_energy_corrections(
             continue
 
         components_in = rec.get("components") or []
+        omission = _petersson_bac_omission_reason(
+            rec, components_in,
+            target_kind=target_kind, element_symbols=element_symbols,
+        )
+        if omission is not None:
+            reason, detail = omission
+            message = (
+                f"The Petersson bac_total was not sent for "
+                f"{target_label or 'this target'}: {detail} TCKDB refuses a "
+                f"bac_total without a bond decomposition and does not check that "
+                f"a partial one sums to the total, so the correction is omitted "
+                f"rather than sent unsupported. The rest of the payload is unchanged."
+            )
+            logger.warning("TCKDB %s: %s: %s", warning_field,
+                           _W_BAC_CORRECTION_OMITTED_COMPONENTS_INCOMPLETE, message)
+            if omitted_bac_reasons is not None:
+                omitted_bac_reasons.append(reason)
+            if warnings is not None:
+                warnings.append({
+                    "code": _W_BAC_CORRECTION_OMITTED_COMPONENTS_INCOMPLETE,
+                    "message": message,
+                    "field": warning_field,
+                    "context": {"source": "tckdb_arc_self_check",
+                                "action": "bac_correction_omitted",
+                                "reason": reason,
+                                "target_kind": target_kind,
+                                "species": target_label},
+                })
+            continue
         components_out: list[dict[str, Any]] = []
         for c in components_in:
             if not isinstance(c, Mapping):
@@ -5281,6 +5533,13 @@ def _build_applied_energy_corrections(
                     })
             else:
                 scheme_out["software"] = {"name": key_software}
+
+        if (
+            arkane_release is not None
+            and "workflow_tool_release" not in scheme_out
+            and scheme_out.get("kind") in ("atom_energy", "bac_petersson", "bac_melius")
+        ):
+            scheme_out["workflow_tool_release"] = dict(arkane_release)
 
         payload: dict[str, Any] = {
             "application_role": rec["application_role"],
@@ -6215,6 +6474,31 @@ def _arc_workflow_tool_release(
     return wt
 
 
+def _arkane_workflow_tool_release(
+    output_doc: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Arkane as the ``WorkflowToolReleaseRef`` of a table-derived scheme.
+
+    Contract: ``workflow_tool_release`` is the "workflow tool (e.g.
+    ARC/Arkane) whose data file was the proximate source, when the scheme was
+    looked up from a tool table". Arkane's tables are what ARC looked up, so
+    a scheme's identity should include the Arkane build (a later database
+    revision changing a parameter would otherwise collide with the stored
+    value). Only what ARC recorded: ``arkane_version`` and ``arkane_git_commit``
+    (``git_commit`` is 1-40 characters); ``None`` when neither is usable. This
+    is not a calculation's software (``calculation_software_is_workflow_tool``)
+    and never ARC.
+    """
+    version = output_doc.get("arkane_version")
+    commit = output_doc.get("arkane_git_commit")
+    release: dict[str, Any] = {"name": "Arkane"}
+    if version and str(version).strip():
+        release["version"] = str(version).strip()
+    if commit and 1 <= len(str(commit).strip()) <= 40:
+        release["git_commit"] = str(commit).strip()
+    return release if len(release) > 1 else None
+
+
 def _arc_analysis_software_release(
     output_doc: Mapping[str, Any],
 ) -> dict[str, Any] | None:
@@ -6419,6 +6703,9 @@ _STATMECH_FIELDS_BY_TARGET: dict[str, frozenset[str]] = {
 _W_TORSION_SCAN_NOT_BUILT = "torsion_scan_not_built"
 
 
+_W_STATMECH_TREATMENT_NOT_STATED = "statmech_treatment_not_stated"
+
+
 def _build_statmech_block_for_species(
     *,
     output_doc: Mapping[str, Any],
@@ -6430,8 +6717,20 @@ def _build_statmech_block_for_species(
     unbuilt_scans: Mapping[str, str] | None = None,
     warnings: list[dict[str, Any]] | None = None,
     warning_field: str = "statmech",
+    freq_hessian_available: bool = False,
 ) -> dict[str, Any] | None:
     """Build a ``target_model``-shaped statmech dict, or ``None``.
+
+    A rotor-aware ``statmech_treatment`` and each torsion's ``treatment_kind``
+    are sent only when ``freq_hessian_available``; plain ``rrho`` (no rotors) is
+    sent regardless. The reasoning:
+    Arkane ignores every rotor when the frequency log has no force-constant
+    matrix and runs the species as RRHO (RMG-Py ``arkane/statmech.py``
+    647-667), so ARC's rotor list does not show which treatment was applied.
+    Without Hessian evidence the field is omitted (TCKDB: "an absent field is
+    honest where an invented one would not be") and
+    ``statmech_treatment_not_stated`` is reported. The default is False, so a
+    caller that has not looked never claims a treatment.
 
     ``unbuilt_scans`` maps each scan ARC exported (``rotor_scans``) that the
     caller could not build to the reason. A torsion naming one keeps its
@@ -6546,8 +6845,52 @@ def _build_statmech_block_for_species(
         treatment = _classify_statmech_treatment(
             torsions_input, emitted_torsions=slim_torsions,
         )
-        if treatment is not None:
+        # ``rrho`` (an empty rotor list) does not depend on the Hessian: Arkane
+        # runs plain RRHO with no rotors whether or not it has a force-constant
+        # matrix. Only rotor-aware treatments, and each torsion's own
+        # ``treatment_kind`` ('hindered_rotor'), claim what Arkane did with the
+        # rotors, and it discards them all without a Hessian.
+        no_hessian = not freq_hessian_available
+        withhold_treatment = (
+            treatment is not None and treatment != "rrho" and no_hessian
+        )
+        strip_torsion_kinds = no_hessian and bool(slim_torsions)
+        if treatment is not None and not withhold_treatment:
             block["statmech_treatment"] = treatment
+        if strip_torsion_kinds:
+            slim_torsions = [
+                {k: v for k, v in t.items() if k != "treatment_kind"}
+                for t in slim_torsions
+            ]
+        if withhold_treatment or strip_torsion_kinds:
+            omitted = []
+            if withhold_treatment:
+                omitted.append("statmech_treatment")
+            if strip_torsion_kinds:
+                omitted.append("torsions[].treatment_kind")
+            message = (
+                f"No force-constant matrix (freq Hessian) was found for this "
+                f"species, and Arkane ignores every rotor without one, so ARC's "
+                f"rotor list does not show what treatment Arkane applied. Omitted: "
+                f"{', '.join(omitted)}"
+                + (f" (ARC's rotors would give {treatment!r})" if withhold_treatment else "")
+                + f". The {len(slim_torsions)} torsion(s) ARC recorded are still "
+                f"sent, without a treatment."
+            )
+            logger.warning("TCKDB %s: %s: %s", warning_field,
+                           _W_STATMECH_TREATMENT_NOT_STATED, message)
+            if warnings is not None:
+                warnings.append({
+                    "code": _W_STATMECH_TREATMENT_NOT_STATED,
+                    "message": message,
+                    "field": f"{warning_field}.statmech_treatment",
+                    "context": {"source": "tckdb_arc_self_check",
+                                "action": "statmech_treatment_omitted",
+                                "reason": "no_freq_hessian",
+                                "inferred_treatment": treatment,
+                                "omitted": omitted,
+                                "torsion_count": len(slim_torsions)},
+                })
 
         if slim_torsions:
             block["torsions"] = slim_torsions

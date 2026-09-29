@@ -99,7 +99,10 @@ def test_benzene_correction_schemes_name_the_program_that_computed_them(tmp_path
     for scheme in schemes.values():
         # The program in Arkane's matched key; no release: ARC records none.
         assert scheme["software"] == {"name": "gaussian"}
-        assert "workflow_tool_release" not in scheme
+        # The Arkane build whose table it is; never ARC, never scheme.software.
+        assert scheme["workflow_tool_release"] == {
+            "name": "Arkane", "version": ARKANE["version"],
+            "git_commit": ARKANE["revision"]}
 
 
 @pytest.mark.parametrize("name,banner,expected", [

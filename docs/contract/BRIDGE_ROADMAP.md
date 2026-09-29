@@ -151,6 +151,8 @@ Each item is one of three things:
 
 ### A1. Petersson `bac_total` without a bond component (**breaking**; top 10 #1)
 
+**Status (adapter 0.6.3): done.** See CURRENT_ARC_INTEGRATION.md, "Corrections and statmech evidence".
+
 **What to change.** Before emitting a `bac_total` from a `bac_petersson` scheme, require
 at least one component of kind `bond`:
 
@@ -313,6 +315,8 @@ level, then use it.
 
 ### A5. `statmech_treatment` can claim rotors Arkane dropped (**wrong**, conditional; top 10 #8)
 
+**Status (adapter 0.6.3): done.** `torsions[]` are still sent. See CURRENT_ARC_INTEGRATION.md, "Corrections and statmech evidence".
+
 **What happens.** `_classify_statmech_treatment` (`adapter.py:6020-6024`, `:6069`) derives
 `rrho_1d` / `rrho_nd` from the rotors ARC lists. Arkane ignores every rotor when the freq
 log has no force-constant matrix and treats the species as RRHO, logging only a warning
@@ -454,6 +458,8 @@ two levels "agree"; that was wrong.
 **Effort.** S, plus the gate case.
 
 ### A12. `scheme.atom_params` from `reference_atom_energies` ([gate])
+
+**Status (adapter 0.6.3): done.** See CURRENT_ARC_INTEGRATION.md, "Corrections and statmech evidence".
 
 **What to change.** For `atom_energy` corrections, read
 `energy_corrections[].reference_atom_energies` (per-element atomic energies, in hartree).
@@ -702,6 +708,31 @@ mode by a frequency window.
 The execution environment accounts for 293 absent leaves. ARC observes almost nothing
 about its runtime; do not export requested resources as runtime facts.
 
+### B12. Export the RMG-database commit behind Arkane's correction tables
+
+**What.** Export the RMG-database commit that supplied Arkane's correction tables
+(`RMG_DB_PATH/input/quantum_corrections/data.py`, `ARC:arc/statmech/arkane.py`
+~817-821), for example into `WorkflowToolReleaseRef.notes` or a dedicated field.
+
+**Why.** `arkane_git_commit` is the RMG-Py HEAD (`ARC:arc/output.py` ~348-366), not the
+database's. The adapter's `scheme.workflow_tool_release` (0.6.3) therefore cannot
+tell a database-only table revision from no change: it collides with the stored
+scheme (parameter-conflict 422), while each new RMG-Py commit needlessly creates
+a new scheme row.
+
+**Effort.** S.
+
+### B13. Export the Petersson components Arkane did apply
+
+**What.** When some bonds lack Petersson parameters, export the components Arkane did
+apply (they sum exactly to the applied total) instead of dropping the whole list
+(`ARC:arc/output.py` ~1592-1596).
+
+**Why.** Today a partial table makes the adapter omit the BAC (A1) although a
+complete, exact decomposition of the applied total exists.
+
+**Effort.** S.
+
 ---
 
 ## C. TCKDB schema and backend work
@@ -889,7 +920,7 @@ your behalf. Nothing is inferred today.
 | `ts_upload.reaction.reversible: true` (always) | `:3175` | Replace with B11 |
 | Kinetics `T0 = 1 K` when absent | `:6797` | Keep |
 | Freq/sp level falls back to `opt_level`; software falls back to the requested level's | `:4383-4404`, `:3400` | Keep for freq/sp; scan is already refused |
-| Correction scheme `software` / `workflow_tool_release` | `software` = `{name: <matched_arkane_key's software>}` since 0.6.1; `workflow_tool_release` not sent | See C10. **Never Arkane as `scheme.software`, never ARC as `scheme.workflow_tool_release`** (MR-2, AP-8) |
+| Correction scheme `software` / `workflow_tool_release` | `software` = `{name: <matched_arkane_key's software>}` since 0.6.1; `workflow_tool_release` = Arkane (recorded version/commit) on atom-energy, Petersson and Melius schemes since 0.6.3 | See C10. **Never Arkane as `scheme.software`, never ARC as `scheme.workflow_tool_release`** (MR-2, AP-8) |
 
 ### D4. Which upload modes to run
 

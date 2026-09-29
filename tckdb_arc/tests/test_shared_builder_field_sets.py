@@ -204,6 +204,7 @@ class TestBuilderOutputValidatesAgainstItsOwnTargetModel(unittest.TestCase):
             calc_keys_by_role={"opt": "opt", "freq": "freq", "sp": "sp"},
             workflow_tool_release=None,
             target_model=target_model,
+            freq_hessian_available=True,
         )
 
     def test_statmech_builder_for_species_root_validates_as_StatmechInBundle(self):
@@ -221,6 +222,7 @@ class TestBuilderOutputValidatesAgainstItsOwnTargetModel(unittest.TestCase):
             calc_keys_by_role={"opt": "r0_opt", "freq": "r0_freq", "sp": "r0_sp"},
             workflow_tool_release=None,
             target_model="BundleStatmechIn",
+            freq_hessian_available=True,
         )
         self.assertIsNotNone(block)
         for field in _STATMECH_FIELDS_BY_TARGET["BundleStatmechIn"]:
