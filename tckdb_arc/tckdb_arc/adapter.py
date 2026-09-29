@@ -1077,6 +1077,7 @@ class TCKDBAdapter:
             # ``source_calculations``.
             target_model="ThermoInBundle",
             warnings=warnings,
+            energy_level=_thermo_energy_level(output_doc),
         )
         if thermo_block is not None:
             bundle["thermo"] = thermo_block
@@ -2504,6 +2505,7 @@ class TCKDBAdapter:
             target_model="BundleThermoIn",
             warnings=warnings,
             warning_field=f"species[{actor_key}].thermo",
+            energy_level=_thermo_energy_level(output_doc),
         )
         if thermo_block is not None:
             species_block["thermo"] = thermo_block
@@ -5084,14 +5086,44 @@ _THERMO_FIELDS_BY_TARGET: dict[str, frozenset[str]] = {
 # 298.15 K, which is exactly ``formation_298k``.
 _THERMO_ENTHALPY_REFERENCE_KIND = "formation_298k"
 
-# That holds only when Arkane applied atom-energy corrections. With none
-# for the level of theory, ARC runs Arkane with useAtomCorrections=False
-# and every enthalpy (H298, NASA a6/b6, point H/G) is the raw absolute
-# energy, O(10^5) kJ/mol per heavy atom. The largest real |ΔHf| are
-# O(10^3-10^4) kJ/mol, so anything beyond this bound cannot be a
-# formation enthalpy. Interim: it misses H/H2-only species (raw energies
-# O(10^3) kJ/mol) and stands until ARC exports whether atom corrections
-# were applied.
+# That holds only when Arkane subtracted the atom energies of the level the
+# species' energies were computed at. With none for the level of theory,
+# ARC runs Arkane with useAtomCorrections=False and every enthalpy (H298,
+# NASA a6/b6, point H/G) is the raw absolute energy. output.yml 1.2 records
+# that switch (``thermo.atom_corrections_applied``) and the level whose
+# atom energies were used (``thermo.atom_corrections_level``), which can be
+# a stand-in for the energy level (ARC only warns). Enthalpies failing
+# either check are stripped from the block, keeping its entropy and Cp.
+_W_ENTHALPY_ATOM_CORRECTIONS_NOT_APPLIED = "enthalpy_atom_corrections_not_applied"
+_W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_MISMATCH = "enthalpy_atom_corrections_level_mismatch"
+_W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_UNVERIFIABLE = "enthalpy_atom_corrections_level_unverifiable"
+_W_ENTHALPY_NOT_FINITE = "enthalpy_not_finite"
+# Levels compare by effective method (the method with its dispersion
+# folded in) and basis, normalized exactly as ARC matches levels against
+# Arkane's database: case, hyphens and spaces and a trailing refit year are
+# ignored, and ``b3lyp`` + ``gd3bj``, ``b3lyp-d3bj`` and ``b3lyp-d3(bj)`` are
+# one method, while ``wb97xd``/``wb97xd3`` and ``ccsd(t)``/``ccsdt`` stay
+# two. Software, year, method_type and args never matter. Ported, since the
+# adapter must not import ARC, from ARC 1977e53b: arc/statmech/arkane.py
+# ``_normalize_name`` and ``_split_method_year``; arc/main.py
+# ``DISPERSION_SUFFIX_REGEX``, ``_canonical_dispersion`` and
+# ``_normalized_method_and_basis``. A parity test runs against ARC when it
+# has them.
+_METHOD_REFIT_YEAR_RE = re.compile(r"^(.*?)(\d{4})$")
+_DISPERSION_SUFFIX_RE = re.compile(r"g?d[234](\(?bj\)?)?$")
+# ARC's Arkane key match and data/AEC.yml lookup read only the method
+# string and basis, ignoring these level fields, so when either level sets
+# one, a matching ``atom_corrections_level`` cannot show that the applied
+# atom energies carried it (ARC applies plain B3LYP atom energies to
+# B3LYP + GD3BJ, gas-phase ones to SMD).
+_LEVEL_FIELDS_ARC_MATCHING_IGNORES = ("dispersion", "solvation_method")
+
+# Magnitude backstop, and the only check for thermo whose flag is null or
+# absent (pre-1.2 output, species Arkane loaded from its own YAML). Raw
+# absolute energies are about -1e5 kJ/mol per heavy atom, while the largest
+# real |ΔHf| are O(10^3-10^4) kJ/mol, so anything beyond this bound cannot
+# be a formation enthalpy. It misses every species whose raw total energy
+# is below about 7.6 hartree (2e4 kJ/mol): H, H2, He, the Li atom.
 _FORMATION_ENTHALPY_MAX_ABS_KJ_MOL = 2.0e4
 _W_ENTHALPY_NOT_FORMATION_MAGNITUDE = "enthalpy_not_formation_magnitude"
 _GAS_CONSTANT_J_MOL_K = 8.314462618
@@ -5142,6 +5174,146 @@ def _nasa_h298_kj_mol(nasa: Mapping[str, float]) -> float:
     return h_rt * _GAS_CONSTANT_J_MOL_K * t / 1000.0
 
 
+def _thermo_energy_level(output_doc: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Return the level a species' energies were computed at.
+
+    ``composite_method`` when set, else the SP level (``opt_level`` when
+    ``sp_level`` is null, as ARC then reuses the opt energy). output.yml
+    records one level per run, so under ARC ``adaptive_levels`` this is
+    not every species' energy level.
+    """
+    composite = output_doc.get("composite_method")
+    if isinstance(composite, Mapping):
+        return composite
+    return _resolve_level(output_doc, "sp")
+
+
+def _normalize_level_name(name: Any) -> str | None:
+    """ARC's ``arkane.py::_normalize_name``: lowercase, hyphens and spaces removed."""
+    if name is None:
+        return None
+    return str(name).replace("-", "").replace(" ", "").lower()
+
+
+def _canonical_dispersion(dispersion: Any) -> str:
+    """ARC's ``main.py::_canonical_dispersion``: ``gd3bj``, ``D3(BJ)`` and
+    ``EmpiricalDispersion=GD3BJ`` all give ``d3bj``; ``''`` for none."""
+    if not dispersion:
+        return ""
+    dispersion = str(dispersion).lower()
+    for character in ("-", " ", "(", ")"):
+        dispersion = dispersion.replace(character, "")
+    dispersion = dispersion.removeprefix("empiricaldispersion=")
+    if dispersion in ("gd2", "gd3", "gd3bj"):
+        dispersion = dispersion[1:]  # Gaussian's spelling.
+    return dispersion
+
+
+def _level_identity(level: Any) -> tuple[str, str | None] | None:
+    """ARC's ``main.py::_normalized_method_and_basis`` on an output.yml level dict.
+
+    Returns the normalized ``(effective method, basis)``, or ``None`` for a
+    level without a method.
+    """
+    if not isinstance(level, Mapping) or not level.get("method"):
+        return None
+    method = _normalize_level_name(level["method"])
+    year_split = _METHOD_REFIT_YEAR_RE.match(method)  # arkane.py::_split_method_year
+    if year_split is not None:
+        method = year_split.group(1)
+    suffix = _DISPERSION_SUFFIX_RE.search(method)
+    if suffix is not None:
+        method = method[:suffix.start()] + _canonical_dispersion(suffix.group())
+    method += _canonical_dispersion(level.get("dispersion"))
+    return method, _normalize_level_name(level.get("basis"))
+
+
+def _describe_level(level: Any) -> str:
+    if not isinstance(level, Mapping) or not level.get("method"):
+        return "an unrecorded level"
+    method = str(level["method"])
+    if level.get("dispersion"):
+        method += f" + {level['dispersion']}"
+    return "/".join([method, *([str(level["basis"])] if level.get("basis") else [])])
+
+
+def _enthalpy_validity_error(
+    block: Mapping[str, Any],
+    thermo_record: Mapping[str, Any],
+    energy_level: Mapping[str, Any] | None,
+) -> tuple[str, str] | None:
+    """Return why the block's enthalpies are not formation_298k, or ``None``.
+
+    Reads ARC's recorded atom-correction switch and level first; a null or
+    absent switch leaves only the non-finite and magnitude checks. A switch
+    that was on still needs ``atom_corrections_level`` to be the energy
+    level (``_level_identity``), and a match cannot be verified when either
+    level sets a dispersion or solvation field ARC's matching ignores.
+    """
+    applied = thermo_record.get("atom_corrections_applied")
+    if applied is False:
+        return (
+            _W_ENTHALPY_ATOM_CORRECTIONS_NOT_APPLIED,
+            "ARC recorded atom_corrections_applied=false: Arkane subtracted no "
+            "atom energies, so H298, the NASA fit and point H/G are raw absolute "
+            "energies, not formation enthalpies.",
+        )
+    if applied is True:
+        corrections_level = thermo_record.get("atom_corrections_level")
+        corrections_key = _level_identity(corrections_level)
+        if corrections_key is None or corrections_key != _level_identity(energy_level):
+            return (
+                _W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_MISMATCH,
+                f"Arkane subtracted the atom energies of "
+                f"{_describe_level(corrections_level)} from energies computed at "
+                f"{_describe_level(energy_level)}, so the enthalpies mix two levels "
+                f"and are not formation enthalpies.",
+            )
+        for side, level in (("energy level", energy_level),
+                            ("atom_corrections_level", corrections_level)):
+            for field in _LEVEL_FIELDS_ARC_MATCHING_IGNORES:
+                if level.get(field):
+                    return (
+                        _W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_UNVERIFIABLE,
+                        f"The {side} {_describe_level(level)} sets "
+                        f"{field}={level[field]!r}, which ARC's atom-energy matching "
+                        f"ignores, so a matching level does not show that the "
+                        f"subtracted atom energies carried it.",
+                    )
+    values = [block.get("h298_kj_mol"), *block.get("nasa", {}).values()]
+    values += [p.get(key) for p in block.get("points", ()) for key in ("h_kj_mol", "g_kj_mol")]
+    if any(v is not None and not math.isfinite(v) for v in values):
+        return (
+            _W_ENTHALPY_NOT_FINITE,
+            "An enthalpy value (H298, NASA coefficient or bound, point H or G) "
+            "is not finite.",
+        )
+    return _enthalpy_magnitude_error(block)
+
+
+def _has_enthalpy_content(block: Mapping[str, Any]) -> bool:
+    return "h298_kj_mol" in block or "nasa" in block or any(
+        "h_kj_mol" in p or "g_kj_mol" in p for p in block.get("points", ())
+    )
+
+
+def _strip_enthalpy_content(block: dict[str, Any]) -> None:
+    """Remove H298, the NASA fit, and point H/G; keep S298, point S and Cp.
+
+    A point left with only its temperature is dropped (TCKDB requires a
+    property on every point).
+    """
+    block.pop("h298_kj_mol", None)
+    block.pop("nasa", None)
+    points = [
+        {k: v for k, v in p.items() if k not in ("h_kj_mol", "g_kj_mol")}
+        for p in block.pop("points", ())
+    ]
+    points = [p for p in points if set(p) - {"temperature_k"}]
+    if points:
+        block["points"] = points
+
+
 def _enthalpy_magnitude_error(block: Mapping[str, Any]) -> tuple[str, str] | None:
     """Refuse a block whose enthalpy is too large to be a formation enthalpy.
 
@@ -5175,6 +5347,7 @@ def _build_thermo_block(
     target_model: Literal["ThermoInBundle", "BundleThermoIn"],
     warnings: list[dict[str, Any]] | None = None,
     warning_field: str = "thermo",
+    energy_level: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Build a ``target_model``-shaped thermo dict from ``output.yml`` thermo data.
 
@@ -5196,14 +5369,21 @@ def _build_thermo_block(
         nasa_high.tmax_k → nasa.t_high
         thermo_points    → points (per-point validation; bad points dropped)
 
-    Enthalpy content (h298, NASA, point H or G) adds
+    Enthalpy content (h298, NASA, point H or G) is first checked by
+    ``_enthalpy_validity_error`` against ARC's recorded atom-correction
+    switch and level (``energy_level`` is the species' energy level, see
+    ``_thermo_energy_level``). Enthalpy that is not a formation enthalpy is
+    stripped, keeping S298, point S and Cp; the refusal is appended to
+    ``warnings`` under ``warning_field`` with action
+    ``thermo_enthalpy_omitted`` (``thermo_omitted`` when nothing is left).
+
+    Remaining enthalpy content adds
     ``enthalpy_reference_kind="formation_298k"``; entropy content (s298,
     NASA, point S or G) adds ``reference_pressure_bar``. Neither is set on
     a Cp-only block. The finished block is checked with the shared
-    ``enthalpy_reference_error`` rule and ``_enthalpy_magnitude_error``
-    (uncorrected Arkane energies); a refused block is never emitted:
-    ``None`` is returned and the refusal is appended to ``warnings`` under
-    ``warning_field``.
+    ``enthalpy_reference_error`` rule; a refused block is never emitted:
+    ``None`` is returned and the refusal is appended to ``warnings`` with
+    action ``thermo_omitted``.
 
     ``calc_keys_by_role`` maps roles to the actual bundle-local keys.
     Both roots accept source links; reaction participants use their own
@@ -5268,23 +5448,31 @@ def _build_thermo_block(
     if sources:
         block["source_calculations"] = sources
 
-    has_scalar = "h298_kj_mol" in block or "s298_j_mol_k" in block
-    has_nasa = "nasa" in block
-    has_points = "points" in block
-    if not (has_scalar or has_nasa or has_points):
+    def has_content() -> bool:
+        return any(key in block for key in ("h298_kj_mol", "s298_j_mol_k", "nasa", "points"))
+
+    if not has_content():
         # Server would 422 us; nothing usable here.
         return None
 
-    points_out = block.get("points", ())
-    if "h298_kj_mol" in block or has_nasa or any(
-        "h_kj_mol" in p or "g_kj_mol" in p for p in points_out
-    ):
-        block["enthalpy_reference_kind"] = _THERMO_ENTHALPY_REFERENCE_KIND
-    # G = H - T*S carries the entropy's standard state as well.
-    if "s298_j_mol_k" in block or has_nasa or any(
-        "s_j_mol_k" in p or "g_kj_mol" in p for p in points_out
-    ):
-        block["reference_pressure_bar"] = _thermo_reference_pressure_bar(thermo_record)
+    # Refusals as (code, message), reported once the block's fate is known.
+    refusals: list[tuple[str, str]] = []
+    if _has_enthalpy_content(block):
+        enthalpy_refusal = _enthalpy_validity_error(block, thermo_record, energy_level)
+        if enthalpy_refusal is not None:
+            refusals.append(enthalpy_refusal)
+            _strip_enthalpy_content(block)
+    keep = has_content()
+
+    if keep:
+        points_out = block.get("points", ())
+        if _has_enthalpy_content(block):
+            block["enthalpy_reference_kind"] = _THERMO_ENTHALPY_REFERENCE_KIND
+        # G = H - T*S carries the entropy's standard state as well.
+        if "s298_j_mol_k" in block or "nasa" in block or any(
+            "s_j_mol_k" in p or "g_kj_mol" in p for p in points_out
+        ):
+            block["reference_pressure_bar"] = _thermo_reference_pressure_bar(thermo_record)
 
     # Belt-and-suspenders: this is the exact bug class that motivated
     # ``target_model`` in the first place (see
@@ -5302,26 +5490,28 @@ def _build_thermo_block(
         )
 
     # TCKDB refuses the whole upload over an incoherent enthalpy
-    # declaration. Never send a block the shared rule would refuse, nor
-    # one whose enthalpy cannot be the formation enthalpy it declares:
-    # drop only the thermo block (the enclosing payload stays valid
-    # without it) and record why, next to the server's own warnings.
-    refusal = enthalpy_reference_error(block) or _enthalpy_magnitude_error(block)
-    if refusal is not None:
-        code, message = refusal
+    # declaration. Never send a block the shared rule would refuse: drop
+    # only the thermo block (the enclosing payload stays valid without
+    # it). Record every refusal next to the server's own warnings.
+    if keep:
+        shared_refusal = enthalpy_reference_error(block)
+        if shared_refusal is not None:
+            refusals.append(shared_refusal)
+            keep = False
+    action = "thermo_enthalpy_omitted" if keep else "thermo_omitted"
+    for code, message in refusals:
         logger.warning(
-            "TCKDB thermo omitted from %s: producer self-check refused it (%s): %s",
-            warning_field, code, message,
+            "TCKDB thermo %s: producer self-check refused %s (%s): %s",
+            warning_field, "its enthalpy" if keep else "it", code, message,
         )
         if warnings is not None:
             warnings.append({
                 "code": code,
                 "message": message,
                 "field": warning_field,
-                "context": {"source": "tckdb_arc_self_check", "action": "thermo_omitted"},
+                "context": {"source": "tckdb_arc_self_check", "action": action},
             })
-        return None
-    return block
+    return block if keep else None
 
 
 def _build_nasa_block(

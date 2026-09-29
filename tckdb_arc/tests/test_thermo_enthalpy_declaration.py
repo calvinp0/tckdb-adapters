@@ -301,20 +301,32 @@ def _uncorrected(thermo):
     return thermo
 
 
-def _magnitude_warning(field="thermo"):
+def _magnitude_warning(field="thermo", action="thermo_enthalpy_omitted"):
     return {"code": "enthalpy_not_formation_magnitude", "field": field,
-            "context": {"source": "tckdb_arc_self_check", "action": "thermo_omitted"}}
+            "context": {"source": "tckdb_arc_self_check", "action": action}}
 
 
-def test_uncorrected_species_thermo_is_omitted_and_surfaced(tmp_path):
+def test_uncorrected_species_thermo_enthalpy_is_stripped_and_surfaced(tmp_path):
     record = _full_record()
     record["thermo"] = _uncorrected(record["thermo"])
     with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
         outcome = _adapter(tmp_path).submit_computed_species_from_output(
             output_doc=_fake_output_doc(), species_record=record)
     payload = json.loads(outcome.payload_path.read_text())
-    assert "thermo" not in payload
     ComputedSpeciesUploadRequest.model_validate(payload)
+    # Only the enthalpy goes: S298, point S/Cp, bounds and provenance stay.
+    thermo = record["thermo"]
+    assert payload["thermo"] == {
+        "s298_j_mol_k": thermo["s298_j_mol_k"],
+        "tmin_k": thermo["tmin_k"],
+        "tmax_k": thermo["tmax_k"],
+        "points": [{k: p[k] for k in ("temperature_k", "cp_j_mol_k", "s_j_mol_k")}
+                   for p in thermo["thermo_points"]],
+        "source_calculations": payload["thermo"]["source_calculations"],
+        "reference_pressure_bar": 1.01325,
+    }
+    assert payload["thermo"]["source_calculations"]
+    assert enthalpy_reference_error(payload["thermo"]) is None
     [warning] = outcome.warnings
     assert {k: warning[k] for k in ("code", "field", "context")} == _magnitude_warning()
     assert "atom-energy corrections" in warning["message"]
@@ -322,17 +334,43 @@ def test_uncorrected_species_thermo_is_omitted_and_surfaced(tmp_path):
     assert json.loads(outcome.sidecar_path.read_text())["warnings"] == outcome.warnings
 
 
-@pytest.mark.parametrize("record", [
-    {"h298_kj_mol": -235.1 + _UNCORRECTED_SHIFT_KJ_MOL, "s298_j_mol_k": 186.3},
-    {"thermo_points": [{"temperature_k": 300.0, "cp_j_mol_k": 35.7,
-                        "h_kj_mol": -74.8 + _UNCORRECTED_SHIFT_KJ_MOL}]},
-    _uncorrected(NASA),
+@pytest.mark.parametrize("record,remaining", [
+    ({"h298_kj_mol": -235.1 + _UNCORRECTED_SHIFT_KJ_MOL, "s298_j_mol_k": 186.3},
+     {"s298_j_mol_k": 186.3, "reference_pressure_bar": 1.01325}),
+    ({"thermo_points": [{"temperature_k": 300.0, "cp_j_mol_k": 35.7,
+                         "h_kj_mol": -74.8 + _UNCORRECTED_SHIFT_KJ_MOL}]},
+     {"points": [{"temperature_k": 300.0, "cp_j_mol_k": 35.7}]}),
+    (_uncorrected(NASA), None),
 ], ids=["h298", "point_h", "nasa_only"])
-def test_uncorrected_enthalpy_is_refused_from_every_source(record):
+def test_uncorrected_enthalpy_is_refused_from_every_source(record, remaining):
     warnings = []
-    assert _build(record, warnings=warnings) is None
+    assert _build(record, warnings=warnings) == remaining
+    action = "thermo_omitted" if remaining is None else "thermo_enthalpy_omitted"
     assert [{k: w[k] for k in ("code", "field", "context")} for w in warnings] == [
-        _magnitude_warning()]
+        _magnitude_warning(action=action)]
+
+
+# Low and high NASA ranges that disagree at 298.15 K: one gives a formation
+# enthalpy, the other a raw energy, so evaluating the wrong range flips the
+# verdict. With t_mid = 1000 K the low range applies; with t_mid = 250 K the
+# high one does.
+_LOW_OK = [4.0, -1e-3, 2e-6, -1e-9, 4e-13, -29000.0, 1.0]
+_LOW_RAW = [4.0, -1e-3, 2e-6, -1e-9, 4e-13, -29000.0 + _UNCORRECTED_SHIFT_KJ_MOL * 1000.0 / _R, 1.0]
+
+
+@pytest.mark.parametrize("t_mid,low,high,refused", [
+    (1000.0, _LOW_OK, _LOW_RAW, False),
+    (1000.0, _LOW_RAW, _LOW_OK, True),
+    (250.0, _LOW_RAW, _LOW_OK, False),
+    (250.0, _LOW_OK, _LOW_RAW, True),
+])
+def test_nasa_h298_uses_the_range_containing_298_k(t_mid, low, high, refused):
+    record = {"nasa_low": {"tmin_k": 100.0, "tmax_k": t_mid, "coeffs": low},
+              "nasa_high": {"tmin_k": t_mid, "tmax_k": 5000.0, "coeffs": high}}
+    warnings = []
+    block = _build(record, warnings=warnings)
+    assert (block is None) is refused
+    assert [w["code"] for w in warnings] == (["enthalpy_not_formation_magnitude"] if refused else [])
 
 
 def test_formation_magnitude_enthalpy_passes():
@@ -346,10 +384,12 @@ def test_formation_magnitude_enthalpy_passes():
     (2.0e4, False), (-2.0e4, False), (2.0e4 + 1e-6, True), (-2.0e4 - 1e-6, True),
 ])
 def test_formation_magnitude_bound_is_inclusive(h298, refused):
-    for record in ({"h298_kj_mol": h298},
-                   {"thermo_points": [{"temperature_k": 300.0, "h_kj_mol": h298}]}):
+    for record in ({"h298_kj_mol": h298, "s298_j_mol_k": 186.3},
+                   {"thermo_points": [{"temperature_k": 300.0, "cp_j_mol_k": 35.7, "h_kj_mol": h298}]}):
         warnings = []
         block = _build(record, warnings=warnings)
-        assert (block is None) is refused
+        assert ("enthalpy_reference_kind" not in block) is refused
+        assert (("h298_kj_mol" in block or "h_kj_mol" in block.get("points", [{}])[0])
+                is not refused)
         assert [w["code"] for w in warnings] == (
             ["enthalpy_not_formation_magnitude"] if refused else [])

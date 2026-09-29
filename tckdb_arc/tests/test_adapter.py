@@ -9,6 +9,7 @@ replaced by a stub via the adapter's ``client_factory`` parameter.
 
 import copy
 import json
+import math
 import os
 import pathlib
 import shutil
@@ -9963,12 +9964,17 @@ class TestPhase3EvidenceParity(unittest.TestCase):
         import yaml
         from arc.parser_evidence import (
             EVIDENCE_FILENAME,
+            OUTPUT_SCHEMA_VERSION,
             build_parser_evidence,
             write_parser_evidence_atomic,
         )
 
         fixture = pathlib.Path(__file__).parent / "fixtures" / "golden" / "phase3_output.yml"
         base = yaml.safe_load(fixture.read_text())
+        # The producer stamps its own output schema version into the sidecar,
+        # and the adapter requires the document's to equal it: follow
+        # whichever ARC is installed (1.1 on main, 1.2 from a10e8ae0).
+        base["schema_version"] = OUTPUT_SCHEMA_VERSION
         for record in (base["species"][0], base["transition_states"][0]):
             for field in ("freq_log", "gsm_log"):
                 if record.get(field):
@@ -10155,6 +10161,14 @@ class TestPhase3EvidenceParity(unittest.TestCase):
                              invocation["electronic_energy_hartree"])
             self.assertEqual(producer_point["max_gradient_hartree_per_bohr"],
                              invocation["max_gradient_hartree_per_bohr"])
+            self.assertEqual(producer_point["rms_gradient_hartree_per_bohr"],
+                             invocation["rms_gradient_hartree_per_bohr"])
+            # The literal values the helper wrote: the energy file's -1.7 and
+            # the gradient block (0, 0, +-0.02 on the end atoms).
+            self.assertEqual(producer_point["electronic_energy_hartree"], -1.7)
+            self.assertEqual(producer_point["max_gradient_hartree_per_bohr"], 0.02)
+            self.assertAlmostEqual(producer_point["rms_gradient_hartree_per_bohr"],
+                                   math.sqrt(2 * 0.02 ** 2 / 9))
 
             sidecar_doc, sidecar_adapter, payload = self._sidecar_reaction_payload(root, base, evidence)
             lookup = sidecar_adapter._evidence.lookup(sidecar_doc, "transition_state", "TS0", "gsm")
@@ -10169,8 +10183,14 @@ class TestPhase3EvidenceParity(unittest.TestCase):
                          producer_point["electronic_energy_hartree"])
         self.assertEqual(points[matched_index]["max_gradient"],
                          producer_point["max_gradient_hartree_per_bohr"])
+        self.assertEqual(points[matched_index]["rms_gradient"],
+                         producer_point["rms_gradient_hartree_per_bohr"])
+        self.assertEqual(points[matched_index]["electronic_energy_hartree"], -1.7)
+        self.assertEqual(points[matched_index]["max_gradient"], 0.02)
+        self.assertAlmostEqual(points[matched_index]["rms_gradient"], math.sqrt(2 * 0.02 ** 2 / 9))
         self.assertEqual(result["zero_energy_reference_hartree"],
                          producer_point["electronic_energy_hartree"])
+        self.assertEqual(result["zero_energy_reference_hartree"], -1.7)
         self.assertEqual(points[matched_index]["relative_energy_kj_mol"], 0.0)
         for index, point in points.items():
             if index != matched_index:

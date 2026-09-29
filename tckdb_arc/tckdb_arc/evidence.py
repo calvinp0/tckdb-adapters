@@ -13,7 +13,7 @@ from typing import Any, Mapping
 
 logger = logging.getLogger("tckdb_arc")
 
-SUPPORTED_OUTPUT_SCHEMA_VERSIONS = frozenset({"1.0", "1.1"})
+SUPPORTED_OUTPUT_SCHEMA_VERSIONS = frozenset({"1.0", "1.1", "1.2"})
 EVIDENCE_SCHEMA_NAME = "arc-tckdb-evidence"
 SUPPORTED_EVIDENCE_SCHEMA_VERSIONS = frozenset({"1.0"})
 EVIDENCE_FILENAME = "tckdb_evidence.json"
