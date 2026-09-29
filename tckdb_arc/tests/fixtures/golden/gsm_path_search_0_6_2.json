@@ -1,0 +1,114 @@
+{
+ "_comment": "The GSM path-search calculation the golden TS0 payloads carried at adapter 0.6.2, labelled with opt_level and the opt program before 0.6.4 stopped filing GSM guesses (ARC exports no GSM level). Used by test_golden_corpus.py's strip-and-restore proof.",
+ "computed_reaction": {
+  "key": "ts_guess",
+  "level_of_theory": {
+   "basis": "def2-svp",
+   "method": "wb97xd"
+  },
+  "path_search_result": {
+   "is_double_ended": true,
+   "method": "gsm",
+   "n_points": 3,
+   "points": [
+    {
+     "geometry": {
+      "xyz_text": "3\ngsm_point_0\nH 0 0 -1.2\nH 0 0 0\nH 0 0 1.2"
+     },
+     "path_coordinate": 0.0,
+     "point_index": 0
+    },
+    {
+     "electronic_energy_hartree": -1.7,
+     "geometry": {
+      "xyz_text": "3\ngsm_point_1\nH 0 0 -1.0\nH 0 0 0\nH 0 0 1.0"
+     },
+     "path_coordinate": 0.2,
+     "point_index": 1,
+     "relative_energy_kj_mol": 0.0
+    },
+    {
+     "electronic_energy_hartree": -1.55,
+     "geometry": {
+      "xyz_text": "3\ngsm_point_2\nH 0 0 -0.8\nH 0 0 0\nH 0 0 0.8"
+     },
+     "is_ts_guess": true,
+     "max_gradient": 0.03,
+     "path_coordinate": 0.4,
+     "point_index": 2,
+     "relative_energy_kj_mol": 393.82497875444926,
+     "rms_gradient": 0.01
+    }
+   ],
+   "selected_ts_point_index": 2,
+   "source_endpoint_count": 2,
+   "zero_energy_reference_hartree": -1.7
+  },
+  "quality": "raw",
+  "software_release": {
+   "name": "gaussian",
+   "version": "16"
+  },
+  "type": "path_search",
+  "workflow_tool_release": {
+   "git_commit": "e5f3d22f",
+   "name": "ARC",
+   "version": "1.1.0"
+  }
+ },
+ "transition_state": {
+  "level_of_theory": {
+   "basis": "def2-svp",
+   "method": "wb97xd"
+  },
+  "path_search_result": {
+   "is_double_ended": true,
+   "method": "gsm",
+   "n_points": 3,
+   "points": [
+    {
+     "geometry": {
+      "xyz_text": "3\ngsm_point_0\nH 0 0 -1.2\nH 0 0 0\nH 0 0 1.2"
+     },
+     "path_coordinate": 0.0,
+     "point_index": 0
+    },
+    {
+     "electronic_energy_hartree": -1.7,
+     "geometry": {
+      "xyz_text": "3\ngsm_point_1\nH 0 0 -1.0\nH 0 0 0\nH 0 0 1.0"
+     },
+     "path_coordinate": 0.2,
+     "point_index": 1,
+     "relative_energy_kj_mol": 0.0
+    },
+    {
+     "electronic_energy_hartree": -1.55,
+     "geometry": {
+      "xyz_text": "3\ngsm_point_2\nH 0 0 -0.8\nH 0 0 0\nH 0 0 0.8"
+     },
+     "is_ts_guess": true,
+     "max_gradient": 0.03,
+     "path_coordinate": 0.4,
+     "point_index": 2,
+     "relative_energy_kj_mol": 393.82497875444926,
+     "rms_gradient": 0.01
+    }
+   ],
+   "selected_ts_point_index": 2,
+   "source_endpoint_count": 2,
+   "zero_energy_reference_hartree": -1.7
+  },
+  "quality": "raw",
+  "software_release": {
+   "name": "gaussian",
+   "version": "16"
+  },
+  "type": "path_search",
+  "workflow_tool_release": {
+   "git_commit": "e5f3d22f",
+   "name": "ARC",
+   "version": "1.1.0"
+  }
+ }
+}

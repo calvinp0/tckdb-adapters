@@ -21,7 +21,10 @@ The adapter reads its key from `TCKDB_INTEGRATION_API_KEY`, so an ambient
 
 Validated against TCKDB_v2 `12c8cc63` (`backend/app` and `backend/alembic`
 identical to the pinned `4adf7ff4`), with tckdb-client 0.95.1, tckdb-schemas
-0.53.0 and tckdb-arc 0.6.2: 40 passed and 6 xfailed, fresh and on replay. The
+0.53.0 and tckdb-arc 0.6.2: 40 passed and 6 xfailed, fresh and on replay. (Adapter
+0.6.4 fixes two of those xfails, the IRC evidence pair, and changes the golden TS0
+assertions for the omitted GSM path search; that run has not been repeated against a
+live backend.) The
 benzene computed-species upload drew only `missing_literature_provenance` (×2).
 The strict xfails
 below match on server warning codes and read-back shapes, so a TCKDB change to
@@ -112,7 +115,7 @@ counts are taken only once two consecutive snapshots agree (see T4).
 | Corpus | Modes | Read back |
 |---|---|---|
 | `golden` (Phase 3, `tckdb_evidence.json`) | species, conformer, reaction, TS | calculation owners and types; H2 thermo stored as S and Cp only (no H298, NASA, point H or G, or reference kind), because pre-1.2 output cannot show the enthalpy is a formation enthalpy and H2 is too light for the magnitude guard, with the `enthalpy_formation_unverifiable_light_species` warning; reference pressure not stated (read back as null; the golden output records none, so the adapter omits it with the `thermo_reference_pressure_not_stated` warning) and source calculations; Hessian values; conformer-mode log and input artifacts |
-| `golden` + kinetics at T0 = 300 K and Arkane commit | reaction, TS | Arrhenius `a = A/T0**n`, `n`, `Ea`, kinetics source-calculation roles and owners, TS composition against both sides, IRC and GSM results, the standalone TS's calculations |
+| `golden` + kinetics at T0 = 300 K and Arkane commit | reaction, TS | Arrhenius `a = A/T0**n`, `n`, `Ea`, kinetics source-calculation roles and owners, TS composition against both sides, IRC result, the standalone TS's calculations (no GSM path search since 0.6.4: ARC exports no GSM level) |
 | `arc_1_2` (output 1.2 atom-correction flags) | species, conformer | formation enthalpy kept for CH4, stripped to S and Cp (no H298, NASA, point H or G, or reference kind) for the other five, with the producer warning |
 | `arc_1_2` CH4 + `energy_corrections` | species | applied AEC and BAC totals, units, components, source `sp` calculation |
 | `current_arc` H2O (`parser_evidence.json`) | species | Hessian stored verbatim in its own frame |
@@ -131,7 +134,10 @@ files.
 whether the IRC connects the declared reactants and products is
 `ts_checks.IRC` (ARC `arc/output.py`, `_ts_checks_to_dict`). The golden TS has
 `irc_converged: true` and no `ts_checks`, and the gate checks that it is
-deposited without validation evidence (read back as `irc: absent`).
+deposited without validation evidence (read back as `irc: absent`). Since 0.6.4 a
+`ts_checks.IRC` verdict of true or false is deposited as passed or failed
+evidence (the `golden_irc_passed` and `golden_irc_failed` cases; their xfails were
+removed with the fix, not yet run against a live backend).
 
 Adapter gaps are pinned as strict xfails with `raises=AssertionError`, so
 fixing one makes the gate fail until the marker is removed, and a setup
@@ -141,9 +147,7 @@ failure (which raises `RuntimeError`) fails the test instead of satisfying it:
 - artifact-batch sidecars lose the status code, the upload request ID and the
   replay flag, because tckdb-client (0.93–0.95) keeps only the response body (one
   xfail per field);
-- the adapter never reads `ts_checks.IRC`: a TS with `IRC: true` is deposited
-  without passing IRC evidence, and one with `IRC: false` without failing
-  evidence.
+
 
 `test_computed_species_thermo_names_arkane` was such an xfail until adapter
 0.6.1, which names Arkane on computed-species thermo and statmech; it is now

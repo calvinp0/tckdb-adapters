@@ -2359,15 +2359,42 @@ class TestComputedSpeciesBundle(unittest.TestCase):
         record["conformer_energies"] = list(energies)
         return record
 
-    def test_multi_conformer_emits_all_unique_geometries(self):
-        # ARC has 1 selected + 2 distinct alt geometries → 3 conformers
-        # in the bundle. Selected stays first.
+    def test_screened_conformers_are_not_uploaded_and_are_reported(self):
+        # ARC screens conformers at its conformer level, which output.yml does
+        # not export; a calculation for a screened conformer would have to
+        # state a level, and opt_level is not the level the screen ran at
+        # (default wb97xd/def2svp against wb97xd/def2tzvp). The 2 distinct
+        # screened geometries are omitted and reported; the selected
+        # conformer is the only one sent.
+        record = self._record_with_alt_conformers()
+        outcome, _, payload = self._submit(record=record)
+        self.assertEqual([c["key"] for c in payload["conformers"]], ["conf0"])
+        [warning] = [w for w in outcome.warnings
+                     if w["code"] == "conformer_level_not_stated"]
+        self.assertEqual(warning["context"]["omitted_count"], "2")
+        self.assertEqual(warning["context"]["action"], "screened_conformers_omitted")
+        self.assertIn("conformer level", warning["message"])
+        self.assertNotIn("alt0", json.dumps(payload))
+
+    def test_screened_conformers_are_never_labelled_with_the_opt_level(self):
+        # The regression this pins: every screened conformer used to carry a
+        # primary opt calculation at opt_level. No calculation of the bundle
+        # other than the selected conformer's own may exist.
         record = self._record_with_alt_conformers()
         _, _, payload = self._submit(record=record)
-        self.assertEqual(len(payload["conformers"]), 3)
-        self.assertEqual(payload["conformers"][0]["key"], "conf0")
-        self.assertEqual(payload["conformers"][1]["key"], "alt0")
-        self.assertEqual(payload["conformers"][2]["key"], "alt1")
+        keys = [payload["conformers"][0]["primary_calculation"]["key"]] + [
+            c["key"] for c in payload["conformers"][0]["additional_calculations"]]
+        self.assertEqual(keys, ["opt", "freq", "sp"])
+        self.assertFalse(
+            [c for c in payload["conformers"] if c["key"] != "conf0"])
+
+    def test_no_screened_conformer_warning_without_distinct_alternatives(self):
+        record = _full_record()
+        record["conformers"] = [record["xyz"], record["xyz"]]
+        outcome, _, payload = self._submit(record=record)
+        self.assertEqual(len(payload["conformers"]), 1)
+        self.assertNotIn("conformer_level_not_stated",
+                         {w["code"] for w in outcome.warnings})
 
     def test_multi_conformer_keys_are_deterministic_across_replays(self):
         # Same input → same idempotency key, even with multiple alt
@@ -2399,84 +2426,17 @@ class TestComputedSpeciesBundle(unittest.TestCase):
         }
         self.assertTrue(thermo_calc_keys.issubset({"opt", "freq", "sp"}))
 
-    def test_alt_conformer_carries_minimal_opt_only(self):
-        # Each alt conformer ships with one bare opt calc (same level +
-        # software as the selected) and zero additional_calculations.
-        # ``opt_result.final_energy_hartree`` is intentionally NOT
-        # populated — the adapter has no absolute hartree to attest to
-        # on a screened-conformer anchor. No misleading result fields
-        # of any kind.
-        record = self._record_with_alt_conformers()
-        _, _, payload = self._submit(record=record)
-        alt = payload["conformers"][1]
-        alt_opt = alt["primary_calculation"]
-        self.assertEqual(alt_opt["type"], "opt")
-        self.assertEqual(alt_opt["key"], "alt0_opt")
-        # No result block of any flavor — opt/freq/sp/irc/scan/path_search
-        # all forbidden on a screened-conformer anchor row.
-        for forbidden in (
-            "opt_result", "freq_result", "sp_result",
-            "irc_result", "path_search_result", "scan_result",
-        ):
-            self.assertNotIn(forbidden, alt_opt)
-        # And no input_geometries — we don't have the alt's pre-opt
-        # structure on the record (opt_input_xyz is the SELECTED
-        # conformer's input, not this one's).
-        self.assertNotIn("input_geometries", alt_opt)
-        self.assertEqual(alt["additional_calculations"], [])
-        # Output geometry is the alt's geometry, not the selected one.
-        out_geoms = alt_opt["output_geometries"]
-        self.assertEqual(len(out_geoms), 1)
-        self.assertIn("C 0.1 0.0 0.0", out_geoms[0]["geometry"]["xyz_text"])
-        self.assertEqual(out_geoms[0]["role"], "final")
-        # Same level / software as the selected conformer's opt.
-        selected_opt = payload["conformers"][0]["primary_calculation"]
-        self.assertEqual(
-            alt_opt["level_of_theory"], selected_opt["level_of_theory"],
-        )
-        self.assertEqual(
-            alt_opt["software_release"], selected_opt["software_release"],
-        )
-
-    def test_alt_conformer_opt_carries_screened_conformer_origin(self):
-        # The schema forces a primary_calculation on every conformer, so
-        # alt conformers ship a bare opt. That row must carry an explicit
-        # screened-conformer origin marker under parameters_json so
-        # consumers cannot mistake it for an independently executed opt
-        # job that just happened to lack result data. The validated
-        # ``origin_kind`` enum member is ``derived`` (the backend hoists
-        # it to CalculationWithResultsPayload.origin_kind); the
-        # ARC-specific ``screened_conformer`` distinction rides on the
-        # opaque ``origin_detail`` key.
-        record = self._record_with_alt_conformers()
-        _, _, payload = self._submit(record=record)
-        alt_opt = payload["conformers"][1]["primary_calculation"]
-        origin = alt_opt.get("parameters_json", {}).get("tckdb_origin")
-        self.assertIsNotNone(origin, "alt opt must carry tckdb_origin")
-        self.assertEqual(origin["origin_kind"], "derived")
-        self.assertEqual(origin["origin_detail"], "screened_conformer")
-        self.assertFalse(origin["independent_ess_job"])
-        # The selected conformer's opt is a real ESS run and must NOT
-        # carry the screened-conformer marker.
-        selected_opt = payload["conformers"][0]["primary_calculation"]
-        selected_origin = (
-            selected_opt.get("parameters_json", {}).get("tckdb_origin")
-            if selected_opt.get("parameters_json") else None
-        )
-        if selected_origin is not None:
-            self.assertNotEqual(selected_origin.get("origin_detail"),
-                                "screened_conformer")
-
     def test_every_emitted_origin_kind_is_a_valid_enum_member(self):
         # Schema-conformance guard. The backend hoists
         # ``parameters_json.tckdb_origin.origin_kind`` into the validated
         # ``CalculationWithResultsPayload.origin_kind`` enum, so ANY
         # origin_kind ARC emits — anywhere in the bundle, at any depth —
         # must be one of {executed, reused_result, imported, derived}.
-        # This bundle exercises both markers ARC produces today: the
-        # reused-result SP row and the screened-conformer (derived) alt
-        # opt row. A regression that reintroduces a non-enum value (e.g.
-        # the historical "screened_conformer") is what triggered the 422.
+        # This bundle exercises the marker ARC produces today: the
+        # reused-result SP row (screened conformers are no longer filed,
+        # so no ``derived`` row). A regression that reintroduces a non-enum
+        # value (e.g. the historical "screened_conformer") is what triggered
+        # the 422.
         from tckdb_arc.adapter import VALID_TCKDB_ORIGIN_KINDS
         record = self._record_with_alt_conformers()
         _, _, payload = self._submit(record=record)
@@ -2493,8 +2453,8 @@ class TestComputedSpeciesBundle(unittest.TestCase):
                     _walk(item)
 
         _walk(payload)
-        # Both markers present (reused_result + derived), and nothing
-        # outside the enum leaked through.
+        # The reused-result marker is present and nothing outside the enum
+        # leaked through.
         self.assertTrue(found, "expected at least one origin_kind in payload")
         for kind in found:
             self.assertIn(
@@ -2502,32 +2462,6 @@ class TestComputedSpeciesBundle(unittest.TestCase):
                 f"origin_kind {kind!r} is not a valid backend enum member",
             )
         self.assertIn("reused_result", found)
-        self.assertIn("derived", found)
-
-    def test_alt_conformer_relative_energy_is_not_uploaded(self):
-        # ARC's ``conformer_energies`` are workflow-local relative E0
-        # values whose reference ("lowest in this screening set")
-        # doesn't survive a round-trip through TCKDB, which is
-        # workflow-tool agnostic. Drop them at this seam: no ``note``
-        # carrier, no ``parameters_json`` carrier, nothing on the wire
-        # anywhere mentioning relative_e0_kj_mol.
-        record = self._record_with_alt_conformers(
-            energies=(0.0, 2.34, 5.0),
-        )
-        _, _, payload = self._submit(record=record)
-        alt0 = payload["conformers"][1]
-        # No note (or, if a future producer adds an unrelated note,
-        # at least no relative_e0_kj_mol mention).
-        self.assertNotIn("relative_e0_kj_mol", alt0.get("note", "") or "")
-        # No parameters_json carrier either — the screened_conformer
-        # marker is the only parameters_json entry on the alt opt.
-        alt_opt_pj = alt0["primary_calculation"]["parameters_json"]
-        self.assertNotIn("relative_e0_kj_mol",
-                         alt_opt_pj.get("tckdb_origin", {}))
-        for k in alt_opt_pj:
-            self.assertNotIn("relative_e0_kj_mol", k)
-        # And the corresponding opt calc still carries no result block.
-        self.assertNotIn("opt_result", alt0["primary_calculation"])
 
     def test_no_relative_energy_string_anywhere_in_payload(self):
         # Hard guardrail: even if a future producer or fixture stages
@@ -2556,22 +2490,19 @@ class TestComputedSpeciesBundle(unittest.TestCase):
         self.assertEqual(len(payload["conformers"]), 1)
         self.assertEqual(payload["conformers"][0]["key"], "conf0")
 
-    def test_alt_conformer_invalid_xyz_is_skipped_cleanly(self):
-        # Empty / malformed xyz entries in ``conformers`` are skipped
-        # individually; valid entries still emit. Indexing on the alt
-        # keys is tied to dedup'd output position, not to the source
-        # list index, so gaps in the source don't leave gaps in keys.
+    def test_alt_conformer_invalid_xyz_is_not_counted_as_omitted(self):
+        # Empty / malformed xyz entries in ``conformers`` are not conformers
+        # ARC screened to a usable geometry: only the one valid distinct
+        # candidate is reported as omitted.
         record = self._record_with_alt_conformers(
             alt_xyzs=("", "C 0.3 0.0 0.0\nH 1.3 0.0 0.0", None),
             energies=(0.0, 0.5, 1.0, 2.0),
         )
-        _, _, payload = self._submit(record=record)
-        self.assertEqual(len(payload["conformers"]), 2)
-        self.assertEqual(payload["conformers"][1]["key"], "alt0")
-        self.assertIn(
-            "C 0.3 0.0 0.0",
-            payload["conformers"][1]["geometry"]["xyz_text"],
-        )
+        outcome, _, payload = self._submit(record=record)
+        self.assertEqual(len(payload["conformers"]), 1)
+        [warning] = [w for w in outcome.warnings
+                     if w["code"] == "conformer_level_not_stated"]
+        self.assertEqual(warning["context"]["omitted_count"], "1")
 
     def test_alt_conformer_energy_data_never_reaches_payload(self):
         # Garbage / misaligned / missing conformer_energies on the
@@ -2589,12 +2520,9 @@ class TestComputedSpeciesBundle(unittest.TestCase):
                     energies=energies,
                 )
                 _, _, payload = self._submit(record=record)
-                self.assertEqual(len(payload["conformers"]), 2)
+                self.assertEqual(len(payload["conformers"]), 1)
                 self.assertNotIn("relative_e0_kj_mol",
                                  json.dumps(payload))
-                # And no note attached either (none of the alt conformer
-                # writers add one today).
-                self.assertNotIn("note", payload["conformers"][1])
 
     def test_multi_conformer_payload_validates_against_tckdb_schema(self):
         # End-to-end: the multi-conformer payload must satisfy
@@ -2748,22 +2676,6 @@ class TestComputedSpeciesBundle(unittest.TestCase):
                 for i, item in enumerate(obj):
                     _walk(item, f"{path}[{i}]")
         _walk(payload)
-
-    def test_screened_conformer_keeps_origin_no_final_settings(self):
-        # Alt conformers never carry final_settings today (ARC has no
-        # honest source for them on a screened-conformer anchor row);
-        # the screened_conformer origin marker stays the only entry
-        # under parameters_json. Lock that down so a future refactor
-        # doesn't accidentally drop the marker or attach speculative
-        # settings.
-        record = self._record_with_alt_conformers()
-        _, _, payload = self._submit(record=record)
-        alt_opt = payload["conformers"][1]["primary_calculation"]
-        pj = alt_opt["parameters_json"]
-        self.assertEqual(set(pj.keys()), {"tckdb_origin"})
-        self.assertEqual(pj["tckdb_origin"]["origin_kind"], "derived")
-        self.assertEqual(pj["tckdb_origin"]["origin_detail"],
-                         "screened_conformer")
 
     # ---------------- 3: freq+sp included when fields exist
     def test_freq_and_sp_included_when_fields_exist(self):
@@ -3389,6 +3301,11 @@ def _reaction_record(*, with_kinetics=True, ts_label="TS0"):
             "tunneling": "Eckart",
         }
     return record
+
+
+# ARC's ``neb_level`` header entry (arc/output.py ``_level_to_dict``): the ORCA
+# NEB level from ``orca_neb_settings``.
+NEB_LEVEL = {"method": "wb97xd", "basis": "def2tzvp", "software": "orca"}
 
 
 def _reaction_output_doc(*, with_irc=False):
@@ -8574,6 +8491,13 @@ class TestComputedReactionDependencyEdges(unittest.TestCase):
         # path_search_result.points requires min_length=1; fallback
         # uses opt_input_xyz when the log isn't on disk to parse.
         ts["opt_input_xyz"] = "C 0.0 0.0 0.0\nH 1.0 0.0 0.0\nH 0.5 0.5 0.0"
+        # What ARC exports for an ORCA NEB run: ``neb_level`` (from
+        # orca_neb_settings) and the ESS observed for the NEB log, distinct
+        # from the run's opt level/program.
+        doc["neb_level"] = dict(NEB_LEVEL)
+        ts["ess_software"] = {"opt": "gaussian", "neb": "orca"}
+        ts["ess_versions"] = {"opt": "Gaussian 16, Revision A.03",
+                              "neb": "ORCA 5.0.4"}
         return ts
 
     @staticmethod
@@ -8602,32 +8526,105 @@ class TestComputedReactionDependencyEdges(unittest.TestCase):
         # Chain head: no parent calculation.
         self.assertNotIn("depends_on", ts_guess)
 
-    def test_gsm_chosen_ts_emits_path_search_ts_guess_calc(self):
-        # Positive GSM path: when the producer exposes a gsm_log on the
-        # TS record, the adapter emits type=path_search with method=gsm
-        # and at least one point (single-point fallback when the
-        # stringfile isn't on disk).
+    def test_neb_path_search_carries_the_exported_neb_level_and_software(self):
+        # ARC exports ``neb_level`` and the observed NEB program/banner. The
+        # path-search calculation states those, not the opt level and the opt
+        # program (BRIDGE_ROADMAP A3).
+        doc = _reaction_output_doc()
+        self._make_neb_ts(doc)
+        doc["opt_level"] = {"method": "b3lyp", "basis": "6-31g(d)",
+                            "software": "gaussian"}
+        _, _, payload = self._submit(output_doc=doc)
+        calcs = payload["transition_state"]["calculations"]
+        ts_guess = next(c for c in calcs if c["key"] == "ts_guess")
+        self.assertEqual(ts_guess["level_of_theory"]["method"], "wb97xd")
+        self.assertEqual(ts_guess["level_of_theory"]["basis"], "def2tzvp")
+        self.assertEqual(ts_guess["software_release"]["name"], "orca")
+        self.assertEqual(ts_guess["software_release"]["version"], "5.0.4")
+        ts_opt = payload["transition_state"]["calculation"]
+        self.assertEqual(ts_opt["level_of_theory"]["method"], "b3lyp")
+        self.assertEqual(ts_opt["software_release"]["name"], "gaussian")
+
+    def test_neb_without_an_exported_neb_level_is_omitted_not_filed_at_opt_level(self):
+        doc = _reaction_output_doc()
+        self._make_neb_ts(doc)
+        del doc["neb_level"]
+        outcome, _, payload = self._submit(output_doc=doc)
+        ts = payload["transition_state"]
+        self.assertNotIn("ts_guess", [c["key"] for c in ts["calculations"]])
+        self.assertNotIn("depends_on", ts["calculation"])
+        self.assertNotIn("path_search", json.dumps(payload))
+        [warning] = [w for w in outcome.warnings
+                     if w["code"] == "ts_guess_level_not_stated"]
+        self.assertEqual(warning["context"]["method"], "neb")
+        self.assertIn("neb_level", warning["message"])
+
+    def test_neb_without_an_observed_neb_program_is_omitted(self):
+        # ``neb_level`` is a Level dict whose software ARC deduces from the
+        # method (wb97xd/def2tzvp -> gaussian), not from what ran; only
+        # ``ess_software.neb`` says which program produced the NEB log.
+        doc = _reaction_output_doc()
+        ts = self._make_neb_ts(doc)
+        ts["ess_software"] = {"opt": "gaussian"}  # no "neb"
+        doc["neb_level"] = {"method": "wb97xd", "basis": "def2tzvp", "software": "gaussian"}
+        outcome, _, payload = self._submit(output_doc=doc)
+        self.assertNotIn("path_search", json.dumps(payload))
+        self.assertNotIn("depends_on", payload["transition_state"]["calculation"])
+        [warning] = [w for w in outcome.warnings
+                     if w["code"] == "ts_guess_software_not_stated"]
+        self.assertEqual(warning["context"]["method"], "neb")
+        self.assertNotIn("ts_guess_level_not_stated", {w["code"] for w in outcome.warnings})
+
+    def test_neb_level_is_never_borrowed_from_the_opt_level_when_only_opt_is_set(self):
+        # A doc carrying opt/freq/sp levels but no neb_level must not get a
+        # path-search calculation from any of them.
+        doc = _reaction_output_doc()
+        self._make_neb_ts(doc)
+        doc.pop("neb_level")
+        doc["freq_level"] = dict(doc["opt_level"])
+        doc["sp_level"] = dict(doc["opt_level"])
+        _, _, payload = self._submit(output_doc=doc)
+        types = [c["type"] for c in payload["transition_state"]["calculations"]]
+        self.assertNotIn("path_search", types)
+
+    def test_gsm_chosen_ts_omits_the_path_search_calc_and_warns(self):
+        # ARC exports no level for the xtb-gsm path search (only ``neb_level``
+        # for ORCA NEB), and TCKDB requires a level on every calculation. The
+        # calculation is omitted rather than filed at opt_level, and the
+        # omission is reported.
         doc = _reaction_output_doc()
         self._make_gsm_ts(doc)
-        _, _, payload = self._submit(output_doc=doc)
+        outcome, _, payload = self._submit(output_doc=doc)
         ts = payload["transition_state"]
-        keys = sorted(c["key"] for c in ts["calculations"])
-        self.assertIn("ts_guess", keys)
-        ts_guess = next(c for c in ts["calculations"] if c["key"] == "ts_guess")
-        self.assertEqual(ts_guess["type"], "path_search")
-        psr = ts_guess.get("path_search_result")
-        self.assertEqual(psr.get("method"), "gsm")
-        self.assertGreaterEqual(len(psr.get("points", [])), 1)
-        self.assertTrue(any(p.get("is_ts_guess") for p in psr["points"]))
-        self.assertNotIn("depends_on", ts_guess)
+        self.assertNotIn("ts_guess", [c["key"] for c in ts["calculations"]])
+        self.assertNotIn("path_search", json.dumps(payload))
+        self.assertNotIn("depends_on", ts["calculation"])
+        [warning] = [w for w in outcome.warnings
+                     if w["code"] == "ts_guess_level_not_stated"]
+        self.assertEqual(warning["context"]["method"], "gsm")
+        self.assertEqual(warning["context"]["action"],
+                         "path_search_calculation_omitted")
+
+    def test_gsm_is_omitted_even_when_a_neb_level_is_exported(self):
+        # ``neb_level`` is the ORCA NEB level; a GSM guess never inherits it.
+        doc = _reaction_output_doc()
+        self._make_gsm_ts(doc)
+        doc["neb_level"] = dict(NEB_LEVEL)
+        outcome, _, payload = self._submit(output_doc=doc)
+        self.assertNotIn("path_search", json.dumps(payload))
+        self.assertIn("ts_guess_level_not_stated",
+                      {w["code"] for w in outcome.warnings})
 
     def test_gsm_method_alias_dash_form_matches(self):
         doc = _reaction_output_doc()
         ts = self._make_gsm_ts(doc)
         ts["chosen_ts_method"] = "xTB-GSM"  # producer typing variation
-        _, _, payload = self._submit(output_doc=doc)
+        outcome, _, payload = self._submit(output_doc=doc)
         keys = [c["key"] for c in payload["transition_state"]["calculations"]]
-        self.assertIn("ts_guess", keys)
+        self.assertNotIn("ts_guess", keys)
+        [warning] = [w for w in outcome.warnings
+                     if w["code"] == "ts_guess_level_not_stated"]
+        self.assertEqual(warning["context"]["method"], "gsm")
 
     def test_gsm_chosen_ts_without_gsm_log_emits_no_parent_calc(self):
         # Mirror of NEB-without-log: chosen method is GSM but the
@@ -8647,7 +8644,8 @@ class TestComputedReactionDependencyEdges(unittest.TestCase):
         # (chosen_ts_method='gcn', a geometry-only method) but xtb-gsm
         # merged into the chosen guess. The path_search calc must still
         # emit, gated off the chosen guess's method_sources plus the
-        # populated gsm_log — not off the single primary method.
+        # populated gsm_log — not off the single primary method. (Since 0.6.4
+        # the GSM calculation is then omitted for lack of an exported level.)
         doc = _reaction_output_doc()
         ts = doc["transition_states"][0]
         ts["chosen_ts_method"] = "gcn"
@@ -8657,13 +8655,15 @@ class TestComputedReactionDependencyEdges(unittest.TestCase):
             {"index": 0, "method": "gcn",
              "method_sources": ["gcn", "xtb-gsm"], "chosen": True},
         ]
-        _, _, payload = self._submit(output_doc=doc)
+        outcome, _, payload = self._submit(output_doc=doc)
         ts_out = payload["transition_state"]
         keys = [c["key"] for c in ts_out["calculations"]]
-        self.assertIn("ts_guess", keys)
-        ts_guess = next(c for c in ts_out["calculations"] if c["key"] == "ts_guess")
-        self.assertEqual(ts_guess["type"], "path_search")
-        self.assertEqual(ts_guess["path_search_result"].get("method"), "gsm")
+        # The gate still recognises the merged GSM source; with no GSM level
+        # exported the calculation is omitted and reported.
+        self.assertNotIn("ts_guess", keys)
+        [warning] = [w for w in outcome.warnings
+                     if w["code"] == "ts_guess_level_not_stated"]
+        self.assertEqual(warning["context"]["method"], "gsm")
 
     def test_dedup_merged_prefers_populated_log_field(self):
         # Chosen guess merged BOTH orca_neb and xtb-gsm, but the producer
@@ -8676,6 +8676,8 @@ class TestComputedReactionDependencyEdges(unittest.TestCase):
         ts["neb_log"] = "calcs/.../TS0/neb/input.log"
         ts["gsm_log"] = None
         ts["opt_input_xyz"] = "C 0.0 0.0 0.0\nH 1.0 0.0 0.0\nH 0.5 0.5 0.0"
+        doc["neb_level"] = dict(NEB_LEVEL)
+        ts["ess_software"] = {"opt": "gaussian", "neb": "orca"}
         ts["ts_guesses"] = [
             {"index": 0, "method": "gcn",
              "method_sources": ["gcn", "xtb-gsm", "orca_neb"], "chosen": True},
@@ -10322,11 +10324,12 @@ class TestPhase3EvidenceParity(unittest.TestCase):
             ts_calcs = {calc["type"]: calc for calc in sidecar_payload["transition_state"]["calculations"]}
             self.assertIn("hessian", ts_calcs["freq"])
             self.assertEqual(ts_calcs["irc"]["irc_result"]["point_count"], 3)
-            path_points = ts_calcs["path_search"]["path_search_result"]["points"]
-            self.assertEqual(len(path_points), 3)
-            self.assertTrue(all("path_coordinate" in point for point in path_points))
-            self.assertTrue(all("relative_energy_kj_mol" in point for point in path_points))
-            self.assertTrue(all("electronic_energy_hartree" not in point for point in path_points))
+            # The golden TS's guess is a GSM path search, whose level ARC does
+            # not export: the calculation is omitted on both sides (the GSM
+            # evidence itself is still produced and readable, checked above,
+            # and rendered by ``_build_path_search_result_payload`` directly
+            # in ``test_actual_arc_producer_geometry_matched_gsm_values_reach_payload``).
+            self.assertNotIn("path_search", ts_calcs)
             species_hessians = [
                 calc for species in sidecar_payload["species"]
                 for calc in species["calculations"] if "hessian" in calc
@@ -10345,6 +10348,7 @@ class TestPhase3EvidenceParity(unittest.TestCase):
         """
         pytest.importorskip("arc")
         from arc.constants import bohr_to_angstrom
+        from tckdb_arc.adapter import _build_path_search_result_payload
 
         matched_index = 1
         frame_bohr = tuple(
@@ -10378,8 +10382,15 @@ class TestPhase3EvidenceParity(unittest.TestCase):
             store_point = lookup.value["points"][matched_index]
             self.assertEqual(store_point["geometry_matched_ograd_invocation_id"], "0000.01")
 
-        ts_calcs = {calc["type"]: calc for calc in payload["transition_state"]["calculations"]}
-        result = ts_calcs["path_search"]["path_search_result"]
+        # The reaction payload omits the GSM path-search calculation (ARC
+        # exports no GSM level), so render the evidence the store served
+        # through the path-search builder directly.
+        ts_types = [calc["type"] for calc in payload["transition_state"]["calculations"]]
+        self.assertNotIn("path_search", ts_types)
+        result = _build_path_search_result_payload(
+            method="gsm", log_path=None, fallback_xyz_text=None,
+            gsm_evidence=lookup.value,
+        )
         points = {point["point_index"]: point for point in result["points"]}
         self.assertEqual(points[matched_index]["electronic_energy_hartree"],
                          producer_point["electronic_energy_hartree"])
@@ -10397,6 +10408,7 @@ class TestPhase3EvidenceParity(unittest.TestCase):
         for index, point in points.items():
             if index != matched_index:
                 self.assertNotIn("electronic_energy_hartree", point)
+        contract_validate(PathSearchResultPayload, result)
         contract_validate(ComputedReactionUploadRequest, payload)
 
 

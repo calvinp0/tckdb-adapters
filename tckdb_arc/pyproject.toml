@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tckdb-arc"
-version = "0.6.3"
+version = "0.6.4"
 description = "ARC → TCKDB upload adapter (payload builder + sidecar writer + uploader)."
 requires-python = ">=3.11"
 readme = "README.md"

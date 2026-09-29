@@ -76,9 +76,10 @@ def test_benzene_calculations_carry_the_split_gaussian_release(tmp_path, mode):
     # The conftest hook has already validated the payload against the route.
     payload, _ = _submit(tmp_path, mode)
     calculations = list(_calculations(payload))
-    # computed_species: coarse opt, opt, freq, sp and the screened
-    # alternative conformer's opt; conformer: opt, freq, sp.
-    assert len(calculations) == (5 if mode == "computed_species" else 3)
+    # computed_species: coarse opt, opt, freq and sp (the screened
+    # alternative conformer is not filed: ARC exports no conformer level);
+    # conformer: opt, freq, sp.
+    assert len(calculations) == (4 if mode == "computed_species" else 3)
     for calc in calculations:
         assert calc["software_release"] == GAUSSIAN_16_C02, calc["type"]
 

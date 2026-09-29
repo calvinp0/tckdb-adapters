@@ -238,6 +238,27 @@ that assertion.
 
 ### A2b. Interim detection of `adaptive_levels` runs (**wrong**; top 10 #6)
 
+**Status (adapter 0.6.4): done, exact where `restart.yml` allows, else refuse or omit.**
+`tckdb_arc/adaptive.py` reads the project's `restart.yml` and `input.yml` (and the CLI's
+parsed `input.yml`). When `restart.yml` holds the adaptive spec (`arc/main.py:438-442`)
+and an entry for the species, ARC's own rule is replayed
+(`scheduler.determine_adaptive_level`, `arc/scheduler.py:5273-5299`): the heavy-atom count
+is the species' `adaptive_lot_n_heavy` when set, else the non-`H` atoms of its geometry;
+the range is `lo <= n <= hi` (or `hi == 'inf'` and `n >= lo`); the level is the entry whose
+job types contain the job type exactly (case-sensitive), else the run's regular level. The
+job types are `opt`, `freq`, `sp`, `composite`, `irc`, `scan` (ESS rotor scans) and
+`directed_scan` (per rotor, from `restart.yml`'s `rotors_dict[i]['directed_scan_type']`).
+The attributed level labels that species' calculation, and its sp/composite level is the
+energy level the enthalpy check compares with the atom-correction level, so adaptive runs
+keep their formation enthalpies. The fallback, when `restart.yml`, the species entry or a
+heavy-atom count is missing, or only `input.yml` is available (string levels, no
+`adaptive_lot_n_heavy`): a named `opt` refuses the upload
+(`opt_level_adaptive_not_attributable`); a named `sp`, `freq`, `scan`/`directed_scan` or
+`irc` omits those calculations (`<kind>_level_adaptive_not_attributable`); a named `sp` or
+`composite` strips thermo enthalpy (`enthalpy_adaptive_levels_unverifiable`). With only
+`output.yml` no detection is possible and the run reads as an ordinary one. Dropped when ARC
+exports per-species levels (B2).
+
 **The problem.** Under `adaptive_levels`, every calculation is attributed to the run-level
 level. `…level_of_theory.*` is required on every calculation route, so it is always sent,
 and here it is wrong (B2).
@@ -258,6 +279,21 @@ has the project directory.
 **Effort.** S.
 
 ### A3. The TS-guess and IRC calculations carry the opt level (**wrong**; top 10 #3)
+
+**Status (adapter 0.6.4): TS guess done; IRC exact when `restart.yml` records it.** The
+NEB path search uses `neb_level` and `ess_software.neb` / `ess_versions.neb`; the program is
+only ever the observed one, because ARC's `Level` deduces a software from the method alone
+(`wb97xd/def2tzvp` gives gaussian, not ORCA), so without `ess_software.neb` the calculation
+is omitted (`ts_guess_software_not_stated`). GSM, and NEB without an exported `neb_level`,
+are omitted with `ts_guess_level_not_stated`, never filed at `opt_level`. The IRC uses the
+`irc_level` `restart.yml` records (ARC records it whenever it differs from the settings
+default, `arc/main.py:480-483`) with the program ARC's rule gives an IRC (`arc/level.py:413-418`: Gaussian, name only; none
+for UMA/torchani/xtb methods, where the IRC is omitted, `irc_software_not_stated`), or, when
+the adaptive levels name `irc`, the species' adaptive level; the TS reference energy for the IRC then
+stays at that level. With no recorded `irc_level` the IRC is the run's settings default,
+`default_levels_of_theory['irc']`, which the adapter cannot read, and it keeps `opt_level` with
+`irc_level_assumed_opt_level` (the maintainer's 0.6.0 decision, warning reworded to say so).
+ARC's parsers and parser evidence expose no level from an IRC log. Durable fix: B3.
 
 **TS guess (always wrong).** `adapter.py:2662-2671` builds the `path_search` calculation
 with `level_kind="opt"` and `ess_job_key="opt"`, under the comment "No ts_guess_level in
@@ -291,6 +327,16 @@ field. That is exactly the case the matrix cannot judge (see `GAP_MATRIX.md`, "W
 **Effort.** S.
 
 ### A4. Screened alternative conformers are filed at `opt_level` (**wrong**; top 10 #2)
+
+**Status (adapter 0.6.4): done, at the `restart.yml` conformer level when it is stated.**
+output.yml exports no conformer level (header, species or conformer). The screened
+conformers are filed as bare opts at the `conformer_opt_level` `restart.yml` records, with
+the program that level names, only when `job_types['conf_opt']` is true there (else the
+geometries are force-field ones) and the adaptive levels do not name `conf_opt` for the
+species' range, and only those conformers whose `conformer_energies` entry is not null
+(a null one is still the force-field geometry). Known gap: ARC's conformer troubleshooting
+level (`arc/scheduler.py:5050-5078`) is recorded nowhere durable. Otherwise they are omitted and each species with distinct ones reports
+`conformer_level_not_stated`. The durable fix is B3.
 
 **What happens.** `_build_alt_conformer_blocks` (`adapter.py:1290-1400`) gives every
 screened conformer a primary `opt` calculation at the run's `opt_level`, with the opt
@@ -493,6 +539,14 @@ and `invalidated_reason`), `applied_energy_corrections[]` and scan calculations.
 **Effort.** M.
 
 ### A14. TS validation evidence from `ts_checks.IRC` (top 10 #10)
+
+**Status (adapter 0.6.4): done on both TS routes.** A bool `ts_checks['IRC']` becomes
+`validation_evidence[{kind: irc, passed, rationale}]` (`source_calculation_key` on the
+reaction bundle; omitted on the standalone route). The rationale is exactly
+`ARC ts_checks['IRC'] = <verdict>`: ARC's `ts_checks['warnings']` come only from the
+e_elect and NMD checks (`arc/checks/ts.py:175`, `arc/checks/nmd.py:93-131`), never the IRC.
+`None` or an absent `ts_checks` sends nothing. A verdict with no IRC calculation in the
+upload is not sent (`ts_irc_evidence_without_irc_calculation`).
 
 **What to build.** `validation_evidence[]` as follows:
 
@@ -732,6 +786,19 @@ apply (they sum exactly to the applied total) instead of dropping the whole list
 complete, exact decomposition of the applied total exists.
 
 **Effort.** S.
+
+### B14. Two ARC bugs found while wiring levels
+
+- **`neb_level` is missing in default-config runs.** `main.py:670` calls
+  `resolve_neb_level(self.ts_adapters)`, which is `None` when the user did not list
+  `ts_adapters`, although the scheduler falls back to `default_ts_adapters`
+  (`scheduler.py:410`), which include `orca_neb` (`settings.py:122`). Default-config NEB
+  guesses therefore get no `neb_level` in `output.yml`. Fix:
+  `resolve_neb_level(self.scheduler.ts_adapters)`.
+- **`xtb_gsm` energies are suspect for charged and open-shell species.** Its `ograd`
+  runs `xtb --grad --chrg 0` with no `--gfn` or `--uhf`: the method is unstated and the
+  charge is hard-coded 0, so the GSM energies of charged or open-shell species (and the
+  method of any GSM path) cannot be trusted or stated.
 
 ---
 

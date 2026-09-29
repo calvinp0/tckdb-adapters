@@ -100,6 +100,29 @@ workflow tool; the older null-tool row remains). An `atom_energy` scheme now car
 atomic energies) with `scheme.units` set to that table's own unit; a table with
 a missing or unrecognized unit, or unusable values, is not sent.
 
+Adapter 0.6.4 states a level only when ARC's output or the project's `restart.yml`
+supports it. Under `adaptive_levels`, `restart.yml` (adaptive spec, each species'
+`adaptive_lot_n_heavy`, rotor scan types) lets the adapter replay ARC's per-species
+choice exactly (`opt`, `freq`, `sp`, `composite`, `irc`, `scan`, `directed_scan`, matched
+case-sensitively); a species' attributed sp/composite level is the energy level its
+enthalpy is checked against, so formation enthalpies survive. When `restart.yml` or the
+species entry is missing, or only `input.yml` is available, an `opt` in the spec refuses
+the upload, named `sp`/`freq`/`scan`/`irc` calculations are omitted
+(`<kind>_level_adaptive_not_attributable`) and a named `sp` or composite level strips
+thermo enthalpy (`enthalpy_adaptive_levels_unverifiable`); with only `output.yml` an
+adaptive run cannot be detected. The IRC uses the `irc_level` `restart.yml` records;
+without one it keeps `opt_level` under `irc_level_assumed_opt_level` (the run's settings
+default, unreadable here, assumed equal). Screened alternative conformers are filed at
+`restart.yml`'s `conformer_opt_level` (with its program) when `conf_opt` ran and the spec
+does not name it, otherwise omitted (`conformer_level_not_stated`). The TS-guess path
+search is filed only for NEB, at `neb_level` and the observed NEB program
+(`ess_software.neb`); a GSM guess, NEB without `neb_level` or without an observed program
+is omitted (`ts_guess_level_not_stated`, `ts_guess_software_not_stated`).
+`ts_checks['IRC']`, ARC's IRC verdict, becomes TS `validation_evidence` (`passed` is that
+verdict, never `irc_converged`; the rationale is `ARC ts_checks['IRC'] = <verdict>`); no
+verdict sends none. Upgrading changes the payload hash, and so the idempotency key, of TS
+uploads with a GSM guess and of species uploads whose level attribution changed.
+
 Thermo blocks with enthalpy content declare `enthalpy_reference_kind:
 formation_298k` (Arkane's H298 and NASA are formation enthalpies at
 298.15 K) only when that holds. Blocks with entropy content carry
