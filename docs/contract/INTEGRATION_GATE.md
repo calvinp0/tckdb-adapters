@@ -19,8 +19,11 @@ loopback too. So the run fails unless all three hold:
 The adapter reads its key from `TCKDB_INTEGRATION_API_KEY`, so an ambient
 `TCKDB_API_KEY` is never used.
 
-Validated against TCKDB_v2 `9e6061b0` (backend unchanged since `11cc43d7`),
-with tckdb-client 0.95.0 and tckdb-schemas 0.52.0 (adapter 0.6.0). The strict xfails
+Validated against TCKDB_v2 `12c8cc63` (`backend/app` and `backend/alembic`
+identical to the pinned `4adf7ff4`), with tckdb-client 0.95.1, tckdb-schemas
+0.53.0 and tckdb-arc 0.6.2: 40 passed and 6 xfailed, fresh and on replay. The
+benzene computed-species upload drew only `missing_literature_provenance` (×2).
+The strict xfails
 below match on server warning codes and read-back shapes, so a TCKDB change to
 either can flip them without any adapter change.
 

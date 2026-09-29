@@ -4,7 +4,7 @@ Convert ARC `output/output.yml` and portable parser evidence into TCKDB
 species, reaction, and transition-state uploads. Payloads and upload metadata
 are written locally before any network request, allowing inspection and replay.
 
-Requires Python 3.11+, `tckdb-client` 0.95.x and `tckdb-schemas` 0.52.x.
+Requires Python 3.11+, `tckdb-client` 0.95.x and `tckdb-schemas` 0.53.x.
 For development with sibling checkouts:
 
 ```bash
