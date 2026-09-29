@@ -3886,6 +3886,9 @@ class TestComputedSpeciesStatmechFreqScaleFactor(unittest.TestCase):
 class TestComputedSpeciesStatmechBaseFields(unittest.TestCase):
     """Computed-species statmech: richer base fields (sym, point group, rotor kind, treatment, torsions)."""
 
+    # A freq Hessian is what shows Arkane kept the rotors; see A5 tests below.
+    hessian_available = True
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="arc-tckdb-stm-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
@@ -3945,7 +3948,9 @@ class TestComputedSpeciesStatmechBaseFields(unittest.TestCase):
             }],
         }))
         adapter = self._adapter(client)
-        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}), \
+                mock.patch.object(TCKDBAdapter, "_freq_hessian_available",
+                                  return_value=self.hessian_available):
             outcome = adapter.submit_computed_species_from_output(
                 output_doc=doc, species_record=record,
             )
@@ -4057,6 +4062,61 @@ class TestComputedSpeciesStatmechBaseFields(unittest.TestCase):
         _, payload = self._submit(doc=self._doc(), record=record)
         self.assertEqual(payload["statmech"]["statmech_treatment"], "rrho_1d")
         self.assertEqual(len(payload["statmech"]["torsions"]), 1)
+
+    # ---------------- A5: treatment only with Hessian evidence
+    def test_rotor_aware_treatment_and_torsion_kinds_omitted_without_freq_hessian(self):
+        # Arkane ignores every rotor when the freq log has no force-constant
+        # matrix, so neither the rotor-aware treatment nor each torsion's
+        # 'hindered_rotor' is supported. The torsions themselves (atom quartet,
+        # symmetry) are recorded facts and are still sent.
+        self.hessian_available = False
+        outcome, payload = self._submit(
+            doc=self._doc(), record=self._record_with_statmech())
+        self.assertNotIn("statmech_treatment", payload["statmech"])
+        torsions = payload["statmech"]["torsions"]
+        self.assertEqual(len(torsions), 1)
+        self.assertNotIn("treatment_kind", torsions[0])
+        self.assertEqual(torsions[0]["symmetry_number"], 3)
+        self.assertEqual(torsions[0]["dimension"], 1)
+        [warned] = [w for w in outcome.warnings
+                    if w["code"] == "statmech_treatment_not_stated"]
+        self.assertEqual(warned["field"], "statmech.statmech_treatment")
+        self.assertEqual(warned["context"]["reason"], "no_freq_hessian")
+        self.assertEqual(warned["context"]["inferred_treatment"], "rrho_1d")
+        self.assertEqual(warned["context"]["torsion_count"], 1)
+        self.assertEqual(warned["context"]["omitted"],
+                         ["statmech_treatment", "torsions[].treatment_kind"])
+
+    def test_torsion_treatment_kind_is_kept_with_freq_hessian(self):
+        _, payload = self._submit(doc=self._doc(), record=self._record_with_statmech())
+        self.assertEqual(payload["statmech"]["torsions"][0]["treatment_kind"],
+                         "hindered_rotor")
+
+    def test_plain_rrho_needs_no_hessian(self):
+        # No rotors: Arkane runs RRHO with or without a force-constant matrix
+        # (monatomics never have one), so nothing is withheld or warned.
+        self.hessian_available = False
+        record = self._record_with_statmech()
+        record["statmech"]["torsions"] = []
+        outcome, payload = self._submit(doc=self._doc(), record=record)
+        self.assertEqual(payload["statmech"]["statmech_treatment"], "rrho")
+        self.assertNotIn("torsions", payload["statmech"])
+        self.assertNotIn("statmech_treatment_not_stated",
+                         [w["code"] for w in outcome.warnings])
+
+    def test_no_statmech_treatment_warning_when_hessian_present(self):
+        outcome, payload = self._submit(doc=self._doc(), record=self._record_with_statmech())
+        self.assertEqual(payload["statmech"]["statmech_treatment"], "rrho_1d")
+        self.assertNotIn("statmech_treatment_not_stated",
+                         [w["code"] for w in outcome.warnings])
+
+    def test_no_treatment_warning_when_nothing_was_inferred(self):
+        # No statmech subdict: there was no claim to withhold.
+        self.hessian_available = False
+        outcome, payload = self._submit(doc=self._doc(), record=_full_record())
+        self.assertNotIn("statmech_treatment", payload["statmech"])
+        self.assertNotIn("statmech_treatment_not_stated",
+                         [w["code"] for w in outcome.warnings])
 
     # ---------------- 6: FSF behavior preserved
     def test_freq_scale_factor_behavior_preserved(self):
@@ -4586,6 +4646,8 @@ class TestScanCalculations(unittest.TestCase):
 class TestComputedReactionStatmechBaseFields(unittest.TestCase):
     """Computed-reaction per-species statmech: subset accepted by BundleStatmechIn."""
 
+    hessian_available = True
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="arc-tckdb-rxn-stm-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
@@ -4632,7 +4694,9 @@ class TestComputedReactionStatmechBaseFields(unittest.TestCase):
     def _submit(self, *, doc):
         client = _StubClient(response=_StubResponse({"reaction_id": 42}))
         adapter = self._adapter(client)
-        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}), \
+                mock.patch.object(TCKDBAdapter, "_freq_hessian_available",
+                                  return_value=self.hessian_available):
             outcome = adapter.submit_computed_reaction_from_output(
                 output_doc=doc, reaction_record=_reaction_record(),
             )
@@ -4680,6 +4744,15 @@ class TestComputedReactionStatmechBaseFields(unittest.TestCase):
     def test_statmech_treatment_emitted(self):
         _, payload = self._submit(doc=self._doc_with_statmech_and_fsf())
         self.assertEqual(self._r0_statmech(payload)["statmech_treatment"], "rrho_1d")
+
+    def test_statmech_treatment_omitted_and_warned_without_freq_hessian(self):
+        self.hessian_available = False
+        outcome, payload = self._submit(doc=self._doc_with_statmech_and_fsf())
+        self.assertNotIn("statmech_treatment", self._r0_statmech(payload))
+        warned = [w for w in outcome.warnings
+                  if w["code"] == "statmech_treatment_not_stated"]
+        self.assertEqual(len(warned), 1)
+        self.assertTrue(warned[0]["field"].endswith(".statmech.statmech_treatment"))
 
     # ---------------- 1: point_group flows through
     def test_point_group_emitted_in_computed_reaction(self):
@@ -10553,14 +10626,68 @@ class TestNeutralArcResultTranslation(unittest.TestCase):
             "level_of_theory": {"method": "wb97xd"},
             "total": {"value": -0.02, "unit": "hartree"},
             "components": [],
-            "parameter_table": {"unit": "hartree", "values": {"H": -0.5}},
+            "reference_atom_energies": {
+                "unit": "hartree", "applied_as": "subtracted",
+                "values": {"H": -0.5, "C": -37.8},
+            },
         }]})
         self.assertEqual(records[0]["application_role"], "aec_total")
         self.assertEqual(records[0]["scheme"]["kind"], "atom_energy")
         self.assertEqual(records[0]["scheme"]["atom_params"], [
+            {"element": "C", "value": -37.8},
             {"element": "H", "value": -0.5},
         ])
+        self.assertEqual(records[0]["scheme"]["units"], "hartree")
         self.assertEqual(records[0]["value_unit"], "hartree")
+
+    def test_atom_params_units_are_the_tables_own_not_the_totals(self):
+        # ``scheme.units`` is the unit of the scheme's parameter values; the
+        # applied total keeps its own ``value_unit``.
+        from tckdb_arc.adapter import _correction_records_from_record
+
+        records = _correction_records_from_record({"energy_corrections": [{
+            "correction_type": "atom_energy", "model": "arkane_atom_energy",
+            "total": {"value": -52.5, "unit": "kcal_mol"},
+            "reference_atom_energies": {"unit": "kj_mol", "values": {"H": -1312.75}},
+        }]})
+        self.assertEqual(records[0]["value_unit"], "kcal_mol")
+        self.assertEqual(records[0]["scheme"]["units"], "kj_mol")
+        self.assertEqual(records[0]["scheme"]["atom_params"],
+                         [{"element": "H", "value": -1312.75}])
+
+    def test_atom_params_omitted_when_table_unit_missing_or_values_unusable(self):
+        from tckdb_arc.adapter import _correction_records_from_record
+
+        bad_tables = [
+            {"values": {"H": -0.5}},                              # no unit
+            {"unit": "ha", "values": {"H": -0.5}},                # unknown unit
+            {"unit": "hartree", "values": {"H": None}},           # null value
+            {"unit": "hartree", "values": {"H": float("nan")}},   # non-finite
+            {"unit": "hartree", "values": {"H": -0.5, "Xxxx": 1.0}},  # bad element
+            {"unit": "hartree", "values": {}},
+        ]
+        for table in bad_tables:
+            with self.subTest(table=table):
+                records = _correction_records_from_record({"energy_corrections": [{
+                    "correction_type": "atom_energy", "model": "arkane_atom_energy",
+                    "total": {"value": -0.02, "unit": "hartree"},
+                    "reference_atom_energies": table,
+                }]})
+                self.assertNotIn("atom_params", records[0]["scheme"])
+                # The correction itself is still sent, in its own unit.
+                self.assertEqual(records[0]["scheme"]["units"], "hartree")
+
+    def test_atom_energy_parameter_table_is_not_read(self):
+        # ARC writes ``parameter_table`` only on the Petersson record; an
+        # atom_energy record carries ``reference_atom_energies``.
+        from tckdb_arc.adapter import _correction_records_from_record
+
+        records = _correction_records_from_record({"energy_corrections": [{
+            "correction_type": "atom_energy", "model": "arkane_atom_energy",
+            "total": {"value": -0.02, "unit": "hartree"},
+            "parameter_table": {"unit": "hartree", "values": {"H": -0.5}},
+        }]})
+        self.assertNotIn("atom_params", records[0]["scheme"])
 
     # ---------------- C-6: unit is read, never guessed
     def test_neutral_correction_missing_unit_is_omitted_not_defaulted(self):

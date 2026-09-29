@@ -71,6 +71,35 @@ C.02`), and of every species upload that now carries Arkane or scheme
 software. Replaying a sidecar written before 0.6.1 posts under a new key, so
 TCKDB records it as a new deposit rather than replaying the old one.
 
+Adapter 0.6.3 sends corrections and a statmech treatment only as far as the
+evidence goes. A Petersson `bac_total` is sent only with a complete bond
+decomposition: TCKDB refuses the whole upload for one with no `bond`
+component (`bac_total_requires_components`, except on a monatomic species) and
+does not check that a partial decomposition sums to the total. ARC drops every
+component when any bond lacks a parameter, so a componentless or partly null
+Petersson BAC is omitted, with a `bac_correction_omitted_components_incomplete`
+warning (reason `no_components`, `component_unusable` or `no_bond_component`);
+the AEC correction and the rest of the payload are still sent. This holds for
+species, reaction participants and the reaction's TS block. A rotor-aware `statmech_treatment`
+and each torsion's `treatment_kind` are sent only when a freq Hessian was found
+for the species (Arkane ignores every rotor without a force-constant matrix);
+otherwise they are omitted with `statmech_treatment_not_stated` (torsions are
+still sent; plain `rrho` needs no Hessian). An omitted BAC is noted on the
+thermo record according to `thermo.bond_corrections_applied` (true: Arkane
+applied it, not deposited; false: no note; absent: the note states only that
+ARC exported a Petersson BAC total that is not deposited). Atom-energy,
+Petersson and Melius schemes carry Arkane as `workflow_tool_release`. Its
+`git_commit` is the RMG-Py commit Arkane ran from; the correction tables come
+from RMG-database, whose commit ARC does not record. So a database-only
+revision of a table value for the same key still conflicts with the stored
+scheme (a parameter-conflict 422), and each new RMG-Py commit makes a new
+scheme row even when the tables are unchanged. The first 0.6.3 upload of an
+already-deposited scheme also creates a new row (identity now includes the
+workflow tool; the older null-tool row remains). An `atom_energy` scheme now carries
+`scheme.atom_params` from ARC's `reference_atom_energies` (Arkane's per-element
+atomic energies) with `scheme.units` set to that table's own unit; a table with
+a missing or unrecognized unit, or unusable values, is not sent.
+
 Thermo blocks with enthalpy content declare `enthalpy_reference_kind:
 formation_298k` (Arkane's H298 and NASA are formation enthalpies at
 298.15 K) only when that holds. Blocks with entropy content carry
