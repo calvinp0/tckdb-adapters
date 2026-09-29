@@ -36,6 +36,7 @@ from typing import Any, Literal
 
 from tckdb_client import TCKDBClient
 from tckdb_client.errors import TCKDBError
+from tckdb_schemas.enthalpy_reference import enthalpy_reference_error
 
 from tckdb_arc._logging import get_logger
 from tckdb_arc.config import (
@@ -976,10 +977,12 @@ class TCKDBAdapter:
         conformer_label = extra_label or f"conf{conformer_index}"
         project_label = self._config.project_label or output_doc.get("project")
 
+        build_warnings: list[dict[str, Any]] = []
         payload = self._build_computed_species_payload(
             output_doc=output_doc,
             species_record=species_record,
             conformer_key=conformer_label,
+            warnings=build_warnings,
         )
 
         idempotency_inputs = IdempotencyInputs.from_payload(
@@ -999,6 +1002,7 @@ class TCKDBAdapter:
             payload_kind=COMPUTED_SPECIES_KIND,
             base_url=self._config.base_url,
             subdir=PayloadWriter.COMPUTED_SPECIES_SUBDIR,
+            warnings=build_warnings,
         )
         logger.info(
             "TCKDB computed-species payload written: %s (key=%s)",
@@ -1017,13 +1021,15 @@ class TCKDBAdapter:
         output_doc: Mapping[str, Any],
         species_record: Mapping[str, Any],
         conformer_key: str,
+        warnings: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Compose one ComputedSpeciesUploadRequest dict.
 
         Reuses the existing per-calc and species-entry shapers; the only
         bundle-specific surface is the conformer wrapper, dependency
         edges (declared by local calc keys), inline artifacts, and the
-        optional thermo block.
+        optional thermo block. Producer-side omissions (a thermo block the
+        shared enthalpy rule refuses) are appended to ``warnings``.
         """
         included_keys, conformer_block = self._build_conformer_block(
             output_doc=output_doc,
@@ -1070,6 +1076,7 @@ class TCKDBAdapter:
             # thermo field is ``ThermoInBundle`` — the shape that accepts
             # ``source_calculations``.
             target_model="ThermoInBundle",
+            warnings=warnings,
         )
         if thermo_block is not None:
             bundle["thermo"] = thermo_block
@@ -2063,9 +2070,11 @@ class TCKDBAdapter:
         reaction_label = reaction_record.get("label") or "unlabeled"
         project_label = self._config.project_label or output_doc.get("project")
 
+        build_warnings: list[dict[str, Any]] = []
         payload = self._build_computed_reaction_payload(
             output_doc=output_doc,
             reaction_record=reaction_record,
+            warnings=build_warnings,
         )
 
         idempotency_inputs = IdempotencyInputs.from_payload(
@@ -2091,6 +2100,7 @@ class TCKDBAdapter:
             base_url=self._config.base_url,
             subdir=PayloadWriter.COMPUTED_REACTION_SUBDIR,
             is_partial=is_partial,
+            warnings=build_warnings,
         )
         if is_partial:
             # Phase-1 policy: partial reaction sidecars never POST. The
@@ -2124,6 +2134,7 @@ class TCKDBAdapter:
         *,
         output_doc: Mapping[str, Any],
         reaction_record: Mapping[str, Any],
+        warnings: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Compose one ``ComputedReactionUploadRequest`` dict.
 
@@ -2131,6 +2142,7 @@ class TCKDBAdapter:
         delegates per-actor block construction (species + TS) to the
         shared per-actor helpers, and stitches in a single
         modified-Arrhenius kinetics fit when ARC produced one.
+        Producer-side omissions are appended to ``warnings``.
         """
         species_index = _index_species(output_doc)
         ts_index = _index_transition_states(output_doc)
@@ -2169,6 +2181,7 @@ class TCKDBAdapter:
                 species_record=record,
                 actor_key=actor_key,
                 calc_prefix=calc_prefix,
+                warnings=warnings,
             )
             species_blocks.append(block)
             reactant_keys.append(actor_key)
@@ -2188,6 +2201,7 @@ class TCKDBAdapter:
                 species_record=record,
                 actor_key=actor_key,
                 calc_prefix=calc_prefix,
+                warnings=warnings,
             )
             species_blocks.append(block)
             product_keys.append(actor_key)
@@ -2292,6 +2306,7 @@ class TCKDBAdapter:
         species_record: Mapping[str, Any],
         actor_key: str,
         calc_prefix: str,
+        warnings: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, str]]:
         """Build one ``BundleSpeciesIn`` dict + a calc-role → bundle-key map.
 
@@ -2487,6 +2502,8 @@ class TCKDBAdapter:
             # The current reaction root accepts species-scoped thermo provenance.
             calc_keys_by_role=calc_keys,
             target_model="BundleThermoIn",
+            warnings=warnings,
+            warning_field=f"species[{actor_key}].thermo",
         )
         if thermo_block is not None:
             species_block["thermo"] = thermo_block
@@ -3512,6 +3529,7 @@ class TCKDBAdapter:
             payload_path=written.payload_path,
             sidecar_path=written.sidecar_path,
             idempotency_key=sc.idempotency_key,
+            warnings=list(sc.warnings),
         )
 
     def _upload(
@@ -3558,15 +3576,17 @@ class TCKDBAdapter:
         sc.response_body = _summarize_response_body(response_data)
         # Keep the server's structured scientific findings independently of
         # the response summary so callers need not inspect an HTTP envelope.
+        # They follow any producer-side warnings recorded at write time.
         response_warnings = (
             response_data.get("warnings", []) if isinstance(response_data, dict) else []
         )
-        sc.warnings = (
+        server_warnings = (
             [dict(item) for item in response_warnings if isinstance(item, dict)]
             if isinstance(response_warnings, list) else []
         )
-        for warning in sc.warnings:
+        for warning in server_warnings:
             logger.warning("TCKDB upload warning: %s", warning)
+        sc.warnings = [*sc.warnings, *server_warnings]
         sc.public_refs = _extract_tckdb_public_refs(response_data)
         _append_request_id(sc, "upload", response)
         sc.idempotency_replayed = bool(getattr(response, "idempotency_replayed", False))
@@ -3655,6 +3675,7 @@ class TCKDBAdapter:
             sidecar_path=written.sidecar_path,
             idempotency_key=sc.idempotency_key,
             error=sc.last_error,
+            warnings=list(sc.warnings),
         )
 
     def _log_readiness_recovery(self) -> None:
@@ -5048,12 +5069,48 @@ _THERMO_FIELDS_BY_TARGET: dict[str, frozenset[str]] = {
     "ThermoInBundle": frozenset({
         "h298_kj_mol", "s298_j_mol_k", "tmin_k", "tmax_k",
         "nasa", "points", "source_calculations",
+        "enthalpy_reference_kind", "reference_pressure_bar",
     }),
     "BundleThermoIn": frozenset({
         "h298_kj_mol", "s298_j_mol_k", "tmin_k", "tmax_k",
         "nasa", "points", "source_calculations",
+        "enthalpy_reference_kind", "reference_pressure_bar",
     }),
 }
+
+# TCKDB #520: a thermo record carrying enthalpy content must declare its
+# enthalpy basis. Arkane's H298 and NASA a6/b6 (and the H/G points ARC
+# evaluates from that fit) are formation enthalpies from the elements at
+# 298.15 K, which is exactly ``formation_298k``.
+_THERMO_ENTHALPY_REFERENCE_KIND = "formation_298k"
+
+# TCKDB #529: the server never defaults ``reference_pressure_bar``. RMG's
+# ``IdealGasTranslation`` partition function hard-codes P0 = 1 atm
+# (101325 Pa), so every ARC/Arkane entropy (S298, NASA a7/b7, point S/G)
+# stands at 1.01325 bar, never 1 bar. Used when output.yml does not record
+# ``thermo.standard_state_pressure_pa`` (older ARC output).
+_ARC_THERMO_REFERENCE_PRESSURE_BAR = 1.01325
+
+
+def _thermo_reference_pressure_bar(thermo_record: Mapping[str, Any]) -> float:
+    """Return the standard-state pressure (bar) ARC's entropies stand at.
+
+    Current ARC records the pressure RMG applied as
+    ``standard_state_pressure_pa``; prefer it, else RMG's hard-coded 1 atm.
+    """
+    recorded = thermo_record.get("standard_state_pressure_pa")
+    if recorded is not None:
+        try:
+            pressure_bar = float(recorded) / 1e5
+        except (TypeError, ValueError):
+            pressure_bar = math.nan
+        if math.isfinite(pressure_bar) and pressure_bar > 0:
+            return pressure_bar
+        logger.warning(
+            "TCKDB thermo: malformed standard_state_pressure_pa=%r; "
+            "using RMG's hard-coded 1 atm.", recorded,
+        )
+    return _ARC_THERMO_REFERENCE_PRESSURE_BAR
 
 
 def _build_thermo_block(
@@ -5061,6 +5118,8 @@ def _build_thermo_block(
     *,
     calc_keys_by_role: Mapping[str, str],
     target_model: Literal["ThermoInBundle", "BundleThermoIn"],
+    warnings: list[dict[str, Any]] | None = None,
+    warning_field: str = "thermo",
 ) -> dict[str, Any] | None:
     """Build a ``target_model``-shaped thermo dict from ``output.yml`` thermo data.
 
@@ -5081,6 +5140,14 @@ def _build_thermo_block(
         nasa_low.tmax_k  → nasa.t_mid (cross-checked vs nasa_high.tmin_k)
         nasa_high.tmax_k → nasa.t_high
         thermo_points    → points (per-point validation; bad points dropped)
+
+    Enthalpy content (h298, NASA, point H or G) adds
+    ``enthalpy_reference_kind="formation_298k"``; entropy content (s298,
+    NASA, point S or G) adds ``reference_pressure_bar``. Neither is set on
+    a Cp-only block. The finished block is checked with the shared
+    ``enthalpy_reference_error`` rule; a refused block is never emitted:
+    ``None`` is returned and the refusal is appended to ``warnings`` under
+    ``warning_field``.
 
     ``calc_keys_by_role`` maps roles to the actual bundle-local keys.
     Both roots accept source links; reaction participants use their own
@@ -5152,6 +5219,17 @@ def _build_thermo_block(
         # Server would 422 us; nothing usable here.
         return None
 
+    points_out = block.get("points", ())
+    if "h298_kj_mol" in block or has_nasa or any(
+        "h_kj_mol" in p or "g_kj_mol" in p for p in points_out
+    ):
+        block["enthalpy_reference_kind"] = _THERMO_ENTHALPY_REFERENCE_KIND
+    # G = H - T*S carries the entropy's standard state as well.
+    if "s298_j_mol_k" in block or has_nasa or any(
+        "s_j_mol_k" in p or "g_kj_mol" in p for p in points_out
+    ):
+        block["reference_pressure_bar"] = _thermo_reference_pressure_bar(thermo_record)
+
     # Belt-and-suspenders: this is the exact bug class that motivated
     # ``target_model`` in the first place (see
     # ``_THERMO_FIELDS_BY_TARGET``'s docstring) — a real raise here, not
@@ -5166,6 +5244,26 @@ def _build_thermo_block(
             f"_build_thermo_block emitted field(s) not accepted by "
             f"{target_model}: {sorted(disallowed)}"
         )
+
+    # TCKDB refuses the whole upload over an incoherent enthalpy
+    # declaration. Never send a block the shared rule would refuse: drop
+    # only the thermo block (the enclosing payload stays valid without
+    # it) and record why, next to the server's own warnings.
+    refusal = enthalpy_reference_error(block)
+    if refusal is not None:
+        code, message = refusal
+        logger.warning(
+            "TCKDB thermo omitted from %s: shared enthalpy rule refused it (%s): %s",
+            warning_field, code, message,
+        )
+        if warnings is not None:
+            warnings.append({
+                "code": code,
+                "message": message,
+                "field": warning_field,
+                "context": {"source": "tckdb_arc_self_check", "action": "thermo_omitted"},
+            })
+        return None
     return block
 
 

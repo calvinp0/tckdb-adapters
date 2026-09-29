@@ -208,6 +208,7 @@ class PayloadWriter:
         base_url: str | None = None,
         subdir: str | None = None,
         is_partial: bool = False,
+        warnings: list[dict[str, Any]] | None = None,
     ) -> WrittenPayload:
         """Write payload JSON and an initial ``pending`` sidecar atomically.
 
@@ -221,6 +222,10 @@ class PayloadWriter:
         the on-disk filenames gain a ``.partial`` infix and the sidecar
         metadata's ``is_partial`` flag is set. Default false preserves
         existing filenames and metadata exactly.
+
+        ``warnings`` seeds the sidecar's warning list with producer-side
+        findings (data the adapter omitted before sending); the server's
+        warnings are appended after upload.
 
         Returns a :class:`WrittenPayload` carrying both paths and the
         in-memory sidecar dataclass. Callers update the sidecar via
@@ -250,6 +255,7 @@ class PayloadWriter:
             payload_kind=payload_kind,
             base_url=base_url,
             is_partial=is_partial,
+            warnings=[dict(item) for item in warnings or []],
         )
         self._write_json_atomic(sidecar_path, sidecar.to_json())
 

@@ -377,7 +377,39 @@ class TestGoldenCorpus(unittest.TestCase):
         # Current schema 0.51 accepts reaction thermo source links. The
         # new hash differs only by those links; earlier commentary above
         # records the historical 0.22 behavior, not today's contract.
-        previous_reaction = copy.deepcopy(reaction)
+        #
+        # computed_species / computed_reaction changed again (transition_state
+        # did not, it carries no thermo) for TCKDB #520/#529: every thermo
+        # block with enthalpy content now declares
+        # ``enthalpy_reference_kind="formation_298k"`` and every block with
+        # entropy content carries ``reference_pressure_bar=1.01325`` (RMG's
+        # hard-coded 1 atm; this fixture records no pressure). Stripping
+        # exactly those two fields reproduces the previous snapshots, so no
+        # other leaf changed.
+        def without_thermo_state(payload):
+            stripped = copy.deepcopy(payload)
+            blocks = [stripped.get("thermo")] + [
+                sp.get("thermo") for sp in stripped.get("species") or []
+            ]
+            for block in blocks:
+                if block is not None:
+                    self.assertEqual(block["enthalpy_reference_kind"], "formation_298k")
+                    self.assertEqual(block["reference_pressure_bar"], 1.01325)
+                    block.pop("enthalpy_reference_kind")
+                    block.pop("reference_pressure_bar")
+            return stripped
+
+        self.assertEqual(
+            {
+                "computed_species": "fa388b7acdb06616b1b7701705501b12aeb20344f902796d8bc866d80d89487b",
+                "computed_reaction": "f897dcea26df630484b514f92c359355b50edd158890e9dd834d8f525a2e1897",
+            },
+            {
+                "computed_species": self._canonical_sha256(without_thermo_state(species)),
+                "computed_reaction": self._canonical_sha256(without_thermo_state(reaction)),
+            },
+        )
+        previous_reaction = without_thermo_state(reaction)
         for participant in previous_reaction["species"]:
             if "thermo" in participant:
                 participant["thermo"].pop("source_calculations", None)
@@ -387,8 +419,8 @@ class TestGoldenCorpus(unittest.TestCase):
         )
         self.assertEqual(
             {
-                "computed_species": "fa388b7acdb06616b1b7701705501b12aeb20344f902796d8bc866d80d89487b",
-                "computed_reaction": "f897dcea26df630484b514f92c359355b50edd158890e9dd834d8f525a2e1897",
+                "computed_species": "a36d0882d0d36748d8711fd42868976b4411e25a3307b4693891bc5a35f11731",
+                "computed_reaction": "343ff4cd6cf8572820525b878b7b2f08c7741b35c39513dd8e02f3e9daa796d0",
                 "transition_state": "9f9ba6edb1e88589595b95782474b9d3ad6c8b912c9c00c627b011512b8cc69b",
             },
             {

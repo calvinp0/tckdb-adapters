@@ -27,3 +27,10 @@ Current ARC exports `parser_evidence.json` for Hessian, IRC, and GSM evidence;
 the older `tckdb_evidence.json` contract is also supported. Keep the evidence
 file beside `output.yml`. ARC itself is optional: raw-log reparsing requires
 ARC on `PYTHONPATH`, whereas portable sidecars work in the base installation.
+
+Thermo blocks with enthalpy content declare `enthalpy_reference_kind:
+formation_298k` (Arkane's H298 and NASA are formation enthalpies at
+298.15 K). Blocks with entropy content carry `reference_pressure_bar`: ARC's
+recorded `standard_state_pressure_pa` when present, otherwise 1.01325 bar,
+the 1 atm RMG hard-codes. A block the shared TCKDB enthalpy rule would refuse
+is omitted and reported in the sidecar and outcome `warnings`.
