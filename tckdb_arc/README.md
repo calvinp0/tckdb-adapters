@@ -4,7 +4,7 @@ Convert ARC `output/output.yml` and portable parser evidence into TCKDB
 species, reaction, and transition-state uploads. Payloads and upload metadata
 are written locally before any network request, allowing inspection and replay.
 
-Requires Python 3.11+, `tckdb-client` 0.95.x and `tckdb-schemas` 0.53.x.
+Requires Python 3.11+, `tckdb-client` 0.95.x and `tckdb-schemas` 0.54.x.
 For development with sibling checkouts:
 
 ```bash
@@ -122,6 +122,12 @@ is omitted (`ts_guess_level_not_stated`, `ts_guess_software_not_stated`).
 verdict, never `irc_converged`; the rationale is `ARC ts_checks['IRC'] = <verdict>`); no
 verdict sends none. Upgrading changes the payload hash, and so the idempotency key, of TS
 uploads with a GSM guess and of species uploads whose level attribution changed.
+
+Adapter 0.6.5 targets tckdb-schemas 0.54 (no wire model change; only the
+bundles dry-run route, which the adapter never calls, gained rules) and states
+Arkane's full atom-energy convention in the `atom_energy` scheme note: the atomic
+energies are subtracted and each atom's gas-phase formation enthalpy less its
+thermal correction is added.
 
 Thermo blocks with enthalpy content declare `enthalpy_reference_kind:
 formation_298k` (Arkane's H298 and NASA are formation enthalpies at

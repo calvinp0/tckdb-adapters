@@ -351,11 +351,20 @@ def _correction_records_from_record(record: Mapping[str, Any]) -> list[dict[str,
             if atom_params:
                 scheme["atom_params"] = atom_params
                 if reference.get("applied_as") == "subtracted":
-                    # Sign convention ARC records; the atom_params themselves
-                    # are bare atomic energies.
+                    # ARC records ``applied_as: subtracted``; the atom_params
+                    # themselves are bare atomic energies. Arkane's full
+                    # per-atom term (RMG-Py arkane/encorr/corr.py,
+                    # get_atom_correction, steps 1-2) is
+                    #   -E_atom + (atom_hf - atom_thermal)
+                    # i.e. the atomic energy is subtracted and the atom's gas-phase
+                    # formation enthalpy (less its thermal correction, kcal/mol
+                    # in RMG-database data.py) is added, so a component's
+                    # contribution is not count x atomic energy.
                     scheme["note"] = (
-                        "Atom energies are subtracted from the molecular "
-                        "electronic energy (Arkane)."
+                        "Arkane subtracts these atomic energies from the "
+                        "molecular electronic energy and adds each atom's "
+                        "gas-phase formation enthalpy less its thermal "
+                        "correction (RMG-database atom_hf - atom_thermal)."
                     )
                 # ``scheme.units`` is the unit the scheme's parameter values
                 # are expressed in; the applied total keeps its own value_unit.

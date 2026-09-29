@@ -22,6 +22,12 @@ and schema versions; their percentages are not current coverage measurements.
   tckdb-schemas 0.53.0). `--since 0.52.0` changes only the submission-supersede
   route (public refs, `new_submission_ref`), which the adapter never calls; no
   model changes.
+- **Adapter 0.6.5:** pins and CI move to TCKDB `fd447fa0` (tckdb-client 0.95.1,
+  tckdb-schemas 0.54.0). `--since 0.53.0` changes no wire model: the
+  enthalpy-reference rule is now also reached from `POST /bundles/dry-run`
+  (#577), and `dry_run_contended` (503) is a new code on that route only. The
+  adapter never calls the bundles routes. The atom-energy scheme note is
+  corrected to state Arkane's full formula.
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
@@ -279,8 +285,11 @@ with `opt_level` and the opt banner (roadmap A4; fixed in 0.6.4, see below). The
   adapter no longer reads `parameter_table` on atom-energy records (ARC writes
   it only on the Petersson record, where it still becomes `bond_params`). The
   benzene fixture now sends 8 atom params in hartree, and the scheme `note`
-  records ARC's convention ("atom energies are subtracted from the molecular
-  electronic energy (Arkane)"; `applied_as: subtracted`). Atom-energy,
+  records Arkane's full convention (0.6.5; RMG-Py `get_atom_correction`): the
+  atomic energies are subtracted and each atom's gas-phase formation enthalpy
+  less its thermal correction (`atom_hf - atom_thermal`) is added, so a
+  component's contribution is not count x atomic energy (benzene: C 6 x 37.86564
+  = 227.19 vs stored 228.82 hartree). ARC records `applied_as: subtracted`. Atom-energy,
   Petersson and Melius schemes also carry `workflow_tool_release` = Arkane (`version` from
   `arkane_version`, `git_commit` from `arkane_git_commit`, each only when
   recorded and, for the commit, at most 40 characters). It is part of scheme

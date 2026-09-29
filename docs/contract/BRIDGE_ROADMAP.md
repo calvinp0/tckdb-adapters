@@ -800,6 +800,17 @@ complete, exact decomposition of the applied total exists.
   charge is hard-coded 0, so the GSM energies of charged or open-shell species (and the
   method of any GSM path) cannot be trusted or stated.
 
+### B15. Export the correct rigid-rotor kind
+
+**What.** ARC exports `rigid_rotor_kind` only as `atom`, `linear` or `asymmetric_top`,
+so benzene (D6h, an oblate symmetric top) is exported as `asymmetric_top`. Export the
+correct kind, including symmetric tops, from the principal moments.
+
+**Why.** The adapter forwards ARC's value, so TCKDB holds a wrong rotor kind for every
+symmetric top.
+
+**Effort.** S.
+
 ---
 
 ## C. TCKDB schema and backend work
