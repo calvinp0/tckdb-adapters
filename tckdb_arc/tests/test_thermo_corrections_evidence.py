@@ -359,7 +359,10 @@ def test_atom_energy_scheme_records_the_subtraction_convention(tmp_path):
     payload, _ = _submit(tmp_path, "computed_species")
     aec = next(c for c in payload["applied_energy_corrections"]
                if c["application_role"] == "aec_total")
-    assert "subtracted from the molecular electronic energy" in aec["scheme"]["note"]
+    note = aec["scheme"]["note"]
+    assert "subtracts these atomic energies from the molecular electronic energy" in note
+    assert "adds each atom's gas-phase formation enthalpy" in note
+    assert "atom_hf - atom_thermal" in note
     bac = next(c for c in payload["applied_energy_corrections"]
                if c["application_role"] == "bac_total")
     assert "note" not in bac["scheme"]
