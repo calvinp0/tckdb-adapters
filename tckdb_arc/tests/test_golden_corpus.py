@@ -158,6 +158,69 @@ class TestGoldenCorpus(unittest.TestCase):
         ComputedReactionUploadRequest.model_validate(payload)
         _assert_no_forbidden_keys(self, payload, "computed_reaction+irc")
 
+    def test_computed_reaction_with_per_species_thermo_payload_validates(self):
+        """Regression coverage for the shared-builder/two-roots bug: a
+        computed-reaction upload whose reactant/product species carry
+        per-species thermo (the ARC ``output.yml`` shape from
+        ``arc/output.py::_thermo_to_dict``) must build and validate
+        cleanly end-to-end. Before the fix, ``_build_thermo_block``
+        always emitted ``source_calculations`` -- a field
+        ``ThermoInBundle`` (the computed-species root) accepts but
+        ``BundleThermoIn`` (this, the computed-reaction root) does not
+        -- and every such upload 422'd with "Extra inputs are not
+        permitted". This is exactly the gap the golden corpus previously
+        had no coverage for.
+        """
+        doc = _reaction_output_doc()
+        thermo_by_label = {
+            "CHO": {
+                "h298_kj_mol": 43.2, "s298_j_mol_k": 224.6,
+                "tmin_k": 100.0, "tmax_k": 5000.0,
+                "nasa_low": {"tmin_k": 100.0, "tmax_k": 1000.0,
+                             "coeffs": [4.0, -1e-3, 2e-6, -1e-9, 4e-13, 5100.0, 1.0]},
+                "nasa_high": {"tmin_k": 1000.0, "tmax_k": 5000.0,
+                              "coeffs": [3.5, 1e-3, -2e-7, 1e-11, -3e-15, 5200.0, 5.0]},
+            },
+            "CH4": {
+                "h298_kj_mol": -74.6, "s298_j_mol_k": 186.3,
+                "tmin_k": 100.0, "tmax_k": 5000.0,
+                "nasa_low": {"tmin_k": 100.0, "tmax_k": 1000.0,
+                             "coeffs": [4.1, -1e-3, 2e-6, -1e-9, 4e-13, -9000.0, 1.0]},
+                "nasa_high": {"tmin_k": 1000.0, "tmax_k": 5000.0,
+                              "coeffs": [3.6, 1e-3, -2e-7, 1e-11, -3e-15, -8900.0, 5.0]},
+            },
+        }
+        for sp in doc["species"]:
+            thermo = thermo_by_label.get(sp["label"])
+            if thermo is not None:
+                sp["thermo"] = thermo
+
+        adapter = self._adapter("computed_reaction")
+        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+            outcome = adapter.submit_computed_reaction_from_output(
+                output_doc=doc, reaction_record=doc["reactions"][0],
+            )
+        payload = self._built_payload(outcome)
+
+        # Sanity: the thermo blocks actually made it into the payload,
+        # not just bypassed (a vacuous validation pass would prove
+        # nothing).
+        thermo_species_keys = {
+            sp["key"] for sp in payload["species"] if "thermo" in sp
+        }
+        self.assertEqual(thermo_species_keys, {"r0_CHO", "r1_CH4"})
+        for sp in payload["species"]:
+            if "thermo" in sp:
+                sources = sp["thermo"]["source_calculations"]
+                own_keys = {calc["key"] for calc in sp["calculations"]}
+                own_keys.update(c["calculation"]["key"] for c in sp["conformers"])
+                self.assertTrue(sources)
+                self.assertTrue(all(s["calculation_key"] in own_keys for s in sources))
+
+        # The real validation: the full payload, real model.
+        ComputedReactionUploadRequest.model_validate(payload)
+        _assert_no_forbidden_keys(self, payload, "computed_reaction+thermo")
+
     # --- standalone transition state --------------------------------------
     def test_transition_state_request_validates(self):
         _doc, _ts, _rxn, payload = _compose()
@@ -220,11 +283,113 @@ class TestGoldenCorpus(unittest.TestCase):
             _assert_no_forbidden_keys(self, payload, label)
 
         # Canonical snapshots make any wire-shape change an explicit review.
+        #
+        # computed_reaction / transition_state changed (computed_species
+        # did not) for a reviewed reason: the fixture's TS0 freq record
+        # has freq_n_imag=1, freq_imag_freq_cm1=-900.0, and no
+        # statmech.harmonic_frequencies_cm1 at all. Reconciling n_imag
+        # with the deposited frequency list used to be gated entirely
+        # behind a harmonic-frequencies source being present, so this
+        # combination built no ``modes``/``freq_frequencies_cm1`` at all
+        # even though the single imaginary mode was fully known from the
+        # scalar field. Fixing D4(a) (n_imag>1 with no statmech source --
+        # reachable via ARC's own ts_guesses fallback,
+        # arc/output.py::_get_imaginary_freqs) required reinsertion to no
+        # longer depend on a harmonic source being present, and that
+        # generalization also (correctly) reconciles this n_imag==1 case:
+        # the payload now additionally carries
+        # ``freq_frequencies_cm1: [-900.0]``, a strict completeness gain
+        # with no other field changed. See
+        # ``_freq_result_payload``/D4 in the adapter for the full
+        # rationale.
+        #
+        # computed_species / computed_reaction changed again (transition_state
+        # did not) for a second, later, reviewed reason: this fixture's H2
+        # species record previously had no ``thermo`` subdict at all --
+        # the golden corpus had zero coverage of per-species thermo on the
+        # computed-reaction route, which is exactly why a shared-builder
+        # bug (``_build_thermo_block`` emitting ``source_calculations``
+        # into ``BundleThermoIn``, which has no such column) shipped to
+        # production instead of failing here. A ``thermo`` block was added
+        # to the H2 species record (h298_kj_mol, s298_j_mol_k, tmin_k,
+        # tmax_k, nasa_low/nasa_high, thermo_points -- the exact shape
+        # ``arc/output.py::_thermo_to_dict`` writes). Field-by-field
+        # effect on each payload:
+        #   - computed_species: H2 is species[0], built standalone via
+        #     ``submit_computed_species_from_output``. Its bundle gains a
+        #     top-level ``thermo`` key with h298_kj_mol, s298_j_mol_k,
+        #     tmin_k, tmax_k, nasa, points, AND source_calculations
+        #     (referencing this bundle's own opt/freq/sp calc keys) --
+        #     ``ThermoInBundle`` (the computed-species root) has a column
+        #     for that provenance and the producer correctly populates it.
+        #   - computed_reaction: H2 is both a reactant (key "r0_H2") and a
+        #     product (key "p1_H2") of "H2 + H <=> H + H2". Both species
+        #     blocks gain a ``thermo`` key with h298_kj_mol, s298_j_mol_k,
+        #     tmin_k, tmax_k, nasa, points -- but NOT source_calculations.
+        #     ``BundleThermoIn`` (the computed-reaction root) has no
+        #     column for it at all; before the fix, the producer would
+        #     have emitted it anyway and the server would have 422'd with
+        #     "Extra inputs are not permitted" for
+        #     ``species.0.thermo.source_calculations``. This snapshot is
+        #     the proof the fix closes that gap through the real,
+        #     disk-corpus-driven code path, not just a synthetic repro.
+        #   - transition_state: untouched. The TS route never calls
+        #     ``_build_thermo_block`` (transition states have no thermo
+        #     field on ``BundleTransitionStateIn``), so adding thermo to
+        #     H2 cannot affect it -- confirmed by the unchanged hash.
+        #
+        # computed_reaction / transition_state changed again (computed_species
+        # did not) for a third reason: PHASE_C_PLAN.md C-3 unified two
+        # independently-rounded Hartree->kJ/mol constants
+        # (adapter.py's inline ``_HARTREE_TO_KJ_MOL = 2625.4996`` vs.
+        # ``_vendor.E_h_kJmol == 2625.4998583629967``) onto the single
+        # vendored one. Before the fix, ONLY ``irc_result.points[].
+        # relative_energy_kj_mol`` (built by ``_build_irc_result_payload``)
+        # used the inline constant; ``path_search_result.points[].
+        # relative_energy_kj_mol`` (built by
+        # ``_build_path_search_result_payload``) already imported
+        # ``_vendor.E_h_kJmol`` directly and was never affected -- verified
+        # against the pre-fix code itself (``git show
+        # HEAD:tckdb_arc/tckdb_arc/adapter.py``, HEAD 5820/5943/5999 for the
+        # inline constant's definition and IRC use, 6478 for path-search's
+        # pre-existing use of ``_vendor.E_h_kJmol``), not inferred. This
+        # fixture's TS0 has real IRC (sidecar-evidence-sourced, both
+        # branches), so both the reaction route's inline transition_state
+        # block and the standalone transition_state payload carry
+        # ``irc_result`` points computed with the old inline constant.
+        # Rebuilt against the actual pre-fix and post-fix code (same
+        # fixture; the pre-fix build reconstructed by running
+        # ``_build_irc_result_payload`` with ``_vendor.E_h_kJmol``
+        # temporarily patched back to 2625.4996, leaving
+        # ``_build_path_search_result_payload`` untouched -- matching what
+        # the pre-fix code actually did): the ONLY differences anywhere in
+        # either payload are four ``relative_energy_kj_mol`` leaves, all
+        # under ``irc_result`` --
+        # ``transition_state.calculations[3].irc_result.points[0]``,
+        # ``.points[1]`` (reaction route) and the matching two under the
+        # standalone TS's ``additional_calculations[3]`` -- each shifting
+        # by the ~9.84e-8 relative amount the constant unification implies
+        # (e.g. -315.0599520000003 -> -315.05998300355986). No
+        # ``path_search_result`` leaf changed, and no other field changed.
+        # computed_species has no IRC/path_search anywhere (species never
+        # carry either), so it is untouched -- confirmed by the unchanged
+        # hash.
+        # Current schema 0.51 accepts reaction thermo source links. The
+        # new hash differs only by those links; earlier commentary above
+        # records the historical 0.22 behavior, not today's contract.
+        previous_reaction = copy.deepcopy(reaction)
+        for participant in previous_reaction["species"]:
+            if "thermo" in participant:
+                participant["thermo"].pop("source_calculations", None)
+        self.assertEqual(
+            self._canonical_sha256(previous_reaction),
+            "72ae74b062dbd15825bc695e8a1f71605527cdc5115f8718e3f907769548998e",
+        )
         self.assertEqual(
             {
-                "computed_species": "062e2397d885d7449535681e6870408bf35de961f98fb43d6bf29389d44bc17f",
-                "computed_reaction": "6423aa45b7d610b29f392ea5a0a40e059e95ab90ec395b37f6033f96f0b57da6",
-                "transition_state": "6ec8967ae44ed2c82eb6aa0f114086322a3e57121a0e4c9399d766719f00351c",
+                "computed_species": "fa388b7acdb06616b1b7701705501b12aeb20344f902796d8bc866d80d89487b",
+                "computed_reaction": "f897dcea26df630484b514f92c359355b50edd158890e9dd834d8f525a2e1897",
+                "transition_state": "9f9ba6edb1e88589595b95782474b9d3ad6c8b912c9c00c627b011512b8cc69b",
             },
             {
                 "computed_species": self._canonical_sha256(species),
@@ -232,6 +397,18 @@ class TestGoldenCorpus(unittest.TestCase):
                 "transition_state": self._canonical_sha256(transition_state),
             },
         )
+
+        # Both current roots retain provenance. Each source must refer to
+        # the participant's own calculations, including repeated species.
+        for sp_block in reaction["species"]:
+            if "thermo" in sp_block:
+                sources = sp_block["thermo"]["source_calculations"]
+                own_keys = {calc["key"] for calc in sp_block["calculations"]}
+                own_keys.update(c["calculation"]["key"] for c in sp_block["conformers"])
+                self.assertTrue(sources)
+                self.assertTrue(all(s["calculation_key"] in own_keys for s in sources))
+        self.assertIn("thermo", species)
+        self.assertIn("source_calculations", species["thermo"])
 
 
 if __name__ == "__main__":

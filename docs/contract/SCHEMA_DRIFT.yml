@@ -1,0 +1,534 @@
+# repo: TCKDB_v2
+#
+# A5 — schema drift ledger. Rows conform to FIELD_KEY.md's A5 schema.
+# Diff: git diff tckdb-schemas-v0.8.0..HEAD -- schemas/python/tckdb-schemas/tckdb_schemas/
+# HEAD declares tckdb-schemas 0.22.0 and is UNTAGGED.
+#
+# `source` is repo-relative to TCKDB_v2 and points at the CURRENT (HEAD) location.
+# One row per path. Where a field was introduced and then reshaped inside the
+# range (e.g. atom_to_ts), the row records the NET state at HEAD and cites the
+# introducing commit; the intermediate churn is in SCHEMA_DRIFT.md.
+
+# ===========================================================================
+# 1. Reaction atom map — ADR 0011. Entirely new surface.
+# ===========================================================================
+
+- path: reaction_upload.atom_map
+  change: added
+  from: null
+  to: "ReactionAtomMapIn | None"
+  breaking_for_producer: false
+  commit: 3dd20db0
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:963
+
+- path: reaction_upload.atom_map.source
+  change: added
+  from: null
+  to: "AtomMapSource (declared | inferred), required, no default"
+  breaking_for_producer: false
+  commit: 3dd20db0
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:285
+
+- path: reaction_upload.atom_map.ts_geometry_key
+  change: added
+  from: null
+  to: "str (min_length=1), required; must equal transition_state.geometry.key"
+  breaking_for_producer: false
+  commit: 3dd20db0
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:286
+
+- path: reaction_upload.atom_map.participants[]
+  change: added
+  from: null
+  to: "list[ReactionAtomMapParticipantIn] (min_length=1), required"
+  breaking_for_producer: false
+  commit: 3dd20db0
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:287
+
+- path: reaction_upload.atom_map.participants[].side
+  change: added
+  from: null
+  to: "ReactionRole (reactant | product), required"
+  breaking_for_producer: false
+  commit: 3dd20db0
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:193
+
+- path: reaction_upload.atom_map.participants[].species_key
+  change: added
+  from: null
+  to: "str (min_length=1), required; must match the declared participant slot"
+  breaking_for_producer: false
+  commit: 3dd20db0
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:194
+
+- path: reaction_upload.atom_map.participants[].participant_index
+  change: added
+  from: null
+  to: "int (ge=1), required; 1-BASED position on its side of the reaction"
+  breaking_for_producer: false
+  commit: 3dd20db0
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:195
+
+- path: reaction_upload.atom_map.participants[].geometry_key
+  change: added
+  from: null
+  to: "str | None (min_length=1); required iff atom_to_ts is non-empty"
+  breaking_for_producer: false
+  commit: 3dd20db0
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:196
+
+- path: reaction_upload.atom_map.participants[].atom_to_ts
+  change: added
+  from: null
+  to: "dict[int, int], required; BOTH sides 1-BASED; empty only for an atomless participant"
+  breaking_for_producer: false
+  commit: 3dd20db0
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:201
+
+- path: reaction_upload.atom_map.equivalent_map_count
+  change: added
+  from: null
+  to: "int | None (ge=1); null is NOT 1"
+  breaking_for_producer: false
+  commit: 3dd20db0
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:288
+
+- path: reaction_upload.atom_map.note
+  change: added
+  from: null
+  to: "str | None; REQUIRED when source='inferred' (must name the algorithm)"
+  breaking_for_producer: false
+  commit: 3dd20db0
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:289
+
+# ===========================================================================
+# 2. Transition-state IRC validation evidence. Entirely new surface.
+# ===========================================================================
+
+- path: reaction_upload.transition_state.validation_evidence[]
+  change: added
+  from: null
+  to: "list[TransitionStateValidationEvidenceIn], default []"
+  breaking_for_producer: false
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:632
+
+- path: reaction_upload.transition_state.validation_evidence[].kind
+  change: added
+  from: null
+  to: "Literal['irc'], required"
+  breaking_for_producer: false
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/ts_validation_evidence.py:58
+
+- path: reaction_upload.transition_state.validation_evidence[].passed
+  change: added
+  from: null
+  to: "bool, required"
+  breaking_for_producer: false
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/ts_validation_evidence.py:59
+
+- path: reaction_upload.transition_state.validation_evidence[].rationale
+  change: added
+  from: null
+  to: "str (min_length=1), required"
+  breaking_for_producer: false
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/ts_validation_evidence.py:60
+
+- path: reaction_upload.transition_state.validation_evidence[].source_calculation_key
+  change: added
+  from: null
+  to: "str | None on the fragment, but REQUIRED on this route and must name an irc calc owned by the TS"
+  breaking_for_producer: false
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/ts_validation_evidence.py:61
+
+- path: reaction_upload.transition_state.validation_evidence[].reactant_participant_mapping
+  change: added
+  from: null
+  to: "dict[str, list[int]] | None; keys 'reactant:N' 1-BASED, values 1-BASED TS atom indices"
+  breaking_for_producer: false
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/ts_validation_evidence.py:62
+
+- path: reaction_upload.transition_state.validation_evidence[].product_participant_mapping
+  change: added
+  from: null
+  to: "dict[str, list[int]] | None; keys 'product:N' 1-BASED, values 1-BASED TS atom indices"
+  breaking_for_producer: false
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/ts_validation_evidence.py:63
+
+# ===========================================================================
+# 3. ADR 0012 — imaginary modes judged by magnitude, not counted.
+#    New fields on every calculation route, and NEW BLOCKING validators
+#    applied to freq_n_imag / n_imag, which existed unchanged at 0.8.0.
+# ===========================================================================
+
+- path: reaction_upload.transition_state.calculation.freq_reaction_coordinate_mode_index
+  change: added
+  from: null
+  to: "int | None (ge=1); 1-BASED index into freq_frequencies_cm1; REQUIRED when freq_n_imag > 1"
+  breaking_for_producer: true
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:105
+
+- path: reaction_upload.transition_state.calculations[].freq_reaction_coordinate_mode_index
+  change: added
+  from: null
+  to: "int | None (ge=1); 1-BASED index into freq_frequencies_cm1; REQUIRED when freq_n_imag > 1"
+  breaking_for_producer: true
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:105
+
+- path: reaction_upload.species[].conformers[].calculation.freq_reaction_coordinate_mode_index
+  change: added
+  from: null
+  to: "int | None (ge=1); 1-BASED index into freq_frequencies_cm1; inert on a species entry"
+  breaking_for_producer: false
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:105
+
+- path: reaction_upload.species[].calculations[].freq_reaction_coordinate_mode_index
+  change: added
+  from: null
+  to: "int | None (ge=1); 1-BASED index into freq_frequencies_cm1; inert on a species entry"
+  breaking_for_producer: false
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:105
+
+- path: reaction_upload.transition_state.calculation.freq_imaginary_dispositions
+  change: added
+  from: null
+  to: "dict[int, ImaginaryModeDisposition] | None; keys 1-BASED; absence BLOCKS when an extra imaginary mode is >= |omega_RC|"
+  breaking_for_producer: true
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:109
+
+- path: reaction_upload.transition_state.calculations[].freq_imaginary_dispositions
+  change: added
+  from: null
+  to: "dict[int, ImaginaryModeDisposition] | None; keys 1-BASED; absence BLOCKS when an extra imaginary mode is >= |omega_RC|"
+  breaking_for_producer: true
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:109
+
+- path: reaction_upload.species[].conformers[].calculation.freq_imaginary_dispositions
+  change: added
+  from: null
+  to: "dict[int, ImaginaryModeDisposition] | None; keys 1-BASED; inert on a species entry"
+  breaking_for_producer: false
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:109
+
+- path: reaction_upload.species[].calculations[].freq_imaginary_dispositions
+  change: added
+  from: null
+  to: "dict[int, ImaginaryModeDisposition] | None; keys 1-BASED; inert on a species entry"
+  breaking_for_producer: false
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:109
+
+- path: reaction_upload.transition_state.calculation.freq_n_imag
+  change: semantics_changed
+  from: "int | None, recorded and never checked"
+  to: "int | None; freq_n_imag <= 0 now BLOCKS (transition_state_no_imaginary_mode); > 1 blocks without a designated reaction coordinate"
+  breaking_for_producer: true
+  commit: ea48d36a
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:675
+
+- path: reaction_upload.transition_state.calculations[].freq_n_imag
+  change: semantics_changed
+  from: "int | None, recorded and never checked"
+  to: "int | None; freq_n_imag <= 0 now BLOCKS (transition_state_no_imaginary_mode); > 1 blocks without a designated reaction coordinate"
+  breaking_for_producer: true
+  commit: ea48d36a
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:675
+
+- path: reaction_upload.species[].conformers[].calculation.freq_n_imag
+  change: semantics_changed
+  from: "int | None, recorded and never checked"
+  to: "int | None; > 0 now BLOCKS when species_entry_kind='minimum' (n_imag_contradicts_minimum)"
+  breaking_for_producer: true
+  commit: ea48d36a
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:563
+
+- path: reaction_upload.species[].calculations[].freq_n_imag
+  change: semantics_changed
+  from: "int | None, recorded and never checked"
+  to: "int | None; > 0 now BLOCKS when species_entry_kind='minimum' (n_imag_contradicts_minimum)"
+  breaking_for_producer: true
+  commit: ea48d36a
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:563
+
+- path: species_upload.conformers[].primary_calculation.freq_result.n_imag
+  change: semantics_changed
+  from: "int | None, recorded and never checked"
+  to: "int | None; > 0 now BLOCKS when species_entry_kind='minimum' (n_imag_contradicts_minimum)"
+  breaking_for_producer: true
+  commit: ea48d36a
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:679
+
+- path: species_upload.conformers[].additional_calculations[].freq_result.n_imag
+  change: semantics_changed
+  from: "int | None, recorded and never checked"
+  to: "int | None; > 0 now BLOCKS when species_entry_kind='minimum' (n_imag_contradicts_minimum)"
+  breaking_for_producer: true
+  commit: ea48d36a
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:679
+
+- path: species_upload.conformers[].primary_calculation.freq_result.reaction_coordinate_mode_index
+  change: added
+  from: null
+  to: "int | None (ge=1); must name an imaginary mode; refused when n_imag=0"
+  breaking_for_producer: false
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:220
+
+- path: species_upload.conformers[].additional_calculations[].freq_result.reaction_coordinate_mode_index
+  change: added
+  from: null
+  to: "int | None (ge=1); must name an imaginary mode; refused when n_imag=0"
+  breaking_for_producer: false
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:220
+
+- path: species_upload.conformers[].primary_calculation.freq_result.modes[].imaginary_disposition
+  change: added
+  from: null
+  to: "ImaginaryModeDisposition | None; refused on a mode with is_imaginary=False"
+  breaking_for_producer: false
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:173
+
+- path: species_upload.conformers[].additional_calculations[].freq_result.modes[].imaginary_disposition
+  change: added
+  from: null
+  to: "ImaginaryModeDisposition | None; refused on a mode with is_imaginary=False"
+  breaking_for_producer: false
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:173
+
+- path: reaction_upload.species[].species_entry.species_entry_kind
+  change: semantics_changed
+  from: "StationaryPointKind, a free declaration"
+  to: "StationaryPointKind, now cross-checked against the entry's own frequency evidence; 'minimum' with any imaginary mode is refused"
+  breaking_for_producer: true
+  commit: ea48d36a
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:563
+
+- path: species_upload.species_entry.species_entry_kind
+  change: semantics_changed
+  from: "StationaryPointKind, a free declaration"
+  to: "StationaryPointKind, now cross-checked against the entry's own frequency evidence; 'minimum' with any imaginary mode is refused"
+  breaking_for_producer: true
+  commit: ea48d36a
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:679
+
+- path: reaction_upload.transition_state.calculation.parameters[].canonical_key
+  change: semantics_changed
+  from: "str | None, free-form provenance"
+  to: "str | None; the keys freq.hessian_method / grid.quality / opt.convergence now resolve ADR 0012's tau, which decides the structural flag"
+  breaking_for_producer: false
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/stationary_point.py:146
+
+- path: reaction_upload.transition_state.calculation.parameters[].canonical_value
+  change: semantics_changed
+  from: "str | None, free-form provenance"
+  to: "str | None; values of the three tau keys are matched against _TIGHT_GRID_VALUES / _TIGHT_OPT_VALUES / HessianMethod"
+  breaking_for_producer: false
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/stationary_point.py:155
+
+- path: reaction_upload.transition_state.calculations[].parameters[].canonical_key
+  change: semantics_changed
+  from: "str | None, free-form provenance"
+  to: "str | None; the keys freq.hessian_method / grid.quality / opt.convergence now resolve ADR 0012's tau, which decides the structural flag"
+  breaking_for_producer: false
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/stationary_point.py:146
+
+- path: reaction_upload.transition_state.calculations[].parameters[].canonical_value
+  change: semantics_changed
+  from: "str | None, free-form provenance"
+  to: "str | None; values of the three tau keys are matched against _TIGHT_GRID_VALUES / _TIGHT_OPT_VALUES / HessianMethod"
+  breaking_for_producer: false
+  commit: fe2a3ac4
+  source: schemas/python/tckdb-schemas/tckdb_schemas/stationary_point.py:155
+
+# ===========================================================================
+# 4. Isotopic identity — isotopologue_label removed, isotopes added.
+# ===========================================================================
+
+- path: species_upload.species_entry.isotopologue_label
+  change: removed
+  from: "str | None (max_length=64)"
+  to: null
+  breaking_for_producer: true
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/identity.py:199
+
+- path: reaction_upload.species[].species_entry.isotopologue_label
+  change: removed
+  from: "str | None (max_length=64)"
+  to: null
+  breaking_for_producer: true
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/identity.py:199
+
+- path: species_upload.species_entry.smiles
+  change: semantics_changed
+  from: "str; graph identity SMILES"
+  to: "str; isotope labels ([2H], [13C]) are now atom-resolved and fork the species_entry, replacing isotopologue_label; '[e-]' is a reserved sentinel bound to molecule_kind='electron'"
+  breaking_for_producer: false
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/identity.py:137
+
+- path: reaction_upload.species[].species_entry.smiles
+  change: semantics_changed
+  from: "str; graph identity SMILES"
+  to: "str; isotope labels ([2H], [13C]) are now atom-resolved and fork the species_entry, replacing isotopologue_label; '[e-]' is a reserved sentinel bound to molecule_kind='electron'"
+  breaking_for_producer: false
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/identity.py:137
+
+- path: species_upload.conformers[].geometry.isotopes
+  change: added
+  from: null
+  to: "dict[int, int] | None; keys are 1-BASED XYZ atom indices, values isotope mass numbers"
+  breaking_for_producer: false
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/geometry.py:19
+
+- path: reaction_upload.species[].conformers[].geometry.isotopes
+  change: added
+  from: null
+  to: "dict[int, int] | None; keys are 1-BASED XYZ atom indices, values isotope mass numbers"
+  breaking_for_producer: false
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:297
+
+- path: reaction_upload.transition_state.geometry.isotopes
+  change: added
+  from: null
+  to: "dict[int, int] | None; keys are 1-BASED XYZ atom indices, values isotope mass numbers"
+  breaking_for_producer: false
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:297
+
+# ===========================================================================
+# 5. Free electron as a participant.
+# ===========================================================================
+
+- path: species_upload.species_entry.molecule_kind
+  change: retyped
+  from: "MoleculeKind {molecule, pseudo}"
+  to: "MoleculeKind {molecule, pseudo, electron} — enum WIDENED"
+  breaking_for_producer: false
+  commit: f54c01b5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/enums.py:46
+
+- path: reaction_upload.species[].species_entry.molecule_kind
+  change: retyped
+  from: "MoleculeKind {molecule, pseudo}"
+  to: "MoleculeKind {molecule, pseudo, electron} — enum WIDENED; also now decides whether an empty atom_to_ts / evidence atom list is legal"
+  breaking_for_producer: false
+  commit: f54c01b5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/enums.py:46
+
+# ===========================================================================
+# 6. Execution environment manifest (new optional subtree on every calc).
+#    The manifest's own ~25 leaves are deliberately not enumerated here —
+#    see SCHEMA_DRIFT.md, "Deliberate exclusions".
+# ===========================================================================
+
+- path: species_upload.conformers[].primary_calculation.execution_environment
+  change: added
+  from: null
+  to: "ExecutionEnvironmentManifestPayload | None"
+  breaking_for_producer: false
+  commit: 9f79826f
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:138
+
+- path: species_upload.conformers[].additional_calculations[].execution_environment
+  change: added
+  from: null
+  to: "ExecutionEnvironmentManifestPayload | None"
+  breaking_for_producer: false
+  commit: 9f79826f
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:138
+
+- path: reaction_upload.species[].conformers[].calculation.execution_environment
+  change: added
+  from: null
+  to: "ExecutionEnvironmentManifestPayload | None"
+  breaking_for_producer: false
+  commit: 9f79826f
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:88
+
+- path: reaction_upload.species[].calculations[].execution_environment
+  change: added
+  from: null
+  to: "ExecutionEnvironmentManifestPayload | None"
+  breaking_for_producer: false
+  commit: 9f79826f
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:88
+
+- path: reaction_upload.transition_state.calculation.execution_environment
+  change: added
+  from: null
+  to: "ExecutionEnvironmentManifestPayload | None"
+  breaking_for_producer: false
+  commit: 9f79826f
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:88
+
+- path: reaction_upload.transition_state.calculations[].execution_environment
+  change: added
+  from: null
+  to: "ExecutionEnvironmentManifestPayload | None"
+  breaking_for_producer: false
+  commit: 9f79826f
+  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:88
+
+# ===========================================================================
+# 7. Kinetics degeneracy convention.
+# ===========================================================================
+
+- path: reaction_upload.kinetics[].degeneracy
+  change: retyped
+  from: "float | None (gt=0)"
+  to: "float | None (gt=0, allow_inf_nan=False) — constraint TIGHTENED"
+  breaking_for_producer: true
+  commit: 7ad5cb99
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:794
+
+- path: reaction_upload.kinetics[].degeneracy_convention
+  change: added
+  from: null
+  to: "KineticsDegeneracyConvention {already_applied, not_applied, unknown}, default 'unknown'"
+  breaking_for_producer: false
+  commit: 7ad5cb99
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:795
+
+# ===========================================================================
+# 8. Statmech treatment now has to justify itself.
+# ===========================================================================
+
+- path: species_upload.statmech.statmech_treatment
+  change: requiredness_changed
+  from: "StatmechTreatmentKind | None, unconditionally accepted"
+  to: "StatmechTreatmentKind | None; conditional — rrho_1d / rrho_nd / rrho_1d_nd now REQUIRE a non-empty torsions list"
+  breaking_for_producer: true
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:551
+
+- path: reaction_upload.species[].statmech.statmech_treatment
+  change: requiredness_changed
+  from: "StatmechTreatmentKind | None, unconditionally accepted"
+  to: "StatmechTreatmentKind | None; conditional — rrho_1d / rrho_nd / rrho_1d_nd now REQUIRE a non-empty torsions list"
+  breaking_for_producer: true
+  commit: ee7377f5
+  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:430

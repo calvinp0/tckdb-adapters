@@ -10,11 +10,18 @@ no network / real TCKDB client is involved.
 
 import copy
 import io
+import os
+import shutil
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from dataclasses import dataclass
+from pathlib import Path
+from unittest import mock
 
-from test_adapter import _reaction_output_doc
+from test_adapter import _StubClient, _StubResponse, _reaction_output_doc
+from tckdb_arc.adapter import TCKDBAdapter
+from tckdb_arc.config import TCKDBConfig
 from tckdb_arc.sweep import _run_reaction_sweep, _run_ts_sweep
 
 
@@ -213,6 +220,61 @@ class TestTSSweep(unittest.TestCase):
             _run_ts_sweep(adapter=adapter, output_doc=doc, tckdb_config=_TSStubConfig())
         self.assertEqual(len(adapter.ts_calls), 1)
         self.assertIn('failed', out.getvalue())
+
+
+class TestSweepAccountsFreqNImagContradictionAsFailed(unittest.TestCase):
+    """End-to-end: how a depositor actually learns about a D2 contradiction.
+
+    Uses the REAL ``TCKDBAdapter`` (not a stub) so this exercises the
+    adapter's own ``_freq_result_payload`` contradiction check, not a
+    canned outcome. ``_run_reaction_sweep``'s per-record
+    ``except Exception`` is pre-existing, unchanged code (see
+    ``test_missing_reactant_label_is_not_treated_as_partial`` in
+    test_adapter.py for the same generic mechanism) -- this test's point
+    is that the raise from D2 actually reaches it: a fully-converged
+    reaction whose TS reports zero imaginary modes is refused before any
+    payload is written, and the sweep reports it as ``failed`` with the
+    contradiction's TCKDB error code in the message, never as
+    ``uploaded``.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="arc-tckdb-sweep-nimag-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def test_reaction_with_contradictory_ts_is_reported_failed(self):
+        doc = copy.deepcopy(_reaction_output_doc())
+        ts = doc["transition_states"][0]
+        ts["converged"] = True  # a complete (non-partial) reaction
+        ts["freq_n_imag"] = 0
+        ts["imag_freq_cm1"] = None
+
+        cfg = TCKDBConfig(
+            enabled=True,
+            base_url="http://localhost:8000/api/v1",
+            payload_dir=self.tmp,
+            api_key_env="X_TCKDB_API_KEY",
+            project_label="proj-A",
+            upload_mode="computed_reaction",
+            allow_partial_uploads=True,
+        )
+        client = _StubClient(response=_StubResponse({"reaction_id": 1}))
+        adapter = TCKDBAdapter(cfg, client_factory=lambda c, k: client)
+
+        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}), \
+                redirect_stdout(io.StringIO()) as out:
+            _run_reaction_sweep(adapter=adapter, output_doc=doc, tckdb_config=cfg)
+
+        printed = out.getvalue()
+        self.assertIn("uploaded: 0", printed)
+        self.assertIn("failed: 1", printed)
+        self.assertIn("transition_state_no_imaginary_mode", printed)
+        # Nothing was deposited for the contradictory reaction: the raise
+        # happens before ``self._writer.write`` is ever reached, so no
+        # payload/sidecar lands on disk (the failed reaction's species
+        # salvage path is not touched either, since ts_converged=True
+        # keeps this out of the is_partial branch).
+        self.assertEqual(list(Path(self.tmp).rglob("*.json")), [])
 
 
 if __name__ == '__main__':

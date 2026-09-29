@@ -1,4 +1,4 @@
-"""Strict reader for ARC's versioned ``tckdb_evidence.json`` sidecar."""
+"""Strict reader for ARC's parser evidence and legacy TCKDB evidence sidecars."""
 
 from __future__ import annotations
 
@@ -17,10 +17,14 @@ SUPPORTED_OUTPUT_SCHEMA_VERSIONS = frozenset({"1.0", "1.1"})
 EVIDENCE_SCHEMA_NAME = "arc-tckdb-evidence"
 SUPPORTED_EVIDENCE_SCHEMA_VERSIONS = frozenset({"1.0"})
 EVIDENCE_FILENAME = "tckdb_evidence.json"
+_EVIDENCE_CONTRACTS = {
+    "parser_evidence": ("arc-parser-evidence", "parser_evidence.json"),
+    "tckdb_evidence": (EVIDENCE_SCHEMA_NAME, EVIDENCE_FILENAME),
+}
 MAX_EVIDENCE_BYTES = 256 * 1024 * 1024
 
 _DOCUMENT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-_REASONS = frozenset({"missing_source", "unsupported_source", "parse_failed", "empty_result"})
+_REASONS = frozenset({"missing_source", "unsupported_source", "parse_failed", "empty_result", "hessian_frame_unavailable"})
 _KINDS = frozenset({"freq_hessian", "irc", "gsm"})
 
 
@@ -128,7 +132,11 @@ def _validate_hessian(value: Mapping[str, Any]) -> None:
         "source_log", "geometry_xyz_text", "atom_count", "matrix_dimension", "packing",
         "units", "source", "parser_version", "lower_triangle",
     }
-    _exact_keys(value, required, required, "freq_hessian.value")
+    _exact_keys(value, required | {"frame"}, required, "freq_hessian.value")
+    if "frame" in value:
+        expected_frame = {"parsed_log": "gaussian_input_orientation", "parsed_hess": "orca_hess_atoms"}
+        if value["frame"] != expected_frame.get(value.get("source")):
+            raise ValueError("unsupported or mismatched Hessian frame")
     symbols = _xyz(value["geometry_xyz_text"], "freq_hessian.geometry_xyz_text")
     atom_count = _integer(value["atom_count"], "freq_hessian.atom_count", minimum=1)
     dimension = _integer(value["matrix_dimension"], "freq_hessian.matrix_dimension", minimum=1)
@@ -193,7 +201,23 @@ def _validate_irc(value: Mapping[str, Any]) -> None:
 
 def _validate_gsm(value: Mapping[str, Any]) -> None:
     required = {"source_stringfile", "parser_version", "method", "selected_source_point_index", "points"}
-    _exact_keys(value, required, required, "gsm.value")
+    _exact_keys(value, required | {"ograd_invocations"}, required, "gsm.value")
+    invocations = {}
+    invocation_records = value.get("ograd_invocations", [])
+    if not isinstance(invocation_records, list):
+        raise ValueError("GSM invocations must be a list")
+    for invocation in invocation_records:
+        if not isinstance(invocation, Mapping):
+            raise ValueError("GSM invocation must be a mapping")
+        allowed_invocation = {"invocation_id", "electronic_energy_hartree", "max_gradient_hartree_per_bohr", "rms_gradient_hartree_per_bohr"}
+        _exact_keys(invocation, allowed_invocation, {"invocation_id", "electronic_energy_hartree"}, "gsm.invocation")
+        identifier = invocation["invocation_id"]
+        if not isinstance(identifier, str) or not re.fullmatch(r"[0-9]+\.[0-9]+", identifier) or identifier in invocations:
+            raise ValueError("invalid or duplicate GSM invocation id")
+        for key in allowed_invocation - {"invocation_id"}:
+            if key in invocation:
+                _number(invocation[key], f"gsm.invocation.{key}")
+        invocations[identifier] = invocation
     if value["parser_version"] != "arc-gsm-stringfile-1" or value["method"] != "gsm":
         raise ValueError("unsupported GSM parser/method")
     selected = _integer(value["selected_source_point_index"], "gsm.selected_source_point_index")
@@ -203,13 +227,16 @@ def _validate_gsm(value: Mapping[str, Any]) -> None:
     indices = set()
     symbols = None
     coordinates = []
+    attached_ids = set()
     for point in points:
         allowed = {
             "source_point_index", "node_label", "geometry_xyz_text", "path_coordinate_angstrom",
             "electronic_energy_hartree", "stringfile_relative_energy_kcal_mol",
             "max_gradient_hartree_per_bohr", "rms_gradient_hartree_per_bohr",
+            "cumulative_com_superposed_displacement_angstrom",
+            "geometry_matched_ograd_invocation_id", "geometry_match_displacement_angstrom",
         }
-        required_point = {"source_point_index", "node_label", "geometry_xyz_text"}
+        required_point = {"source_point_index", "geometry_xyz_text"}
         if not isinstance(point, Mapping):
             raise ValueError("GSM point must be a mapping")
         _exact_keys(point, allowed, required_point, "gsm.point")
@@ -217,7 +244,7 @@ def _validate_gsm(value: Mapping[str, Any]) -> None:
         if index in indices:
             raise ValueError("duplicate GSM source point index")
         indices.add(index)
-        label = point["node_label"]
+        label = point.get("node_label")
         if label is not None:
             _integer(label, "gsm.node_label")
         point_symbols = _xyz(point["geometry_xyz_text"], "gsm.geometry_xyz_text")
@@ -225,9 +252,27 @@ def _validate_gsm(value: Mapping[str, Any]) -> None:
             symbols = point_symbols
         elif symbols != point_symbols:
             raise ValueError("GSM atom ordering is inconsistent")
-        if "path_coordinate_angstrom" in point:
-            coordinates.append(_number(point["path_coordinate_angstrom"], "gsm.path_coordinate_angstrom"))
-        for key in allowed - required_point - {"path_coordinate_angstrom"}:
+        coordinate_key = "cumulative_com_superposed_displacement_angstrom" if "cumulative_com_superposed_displacement_angstrom" in point else "path_coordinate_angstrom"
+        if coordinate_key in point:
+            coordinates.append(_number(point[coordinate_key], f"gsm.{coordinate_key}"))
+        identifier = point.get("geometry_matched_ograd_invocation_id")
+        if "ograd_invocations" in value and identifier is None and any(
+            key in point for key in (
+                "electronic_energy_hartree", "max_gradient_hartree_per_bohr", "rms_gradient_hartree_per_bohr"
+            )
+        ):
+            raise ValueError("GSM invocation values require a geometry match")
+        if identifier is not None or "geometry_match_displacement_angstrom" in point:
+            if not isinstance(identifier, str) or identifier not in invocations or identifier in attached_ids:
+                raise ValueError("invalid or reused GSM geometry-matched invocation")
+            displacement = _number(point.get("geometry_match_displacement_angstrom"), "gsm.geometry_match_displacement_angstrom")
+            if not 0 <= displacement <= 1e-3:
+                raise ValueError("GSM geometry match exceeds producer tolerance")
+            attached_ids.add(identifier)
+            for key in ("electronic_energy_hartree", "max_gradient_hartree_per_bohr", "rms_gradient_hartree_per_bohr"):
+                if key in point and point[key] != invocations[identifier].get(key):
+                    raise ValueError("GSM attached value disagrees with invocation")
+        for key in allowed - required_point - {"node_label", "geometry_matched_ograd_invocation_id"}:
             if key in point:
                 _number(point[key], f"gsm.{key}")
     if selected not in indices:
@@ -271,17 +316,22 @@ class EvidenceStore:
         self._document_issue = None
         try:
             version = validate_output_schema(output_doc)
-            descriptor = output_doc.get("tckdb_evidence")
+            # The current producer uses a parser-neutral name. Prefer its
+            # descriptor when present; never revive a stale legacy sidecar if
+            # the current descriptor is malformed or its generation mismatches.
+            descriptor_key = "parser_evidence" if "parser_evidence" in output_doc else "tckdb_evidence"
+            schema_name, filename = _EVIDENCE_CONTRACTS[descriptor_key]
+            descriptor = output_doc.get(descriptor_key)
             if version == "1.0" or descriptor is None:
                 return self
             if not isinstance(descriptor, Mapping):
                 raise ValueError("evidence descriptor must be a mapping")
             descriptor_keys = {"path", "schema_name", "schema_version", "document_id"}
             _exact_keys(descriptor, descriptor_keys, descriptor_keys, "evidence descriptor")
-            if descriptor["path"] != EVIDENCE_FILENAME:
-                raise ValueError("evidence path must be tckdb_evidence.json")
+            if descriptor["path"] != filename:
+                raise ValueError(f"evidence path must be {filename}")
             path = Path(str(descriptor["path"]))
-            if path.is_absolute() or len(path.parts) != 1 or path.name != EVIDENCE_FILENAME:
+            if path.is_absolute() or len(path.parts) != 1 or path.name != filename:
                 raise ValueError("unsafe evidence path")
             if self._project_directory is None:
                 raise ValueError("project_directory is required for evidence")
@@ -301,7 +351,7 @@ class EvidenceStore:
                 raise ValueError("evidence root must be a mapping")
             top_keys = {"schema_name", "schema_version", "document_id", "output_schema_version", "producer", "records"}
             _exact_keys(document, top_keys, top_keys, "evidence document")
-            if document["schema_name"] != EVIDENCE_SCHEMA_NAME or descriptor["schema_name"] != EVIDENCE_SCHEMA_NAME:
+            if document["schema_name"] != schema_name or descriptor["schema_name"] != schema_name:
                 raise ValueError("evidence schema name mismatch")
             evidence_version = document["schema_version"]
             if evidence_version not in SUPPORTED_EVIDENCE_SCHEMA_VERSIONS or descriptor["schema_version"] != evidence_version:
@@ -316,11 +366,19 @@ class EvidenceStore:
             producer = document["producer"]
             if not isinstance(producer, Mapping):
                 raise ValueError("producer must be a mapping")
-            _exact_keys(producer, {"name", "version", "git_commit"}, {"name", "version", "git_commit"}, "producer")
+            _exact_keys(
+                producer,
+                {"name", "version", "git_commit", "arkane_version", "arkane_git_commit"},
+                {"name", "version", "git_commit"},
+                "producer",
+            )
             if producer["name"] != "ARC" or not isinstance(producer["version"], str) or not (
                 producer["git_commit"] is None or isinstance(producer["git_commit"], str)
             ):
                 raise ValueError("producer metadata is invalid")
+            for key in ("arkane_version", "arkane_git_commit"):
+                if producer.get(key) is not None and not isinstance(producer[key], str):
+                    raise ValueError(f"producer {key} must be a string or null")
             output_keys = {
                 (kind, record.get("label"))
                 for section, kind in (("species", "species"), ("transition_states", "transition_state"))

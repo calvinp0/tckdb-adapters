@@ -65,6 +65,7 @@ class SidecarMetadata:
     status: str = "pending"
     response_status_code: int | None = None
     response_body: Any = None
+    warnings: list[dict[str, Any]] = field(default_factory=list)
     public_refs: dict[str, list[str]] = field(default_factory=dict)
     request_ids: list[dict[str, Any]] = field(default_factory=list)
     preflight: dict[str, Any] | None = None

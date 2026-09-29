@@ -106,10 +106,16 @@ def serialize_constraints(
 ) -> list[dict[str, Any]]:
     """Serialize an iterable of constraints into TCKDB payload shape.
 
-    Accepts either :class:`TCKDBCalculationConstraint` instances or the
-    legacy parser dicts ``{'constraint_kind', 'atoms', 'target_value'}`` or
-    tool-neutral ARC records with ``coordinate_type``, ``atom_indices`` and an
-    explicit ``index_base``. Mixed input is fine.
+    Accepts either :class:`TCKDBCalculationConstraint` instances (already
+    unambiguous — atomN_index fields, no rebase possible or needed) or a
+    mapping — either the legacy ``{'constraint_kind', 'atoms', ...}`` shape
+    or the tool-neutral ``{'coordinate_type', 'atom_indices', ...}`` shape.
+    Either mapping shape MUST also carry ``index_base`` (0 or 1): ARC's
+    Gaussian and ORCA constraint parsers disagree on it (1 vs 0 — see
+    ``ARC:arc/parser/adapters/{gaussian,orca}.py``), so a bare atom list
+    with no declared base cannot be safely assumed to be either. A mapping
+    missing ``index_base`` is dropped with a warning rather than silently
+    treated as already 1-based. Mixed input is fine.
 
     Output shape per element::
 
@@ -157,7 +163,20 @@ def _coerce(
     """Coerce a parser-dict OR existing dataclass instance into the dataclass.
 
     Returns None and logs a warning when the input is shaped wrong (e.g.,
-    parser dict missing 'atoms' or 'constraint_kind'). The caller skips.
+    parser dict missing 'atoms'/'atom_indices' or 'constraint_kind', or
+    missing 'index_base' — see the module-level index-base note below).
+    The caller skips.
+
+    Index base (PHASE_C_PLAN.md C-1c): a raw *mapping* — legacy
+    ``{'constraint_kind', 'atoms'}`` or neutral ``{'coordinate_type',
+    'atom_indices'}`` — is REQUIRED to also carry ``index_base``,
+    regardless of which key pair supplied ``kind``/``atoms``. ARC's own
+    parsers disagree on the base (Gaussian 1-based, ORCA 0-based); a bare
+    atom list with no declared base is refused rather than silently
+    assumed to already be 1-based, which would point an ORCA-sourced
+    constraint at the wrong atom. Only a :class:`TCKDBCalculationConstraint`
+    dataclass instance is exempt — it is never produced by an ARC parser,
+    only by a caller that already normalized the indices itself.
     """
     if isinstance(raw, TCKDBCalculationConstraint):
         return raw
@@ -190,16 +209,25 @@ def _coerce(
         logger.warning("TCKDB constraint: non-integer atom index in %r; "
                        "dropping", raw)
         return None
-    if raw.get('coordinate_type') is not None:
-        try:
-            index_base = int(raw.get('index_base'))
-        except (TypeError, ValueError):
-            logger.warning("TCKDB constraint: invalid index_base in %r; dropping", raw)
-            return None
-        if index_base not in (0, 1):
-            logger.warning("TCKDB constraint: unsupported index_base=%r; dropping", index_base)
-            return None
-        atom_ints = [atom - index_base + 1 for atom in atom_ints]
+    if raw.get('index_base') is None:
+        logger.warning(
+            "TCKDB constraint: missing 'index_base' in %r; refusing to "
+            "assume the atom indices are already 1-based (ARC's Gaussian "
+            "and ORCA parsers disagree on this) — dropping. Callers with "
+            "already-normalized indices should pass a "
+            "TCKDBCalculationConstraint instance instead of a bare dict.",
+            raw,
+        )
+        return None
+    try:
+        index_base = int(raw.get('index_base'))
+    except (TypeError, ValueError):
+        logger.warning("TCKDB constraint: invalid index_base in %r; dropping", raw)
+        return None
+    if index_base not in (0, 1):
+        logger.warning("TCKDB constraint: unsupported index_base=%r; dropping", index_base)
+        return None
+    atom_ints = [atom - index_base + 1 for atom in atom_ints]
     target_value = raw.get('target_value')
     if target_value is not None:
         try:

@@ -10,7 +10,8 @@ requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "MIT" }
 dependencies = [
-    "tckdb-client>=0.27,<0.28",   # transport + idempotency + replay (pinned tag tckdb-client-v0.27.1)
+    "tckdb-client>=0.93,<0.94",   # tested transport + replay contract
+    "tckdb-schemas>=0.51,<0.52", # bound the wire contract even outside test installs
     "PyYAML>=6",                  # vendored read_yaml_file + element data loader
     "numpy>=1.23",               # vendored xyz_from_data / xyz_to_str
 ]
@@ -22,7 +23,7 @@ dependencies = [
 # through tckdb_arc._arc_optional when ARC is not importable. Run the arc-gated
 # tests only where ARC is already on the path.
 arc = []
-test = ["pytest", "tckdb-schemas>=0.8,<0.9"]   # tckdb-schemas is a TEST-only dep (model_validate)
+test = ["pytest"]
 
 [project.scripts]
 tckdb-arc-upload = "tckdb_arc.cli:main"
