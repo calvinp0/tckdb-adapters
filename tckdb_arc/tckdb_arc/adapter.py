@@ -33,6 +33,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from tckdb_client import TCKDBClient
 from tckdb_client.errors import TCKDBError
@@ -349,9 +350,17 @@ _TS_STANDALONE_STRIP_CALC_KEYS = ("key", "depends_on", "geometry_key", "artifact
 #
 # PREFLIGHT_MAX_ATTEMPTS counts the initial probe plus retries (5 → 1
 # initial + 4 retries). Delays follow PREFLIGHT_BASE_DELAY_SECONDS * 2**i
-# (1s, 2s, 4s, 8s) capped at PREFLIGHT_MAX_DELAY_SECONDS, so the worst
-# case waits ~1+2+4+8 = 15s across the four gaps — well under a minute so
-# a genuinely-down server doesn't stall the whole run. Tunable here.
+# (1s, 2s, 4s, 8s) capped at PREFLIGHT_MAX_DELAY_SECONDS, so the backoff
+# gaps alone add ~1+2+4+8 = 15s. That is only the sleep budget: each probe
+# can itself block for the client request timeout (config
+# ``timeout_seconds``, 30s by default), and on a connect timeout httpx
+# tries every resolved address of the host in turn, each for that full
+# timeout. The worst case is therefore roughly
+#     PREFLIGHT_MAX_ATTEMPTS * n_addresses * timeout_seconds + 15s
+# e.g. 5 * 2 * 30s + 15s ≈ 5.25 min for a host with two A records whose
+# packets are silently dropped (observed from an offline compute node).
+# A server that refuses the connection outright fails fast and costs
+# close to the 15s backoff alone. Tunable here.
 PREFLIGHT_MAX_ATTEMPTS = 5
 PREFLIGHT_BASE_DELAY_SECONDS = 1.0
 PREFLIGHT_MAX_DELAY_SECONDS = 8.0
@@ -3754,7 +3763,11 @@ class TCKDBAdapter:
                 # Server unreachable / timeout / 5xx during a blip. Build
                 # the readiness error now so, if this is the last attempt,
                 # we raise a message consistent with the not-ready path.
-                last_error = _build_readiness_error(exc)
+                last_error = _build_readiness_error(
+                    exc,
+                    base_url=self._config.base_url,
+                    timeout_seconds=self._config.timeout_seconds,
+                )
             else:
                 data = getattr(response, "data", None)
                 ready = _readyz_body_is_ready(data)
@@ -4165,7 +4178,20 @@ def _readyz_body_is_ready(body: Any) -> bool:
     return isinstance(status, str) and status.lower() in {"ready", "ok"}
 
 
-def _build_readiness_error(exc: BaseException) -> TCKDBReadinessError:
+def _build_readiness_error(
+    exc: BaseException,
+    *,
+    base_url: str | None = None,
+    timeout_seconds: float | None = None,
+) -> TCKDBReadinessError:
+    """Wrap a failed ``/readyz`` request in a :class:`TCKDBReadinessError`.
+
+    An HTTP failure is described by its status code, response body and
+    request id. A failure with none of those (a timeout or connection
+    error that never produced a response) is described by
+    :func:`_describe_transport_failure` instead, so the message always
+    carries a reason.
+    """
     response_json = getattr(exc, "response_json", None)
     response_text = getattr(exc, "response_text", None)
     status_code = getattr(exc, "status_code", None)
@@ -4175,6 +4201,9 @@ def _build_readiness_error(exc: BaseException) -> TCKDBReadinessError:
             status_code=status_code,
             body=response_json if response_json is not None else response_text,
             request_id=_request_id_from(exc),
+            fallback_reason=_describe_transport_failure(
+                exc, base_url=base_url, timeout_seconds=timeout_seconds,
+            ),
         ),
         status_code=status_code,
         response_json=response_json,
@@ -4183,11 +4212,48 @@ def _build_readiness_error(exc: BaseException) -> TCKDBReadinessError:
     )
 
 
+def _describe_transport_failure(
+    exc: BaseException,
+    *,
+    base_url: str | None,
+    timeout_seconds: float | None,
+) -> str:
+    """Describe a request failure that produced no HTTP response.
+
+    The result names the exception text (when it has any), the exception
+    type chain walked through ``__cause__`` / ``__context__`` with
+    consecutive duplicate names collapsed (``TCKDBConnectionError caused
+    by ConnectTimeout``), the host of ``base_url`` and the per-request
+    timeout. It is never empty.
+    """
+    names: list[str] = []
+    seen: set[int] = set()
+    link: BaseException | None = exc
+    while link is not None and id(link) not in seen:
+        seen.add(id(link))
+        name = type(link).__name__
+        if not names or names[-1] != name:
+            names.append(name)
+        link = link.__cause__ or (
+            None if link.__suppress_context__ else link.__context__
+        )
+    chain = " caused by ".join(names)
+    text = str(exc).strip()
+    parts = [f"{text} ({chain})" if text else chain]
+    host = urlsplit(base_url).hostname if base_url else None
+    if host:
+        parts.append(f"host={host}")
+    if timeout_seconds is not None:
+        parts.append(f"timeout={timeout_seconds:g}s")
+    return " ".join(parts)
+
+
 def _format_readiness_message(
     *,
     status_code: Any,
     body: Any,
     request_id: Any,
+    fallback_reason: str | None = None,
 ) -> str:
     status = None
     code = None
@@ -4205,6 +4271,8 @@ def _format_readiness_message(
         parts.append(f"request_id={request_id}")
     if len(parts) == 1 and body:
         parts.append(str(body))
+    if len(parts) == 1 and fallback_reason:
+        parts.append(fallback_reason)
     return " ".join(parts)
 
 
