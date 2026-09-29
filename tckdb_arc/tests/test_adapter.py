@@ -594,10 +594,10 @@ class TestAdapterPayloadAndUpload(unittest.TestCase):
             "2\nethanol\nC 0.0 0.0 0.0\nH 1.0 0.0 0.0",
         )
         self.assertEqual(payload["calculation"]["type"], "opt")
-        self.assertEqual(payload["calculation"]["software_release"]["name"], "gaussian")
+        # ARC's banner is split as TCKDB's SoftwareReleaseRef would split it.
         self.assertEqual(
-            payload["calculation"]["software_release"]["version"],
-            "Gaussian 16, Revision A.03",
+            payload["calculation"]["software_release"],
+            {"name": "gaussian", "version": "16", "revision": "A.03"},
         )
         self.assertEqual(payload["calculation"]["level_of_theory"]["method"], "wb97xd")
         self.assertEqual(payload["calculation"]["level_of_theory"]["basis"], "def2-tzvp")
@@ -1478,17 +1478,17 @@ class TestAdditionalCalculations(unittest.TestCase):
         # opt uses opt_level + ess_versions['opt']
         self.assertEqual(primary["level_of_theory"]["method"], "wb97xd")
         self.assertEqual(primary["level_of_theory"]["basis"], "def2-tzvp")
-        self.assertEqual(primary["software_release"]["version"], "Gaussian 16, Revision A.03")
+        self.assertEqual(primary["software_release"]["version"], "16")
+        self.assertEqual(primary["software_release"]["revision"], "A.03")
         # freq uses freq_level (distinct basis) + ess_versions['freq']
         self.assertEqual(freq["level_of_theory"]["method"], "wb97xd")
         self.assertEqual(freq["level_of_theory"]["basis"], "6-31g*")
-        self.assertEqual(freq["software_release"]["name"], "gaussian")
-        self.assertEqual(freq["software_release"]["version"], "Gaussian 16, Revision A.03")
+        self.assertEqual(freq["software_release"],
+                         {"name": "gaussian", "version": "16", "revision": "A.03"})
         # sp uses sp_level (different method+software) + ess_versions['sp']
         self.assertEqual(sp["level_of_theory"]["method"], "ccsd(t)-f12a")
         self.assertEqual(sp["level_of_theory"]["basis"], "cc-pvtz-f12")
-        self.assertEqual(sp["software_release"]["name"], "molpro")
-        self.assertEqual(sp["software_release"]["version"], "Molpro 2022.3")
+        self.assertEqual(sp["software_release"], {"name": "molpro", "version": "2022.3"})
 
     def test_freq_sp_levels_fall_back_to_opt_level_when_missing(self):
         """Option B: missing freq_level/sp_level falls back to opt_level."""
@@ -1503,8 +1503,9 @@ class TestAdditionalCalculations(unittest.TestCase):
         self.assertEqual(freq["level_of_theory"]["basis"], "def2-tzvp")
         self.assertEqual(sp["level_of_theory"]["method"], "wb97xd")
         # ess_versions has only 'opt' → both freq and sp fall back to that
-        self.assertEqual(freq["software_release"]["version"], "Gaussian 16, Revision A.03")
-        self.assertEqual(sp["software_release"]["version"], "Gaussian 16, Revision A.03")
+        for calc in (freq, sp):
+            self.assertEqual((calc["software_release"]["version"],
+                              calc["software_release"]["revision"]), ("16", "A.03"))
 
     def test_ess_versions_uses_job_type_key_not_software_name(self):
         """7. ess_versions lookup must use job-type keys ('opt'/'freq'/'sp')."""
