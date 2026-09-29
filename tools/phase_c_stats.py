@@ -28,6 +28,12 @@ percentage; it is stated so a reader can disagree with it and recompute.
 ``ARC_ABSENT``, ``ARC_LATENT``, ``ADAPTER_GAP`` and ``BROKEN`` are not
 populated -- the field is not present in a deposited record today.
 
+**Applicable.** Since the 0.51 refresh the join also emits ``NOT_APPLICABLE``
+(demand ruled vacuous at that route in ROUTE_ADJUDICATION.yml, e.g. an IRC
+result on a minimum's calculation) and ``CONTAINER``. Containers are removed
+by the leaf split; ``NOT_APPLICABLE`` leaves are reported but excluded from
+the percentage denominators, since no producer could populate them.
+
 Usage:
     python tools/phase_c_stats.py [--contract-dir docs/contract]
 """
@@ -83,7 +89,7 @@ def leaf_rows(rows: list[dict]) -> list[dict]:
         for q in paths:
             if q != p and q.startswith(p):
                 rest = q[len(p):]
-                if rest and rest[0] in ".[":
+                if rest and rest[0] in ".[{":
                     return True
         return False
 
@@ -129,14 +135,16 @@ def main() -> None:
     print("§1.1 -- leaf verdict distribution (the executive-picture table)")
     print("=" * 72)
     vc = Counter(r["verdict"] for r in leaves)
-    total = len(leaves)
+    applicable = [r for r in leaves if r["verdict"] != "NOT_APPLICABLE"]
+    total = len(applicable)
+    print(f"leaves ruled NOT_APPLICABLE (excluded from shares below):         {vc.get('NOT_APPLICABLE', 0)}")
     populated = sum(vc[v] for v in POPULATED_VERDICTS)
     print(f"{'verdict':<24}{'leaves':>8}{'share':>10}")
-    for v in ("WIRED", "SOURCE_UNCONFIRMED", "ARC_ABSENT", "ARC_LATENT", "ADAPTER_GAP", "BROKEN"):
+    for v in ("WIRED", "SOURCE_UNCONFIRMED", "ARC_ABSENT", "ARC_LATENT", "ADAPTER_GAP", "BROKEN", "ROUTE_UNRESOLVED"):
         print(f"{v:<24}{vc.get(v, 0):>8}{pct(vc.get(v, 0), total):>10}")
     print(f"{'-' * 42}")
     print(f"{'POPULATED (WIRED + SOURCE_UNCONFIRMED)':<24}{populated:>8}{pct(populated, total):>10}")
-    print(f"{'total leaves':<24}{total:>8}")
+    print(f"{'total applicable leaves':<24}{total:>8}")
     print()
 
     print("SOURCE_UNCONFIRMED sub-buckets, leaf-restricted (per §0.2's method, informational only):")
@@ -150,7 +158,7 @@ def main() -> None:
     print("§1.1 -- by tier (leaves; 'populated' = WIRED + SOURCE_UNCONFIRMED)")
     print("=" * 72)
     for t in TIER_ORDER:
-        t_leaves = [r for r in leaves if r["tier"] == t]
+        t_leaves = [r for r in applicable if r["tier"] == t]
         t_pop = sum(1 for r in t_leaves if r["verdict"] in POPULATED_VERDICTS)
         print(f"{TIER_LABEL[t]:<28}{t_pop:>5} / {len(t_leaves):<6}{pct(t_pop, len(t_leaves))}")
     print()
@@ -160,11 +168,11 @@ def main() -> None:
     print("=" * 72)
 
     def frag_leaves(fragment: str) -> list[dict]:
-        return [r for r in leaves if fragment in r["path"]]
+        return [r for r in applicable if fragment in r["path"]]
 
     def parameters_leaves() -> list[dict]:
         return [
-            r for r in leaves
+            r for r in applicable
             if re.search(r"\.parameters\[\]", r["path"]) or r["path"].endswith(".parameters")
         ]
 
@@ -202,15 +210,15 @@ def main() -> None:
     print("=" * 72)
     gap_leaves = [r for r in leaves if r["verdict"] == "ADAPTER_GAP"]
     print(f"ADAPTER_GAP leaves total: {len(gap_leaves)}")
-    print("NOTE: this is the raw matrix verdict, not the semantically-corrected")
-    print("'real adapter gap' count. §0.1 resolves each ADAPTER_GAP row (leaf and")
-    print("container, 87 total) through its SUPPLIED_AT sibling's exported.arc_key")
-    print("to get 12 real gaps / 75 A2-negative rows -- a row-level, not leaf-only,")
-    print("population, and a different question than 'what verdict does this leaf")
-    print("carry'. That resolution is not a mechanical leaf-only filter (a plain")
-    print("exported.arc_key-is-null test on the ADAPTER_GAP rows themselves gives")
-    print("5/82, not 12/75, because the real signal lives on the sibling row, not")
-    print("on the ADAPTER_GAP row). Left to §0.1's own analysis; not reproduced here.")
+    borrowed = [r for r in gap_leaves if r.get("borrowed_from")]
+    print(f"  of which supply borrowed from an adjudicated sibling route: {len(borrowed)}")
+    unconf = [r for r in gap_leaves if r.get("arc_supply") == "unconfirmed"]
+    print(f"  of which ARC supply UNCONFIRMED (sibling supplied only by the adapter): {len(unconf)}")
+    print(f"  with an A2 export (own path or sibling): {len(gap_leaves) - len(unconf)}")
+    print("NOTE (0.51 refresh): A2 no longer carries placeholder rows with a null")
+    print("arc_key. An ADAPTER_GAP row has a real A2 export unless it is marked")
+    print("arc_supply: unconfirmed. The 0.22-era §0.1 '12 real gaps / 75")
+    print("A2-negative' correction no longer applies.")
     print()
 
     print("=" * 72)
@@ -219,6 +227,10 @@ def main() -> None:
     broken = [r for r in leaves if r["verdict"] == "BROKEN"]
     print(f"BROKEN leaves total: {len(broken)}")
     for r in broken:
+        print(f"  {r['path']}")
+    broken_c = [r for r in d_rows if r["verdict"] == "BROKEN" and r not in broken]
+    print(f"BROKEN containers (breaking drift on a list/model the adapter fills): {len(broken_c)}")
+    for r in broken_c:
         print(f"  {r['path']}")
 
 

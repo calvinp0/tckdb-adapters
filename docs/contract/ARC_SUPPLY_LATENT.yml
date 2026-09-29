@@ -1,1284 +1,2274 @@
-# repo: ARC.worktrees/feature_arc_result_export_contract
+# repo: ARC (/home/calvin/code/ARC main db0934d5; "(PR #1059)" = open branch
+#       feature_export_atom_corrections_applied a10e8ae0/1977e53b, read via git show)
 #
-# A3 — ARC latent supply. Fields ARC computes or already holds in memory but
-# does NOT write to output.yml / tckdb_evidence.json.
+# A3 — ARC latent supply, refreshed for tckdb-schemas 0.51.0. Fields ARC computes
+# or can obtain but does NOT write to output.yml (schema 1.1 on main, 1.2 on PR #1059)
+# or parser_evidence.json. Anything main or PR #1059 already exports is excluded;
+# PR #1059 adds only thermo.atom_corrections_applied / bond_corrections_applied /
+# atom_corrections_level and drops unapplied energy_corrections records.
 #
-# Reachability baseline (cited once here, referenced by every row):
-# arc/main.py:649 calls write_output_yml(species_dict=self.scheduler.species_dict,
-# reactions=self.scheduler.rxn_list, output_dict=self.output, ...). The FULL
-# ARCSpecies and ARCReaction object graphs are therefore live at the write point;
-# the JobAdapter objects (scheduler.job_dict) are NOT passed and are unreachable.
-# Every `reachable_from_export: true` below means "an attribute of an ARCSpecies
-# or ARCReaction already in scope in arc/output.py"; every `false` means "lives on
-# a Job/Scheduler object that write_output_yml never receives".
+# Paths: verbatim from the shared 0.51 walk (scratchpad/shared/paths_0_51.tsv).
+# One representative route per concept (FIELD_KEY rule; ROUTE_ADJUDICATION decides
+# generalisation). Keyed against the v2 walk (transport_upload now rooted at
+# TransportUploadPayload; scheme.*_params descended). Transport rows use the
+# dedicated transport_upload.* root; the same payload also embeds at
+# conformer_upload.transport.*.
+#
+# Reachability baseline: arc/main.py:673 calls write_output_yml(species_dict=
+# scheduler.species_dict, reactions=scheduler.rxn_list, output_dict=self.output,
+# opt/freq/sp/neb levels, composite_method, freq_scale_factor, bac_type,
+# compute_thermo, arkane_level_of_theory, irc_requested, t0). ARCSpecies /
+# ARCReaction graphs and output_dict are live in arc/output.py; scheduler.job_dict
+# (JobAdapters), adaptive_levels, scan/irc/conformer/ts_guess/orbitals levels, run
+# settings and the ArkaneAdapter objects are NOT passed. Arkane's on-disk outputs
+# under calcs/statmech/ normally still exist at write time (see the e0-only caveat).
+#
+# Columns beyond FIELD_KEY's A3 schema (all rows carry them):
+#   obtained_from  parsed_log | computed | input_setting | scheduler_state |
+#                  arkane_output | restart_yml | settings
+#   value_kind     observed (read from what actually ran) | requested (an input
+#                  or setting — never evidence of what ran) | derived (computed by ARC)
+#   reliability    high | medium | low   (reliability_note on some rows)
+#   tckdb_value    high | medium | low
+# export_effort keeps FIELD_KEY's trivial | moderate | hard vocabulary because
+# tools/join_inventories.py keys its cost column on it (trivial≈small,
+# moderate≈medium, hard≈large).
 
 # ===========================================================================
-# 1. ATOM MAPPING  (arc/mapping/) — the headline finding
+# 1. LEVELS OF THEORY PER CALCULATION (adaptive_levels, scan/irc/conformer levels)
+# ===========================================================================
+
+- path: species_upload.conformers[].primary_calculation.level_of_theory.method
+  arc_location: "arc/scheduler.py:Scheduler.run_job:1123 -> determine_adaptive_level:5273"
+  in_memory_form: >-
+    Level object chosen per job from Scheduler.adaptive_levels ({(min_heavy, max_heavy|'inf'):
+    {job_type_tuple: Level}}) keyed by spc.adaptive_lot_n_heavy (reaction-wide override set by
+    _apply_adaptive_reaction_levels:5317) else spc.number_of_heavy_atoms. Lives only on the
+    JobAdapter (job.level) and in the input deck; nothing per-species is stored.
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "every job when the run sets adaptive_levels; otherwise job.level == run-level opt/freq/sp level"
+  reachable_from_export: false
+  export_effort: moderate
+  effort_rationale: >-
+    output.yml exports only run-level opt_level/freq_level/sp_level (arc/output.py:176 ff.), so
+    under adaptive_levels every species' calculation is attributed to the wrong level. Fix: pass
+    self.adaptive_levels from main.py:673 into write_output_yml and, per species, re-run the
+    same selection (determine_adaptive_level is a pure function of adaptive_levels, job_type and
+    spc.adaptive_lot_n_heavy / number_of_heavy_atoms, both live on ARCSpecies) to emit
+    per-species opt/freq/sp level dicts. Alternative, more faithful: record job.level.as_dict()
+    per completed job on the species (needs a JobAdapter->species handoff). The actually-run
+    method/basis is also recoverable from the exported opt_input/sp_input deck route line.
+  blocker: >-
+    adaptive_levels is not an argument of write_output_yml; the PR #1059 doc for
+    atom_corrections_level explicitly states output.yml "records neither the adaptive levels
+    nor a per-species energy level".
+  reliability: high
+  reliability_note: "deterministic recomputation of the scheduler's own selection; matches job.level unless the user later edited adaptive_levels between restarts"
+  tckdb_value: high
+  source: arc/scheduler.py:1123
+
+- path: species_upload.statmech.energy_level_of_theory.method
+  arc_location: "arc/scheduler.py:determine_adaptive_level:5273 (job_type 'sp' or 'composite')"
+  in_memory_form: "Level (sp level for this species' heavy-atom range); same source as the primary_calculation row"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "runs with adaptive_levels; without them it equals the exported run-level sp_level/composite_method"
+  reachable_from_export: false
+  export_effort: moderate
+  effort_rationale: >-
+    Same plumbing as the per-calculation level row (pass adaptive_levels, recompute per species).
+    Scientifically load-bearing because Arkane is handed ONE arkane_level_of_theory and ONE
+    freq_scale_factor for all species (no 'adaptive' reference anywhere in arc/processor.py,
+    arc/statmech/arkane.py or arc/output.py), so a consumer needs the per-species energy level to
+    detect a mismatch between the corrected level and the energy level.
+    Statmech-side view (merged from the Arkane pass): the energy Arkane actually consumed is the
+    log named in its species file, energy=Log(paths['composite'] or paths['sp'])
+    (arc/statmech/arkane.py:483); binding that log to its job level is what lets a consumer
+    compare it with thermo.atom_corrections_level (PR #1059), which the PR's own docs say is
+    impossible today.
+  blocker: "adaptive_levels not passed to write_output_yml; per-job level lives on JobAdapters"
+  reliability: high
+  tckdb_value: high
+  source: arc/scheduler.py:5273
+
+- path: species_upload.thermo.energy_level_of_theory.method
+  arc_location: "arc/scheduler.py:determine_adaptive_level:5273"
+  in_memory_form: "Level; identical value to statmech.energy_level_of_theory for the same species"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "runs with adaptive_levels"
+  reachable_from_export: false
+  export_effort: moderate
+  effort_rationale: "Same single change as statmech.energy_level_of_theory; one per-species field feeds both TCKDB paths."
+  blocker: "adaptive_levels not passed to write_output_yml"
+  reliability: high
+  tckdb_value: high
+  source: arc/scheduler.py:5289
+
+- path: arc_only.species.opt_level
+  arc_location: "arc/scheduler.py:post_opt_actions:3607 and parse_composite_geo:3447"
+  in_memory_form: "str, Level.simple() of the RUN-level opt_level (or composite_method)"
+  obtained_from: scheduler_state
+  value_kind: requested
+  computed_when: "after every successful opt/composite job"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    Attribute read on ARCSpecies. NOT recommended as a level source: it is stamped from
+    self.opt_level, never from job.level, so under adaptive_levels it names the run-level opt
+    level even when the job ran at an adaptive one. Listed so nobody exports it as the observed
+    per-species level.
+  blocker: "value is wrong under adaptive_levels"
+  reliability: low
+  tckdb_value: low
+  source: arc/scheduler.py:3607
+
+- path: species_upload.conformers[].additional_calculations[].level_of_theory.method
+  arc_location: "arc/main.py:ARC.determine_model_chemistry:1073-1079,1150-1153 (scan_level); used at arc/scheduler.py:2797,2829"
+  in_memory_form: "Level (scan_level; falls back to opt_level or default 'scan'/'scan_for_composite'); per job possibly replaced by an adaptive level"
+  obtained_from: input_setting
+  value_kind: requested
+  computed_when: "runs with rotor scans"
+  reachable_from_export: false
+  export_effort: trivial
+  effort_rationale: >-
+    rotor_scans[] records are exported (with source_log) but no level of theory is attached and
+    no top-level scan_level exists in output.yml. Pass self.scan_level from main.py:673 and emit
+    it via _level_to_dict as a top-level 'scan_level' (and, under adaptive levels, per species).
+    The level actually run is also in the Gaussian ModRedundant deck beside source_log.
+  blocker: "scan_level not an argument of write_output_yml"
+  reliability: high
+  reliability_note: "requested level; equals the run level unless adaptive_levels lists 'scan' for the species' range"
+  tckdb_value: high
+  source: arc/main.py:1078
+
+- path: reaction_upload.transition_state.calculations[].level_of_theory.method
+  arc_location: "arc/main.py:determine_model_chemistry:1088-1092 (irc_level); used at arc/scheduler.py:1837"
+  in_memory_form: "Level (irc_level; default 'irc'/'irc_for_composite')"
+  obtained_from: input_setting
+  value_kind: requested
+  computed_when: "TS species with IRC job type"
+  reachable_from_export: false
+  export_effort: trivial
+  effort_rationale: >-
+    irc_logs are exported but the IRC calculations carry no level. Pass self.irc_level from
+    main.py:673 and emit a top-level irc_level dict. Same treatment for ts_guess_level (tsg
+    optimisations, arc/scheduler.py:1515,3403) and orbitals_level (arc/scheduler.py:1852).
+  blocker: "irc_level not an argument of write_output_yml"
+  reliability: high
+  tckdb_value: high
+  source: arc/main.py:1092
+
+- path: conformer_upload.calculation.level_of_theory.method
+  arc_location: "arc/main.py:1037-1045 (conformer_opt_level, conformer_sp_level); used at arc/scheduler.py:3008,3180"
+  in_memory_form: "Level objects on ARC and Scheduler"
+  obtained_from: input_setting
+  value_kind: requested
+  computed_when: "every species that goes through conformer screening"
+  reachable_from_export: false
+  export_effort: trivial
+  effort_rationale: >-
+    output.yml exports conformers[] xyz and conformer_energies but not the level they were
+    optimized/energied at, so conformer energies are unattributable. Pass both levels from
+    main.py:673 and emit them as top-level level dicts. (Conformer job log paths themselves are
+    not exported either — another row's concern.) TS conformers are optimised at
+    ts_guess_level instead (arc/scheduler.py:1539), which needs the same treatment.
+  blocker: "levels not passed to write_output_yml"
+  reliability: high
+  tckdb_value: high
+  source: arc/main.py:1041
+
+- path: arc_only.levels.ts_guess_level
+  arc_location: "arc/main.py:determine_model_chemistry:1050-1054"
+  in_memory_form: "Level"
+  obtained_from: input_setting
+  value_kind: requested
+  computed_when: "runs with TS species"
+  reachable_from_export: false
+  export_effort: trivial
+  effort_rationale: "Level for the TS-guess optimisation jobs (tsg); pass from main.py:673 and emit via _level_to_dict."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/main.py:1054
+
+- path: arc_only.levels.orbitals_level
+  arc_location: "arc/main.py:determine_model_chemistry:1098-1102,1180-1188"
+  in_memory_form: "Level"
+  obtained_from: input_setting
+  value_kind: requested
+  computed_when: "runs with an orbitals job type"
+  reachable_from_export: false
+  export_effort: trivial
+  effort_rationale: "Pass from main.py:673; no TCKDB home."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/main.py:1188
+
+- path: arc_only.run.adaptive_levels
+  arc_location: "arc/main.py:process_adaptive_levels:1342; stored self.adaptive_levels:319"
+  in_memory_form: "dict {(min_heavy, max_heavy|'inf'): {tuple[job_type]: Level}}"
+  obtained_from: input_setting
+  value_kind: requested
+  computed_when: "when the input sets adaptive_levels"
+  reachable_from_export: false
+  export_effort: trivial
+  effort_rationale: >-
+    Already serialised for restart.yml at main.py:438-442; the same comprehension can be written
+    to output.yml. Needed so a consumer can audit per-species level selection.
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/main.py:438
+
+# ===========================================================================
+# 2. SOFTWARE RELEASE FOR CALCULATIONS output.yml REFERENCES BUT NEVER VERSIONS
+# ===========================================================================
+
+- path: species_upload.conformers[].additional_calculations[].software_release.version
+  arc_location: "arc/output.py:_iter_ess_logs:1190 (key_map sp/geo/freq/neb only, line 1200)"
+  in_memory_form: "str ESS banner via parse_ess_version, per log file"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: "any rotor scan / IRC / conformer log on disk"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    ess_versions / ess_software are keyed only opt/freq/sp/neb, so rotor-scan
+    (rotor_scans[].source_log) and IRC (irc_logs[]) calculations have no software identity.
+    Calling the existing _get_ess_versions/_get_ess_software on those paths (both already live
+    in _spc_to_dict) closes it; the adapter could equally do it from the exported log paths.
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/output.py:1200
+
+- path: arc_only.output_dict.paths.composite
+  arc_location: "arc/scheduler.py:parse_composite_geo:3445 (set); arc/statmech/arkane.py:483 (consumed as the energy source)"
+  in_memory_form: "str absolute path to the composite-method log (e.g. CBS-QB3 / G4)"
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: "runs with composite_method"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    output_dict is passed to write_output_yml, but _spc_to_dict only reads paths 'geo', 'freq',
+    'sp' (arc/output.py:1836-1838) and _iter_ess_logs has no 'composite' key, while parse_composite_geo
+    sets neither 'geo' nor 'sp'. So for a composite run the calculation that produced both the
+    geometry and the energy Arkane used has NO log path, no input deck, no ess_version and no
+    spin diagnostic in output.yml. TCKDB target: the composite primary_calculation (artifacts,
+    software_release, opt_result/sp_result). Emit a composite_log (+ composite_input) and add
+    'composite' to _iter_ess_logs key_map.
+  blocker: null
+  reliability: high
+  tckdb_value: high
+  source: arc/scheduler.py:3445
+
+# ===========================================================================
+# 3. ENERGY-CORRECTION SWITCHES OUTSIDE THE THERMO BLOCK (e0, kinetics runs)
+# ===========================================================================
+
+- path: arc_only.species.statmech.e0_atom_corrections_applied
+  arc_location: "arc/statmech/arkane.py:ArkaneAdapter.render_arkane_input_template:414 (use_aec) -> parse_species_thermo:1298 / parse_reaction_kinetics:1325 (spc.e0)"
+  in_memory_form: >-
+    Not stored. spc.e0 (float, kJ/mol) is written by whichever Arkane run parsed it last: the thermo run
+    (AEC + BAC when bac_type set), the separate e0_only run (processor.py:221), or, for a TS, the kinetics
+    run (AEC only; processor.py:154 passes bac_type=None). The use_aec/use_bac switch of that run is a
+    local expression on main and an adapter attribute on PR #1059, never attached to spc.e0.
+  obtained_from: computed
+  value_kind: observed
+  computed_when: every Arkane run; the switch is True iff Arkane's DB or ARC data/AEC.yml knows arkane_level_of_theory
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    PR #1059 stamps the switch only on spc.thermo (so it covers e0 only for compute_thermo species, where
+    thermo and e0 come from the same run). Stamp the same use_aec/use_bac onto the species when parse_e0
+    assigns spc.e0 (both parse_species_thermo and parse_reaction_kinetics) and emit it beside
+    statmech.e0_kj_mol. Alternatively recompute at write time: the switch is a pure function of
+    arkane_level_of_theory, which write_output_yml already receives. Without it, statmech.e0_kj_mol of a
+    TS or e0_only species cannot be told apart between a corrected 0 K enthalpy and an absolute
+    electronic energy (~-1e5 kJ/mol per heavy atom).
+  blocker: null
+  reliability: high
+  tckdb_value: high
+  source: arc/statmech/arkane.py:414
+
+- path: species_upload.thermo.enthalpy_formation_0k_kj_mol
+  arc_location: "arc/output.py:_statmech_to_dict:2113 (statmech.e0_kj_mol)"
+  in_memory_form: "float kJ/mol; Arkane conformer E0 = E_elec + AEC(+BAC) + scaled ZPE"
+  obtained_from: arkane_output
+  value_kind: derived
+  computed_when: species with a converged Arkane statmech run whose useAtomCorrections was True
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    The number is already exported as statmech.e0_kj_mol; what ARC does not export is the statement that
+    it IS a 0 K formation enthalpy. That statement holds only when the producing run applied AEC (see the
+    e0_atom_corrections_applied row) and the AEC level equals the energy level. For compute_thermo species
+    the PR #1059 thermo flags come from the same Arkane run and suffice; for e0_only species and TSs they
+    do not exist. Export effort is the marker, not the value.
+  blocker: null
+  reliability: medium
+  tckdb_value: medium
+  source: arc/output.py:2113
+
+- path: arc_only.reaction.kinetics.atom_corrections_applied
+  arc_location: "arc/statmech/arkane.py:render_arkane_input_template:414-415; arc/processor.py:154"
+  in_memory_form: >-
+    bool, not stored on the reaction. Kinetics run: useAtomCorrections = bool(model_chemistry or
+    atom_energies); useBondCorrections is always False because processor passes bac_type=None to the
+    kinetics adapter. Literal values also sit in calcs/statmech/kinetics/input.py.
+  obtained_from: computed
+  value_kind: observed
+  computed_when: every rates run (compute_high_p_rate_coefficient)
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    PR #1059 records the switches on thermo only; parse_arkane_kinetics_output / parse_reaction_kinetics
+    record nothing. Stamp use_aec/use_bac into rxn.kinetics (and onto rxn.ts_species) in
+    parse_reaction_kinetics and emit under kinetics. Matters for TCKDB because output.yml still emits
+    atom_energy energy_corrections records for TS entries (the PR leaves TS flags null, so records are
+    "emitted as before" whether or not the kinetics run applied them) and TS statmech.e0_kj_mol — i.e.
+    reaction_upload.transition_state.applied_energy_corrections[] cannot be asserted as applied. Barrier
+    (Ea) is unaffected when AEC is on/off uniformly (atom counts conserve), and BAC never enters a kinetics
+    run, so the wells-vs-TS BAC non-cancellation risk does not arise on main.
+  blocker: null
+  reliability: high
+  tckdb_value: high
+  source: arc/processor.py:154
+
+# ===========================================================================
+# 4. ATOM MAPPING (arc/mapping/)
 # ===========================================================================
 
 - path: reaction_upload.atom_map.participants[].atom_to_ts
-  arc_location: "ARCReaction.atom_map property -> arc.mapping.driver.map_reaction"
+  arc_location: "arc/reaction/reaction.py:ARCReaction.atom_map:158 -> arc/mapping/driver.py:map_reaction:43"
   in_memory_form: >-
-    list[int]. ARC's native map is REACTANT->PRODUCT, not participant->TS:
-    entry i is the running 0-based atom index of reactant atom i in the
-    concatenated product atom ordering. Both sides 0-based; validated by
-    check_atom_map_and_return to be a permutation of 0..N-1
-    (arc/mapping/driver.py:79). TCKDB wants a per-participant
-    dict[int,int] of {participant-local 1-based index: TS 1-based index},
-    so BOTH an index-base shift (+1) and a re-shaping are required.
-    ARC-generated TS guesses are built in concatenated-reactant atom order
-    (arc/job/adapters/ts/linear.py:1649, :3508 "in reactant atom ordering";
-    arc/job/adapters/ts/rits_ts.py:27), which supplies the reactant leg as
-    the identity map r_local+offset -> ts_index, and the product leg as
-    atom_map[r] -> ts_index inverted. UNVERIFIED: whether the AutoTST, GCN,
-    KinBot and GoFlow TS adapters also preserve concatenated-reactant atom
-    order; neither those modules nor the scheduler assert it, so a
-    universal identity claim cannot be made from the code alone.
-  computed_when: >-
-    Lazily on first attribute access, for any reaction whose reactants and
-    products all have an xyz; cached in _atom_map. Independent of whether a
-    TS was located. Returns None (and logs an error) when mapping fails.
+    list[int], 0-based, REACTANT->PRODUCT running-index permutation (entry i = product running
+    index of reactant atom i), validated as a permutation by check_atom_map_and_return
+    (arc/mapping/driver.py:132). TCKDB wants per-participant {local 1-based: TS 1-based}.
+    Reactant leg = identity iff the TS geometry is in concatenated-reactant order; product leg =
+    inverse of atom_map. ARC now checks the element sequence of the TS against the reactants
+    (arc/checks/nmd.py:212 is_ts_atom_order_consistent_with_reactants) during NMD and records
+    INCONSISTENT_ATOM_ORDER_WARNING in ts_checks['warnings'] on mismatch - a necessary, not
+    sufficient, condition (same element order does not prove same atom identity).
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "lazily on first access once every reactant and product has an xyz; cached in _atom_map; None + logged error on failure"
   reachable_from_export: true
   export_effort: moderate
   effort_rationale: >-
-    rxn.atom_map is one attribute access away in _rxn_to_dict. The moderate
-    rating is entirely about correctness, not plumbing: emitting the raw
-    list is trivial, but emitting TCKDB's participant->TS shape requires
-    (a) +1 on both sides, (b) splitting the running index into
-    (participant_index, participant-local index) using per-species atom
-    counts, (c) an explicit statement that the TS geometry ordering equals
-    the concatenated reactant ordering, which ARC relies on but never
-    asserts. Recommended intermediate step: export the raw 0-based
-    reactant->product permutation plus per-species atom counts under
-    arc_only, and let the adapter do the reshaping where it can also see
-    the TS geometry.
-  blocker: null
-  source: arc/reaction/reaction.py:156
-
-- path: reaction_upload.atom_map.participants[].participant_index
-  arc_location: "ARCReaction.r_species / p_species ordering"
-  in_memory_form: >-
-    Implicit: position in rxn.r_species / rxn.p_species (0-based list
-    position). TCKDB wants 1-based position on its side.
-  computed_when: "always (reaction construction)"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    enumerate(rxn.r_species, start=1) at the write site. The only subtlety
-    is that remove_dup_species() (arc/reaction/reaction.py:652) collapses
-    duplicate labels, so a 2 CH3 -> C2H6 reaction has one r_species entry
-    for two participants; the duplicate count must come from
-    get_species_count() rather than len(r_species).
-  blocker: null
-  source: arc/reaction/reaction.py:756
-
-- path: reaction_upload.atom_map.participants[].side
-  arc_location: "ARCReaction.r_species vs ARCReaction.p_species"
-  in_memory_form: "implicit in which list the ARCSpecies sits on; str 'reactant'/'product' after mapping"
-  computed_when: "always"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: "Literal per loop over the two lists; no computation."
-  blocker: null
-  source: arc/reaction/reaction.py:107
-
-- path: reaction_upload.atom_map.participants[].species_key
-  arc_location: "ARCReaction.reactants / .products (label strings)"
-  in_memory_form: "list[str] of ARCSpecies labels, already sanitised by check_label"
-  computed_when: "always"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Labels are already exported as reactant_labels / product_labels in
-    _rxn_to_dict; the atom-map block only needs to reuse them as keys.
-  blocker: null
-  source: arc/output.py:1935
-
-- path: reaction_upload.atom_map.participants[].geometry_key
-  arc_location: "arc/output.py:_spc_to_dict (per-species 'xyz' field)"
-  in_memory_form: >-
-    No key exists in ARC — output.yml identifies geometries by species
-    label only, with a single 'xyz' per species record. A bundle-local
-    geometry key would have to be minted.
-  computed_when: "n/a"
-  reachable_from_export: true
-  export_effort: moderate
-  effort_rationale: >-
-    Requires introducing a stable geometry-key convention in output.yml
-    (e.g. '<label>:final') so the atom map can name the geometry its
-    indices count into — which ADR 0011 makes mandatory. This is a schema
-    decision, not a data-availability problem.
-  blocker: null
-  source: arc/output.py:1041
-
-- path: reaction_upload.atom_map.ts_geometry_key
-  arc_location: "arc/output.py:_spc_to_dict for the TS species (transition_states[].xyz)"
-  in_memory_form: "no key; the TS geometry is addressed by rxn.ts_label / spc.label"
-  computed_when: "only for reactions with a located TS"
-  reachable_from_export: true
-  export_effort: moderate
-  effort_rationale: >-
-    Same geometry-key minting problem as participants[].geometry_key. The
-    TS geometry itself is already exported; only the addressable key is
-    missing.
-  blocker: null
-  source: arc/output.py:1282
-
-- path: reaction_upload.atom_map.source
-  arc_location: "arc/mapping/driver.py:map_reaction"
-  in_memory_form: >-
-    Not represented. ARC always derives the map algorithmically, so the
-    correct constant is 'inferred' — never 'declared' — EXCEPT when the
-    user set rxn.atom_map explicitly via the setter or the restart dict,
-    which ARC does not currently distinguish from a derived map.
-  computed_when: "always when a map exists"
-  reachable_from_export: true
-  export_effort: moderate
-  effort_rationale: >-
-    Emitting the constant 'inferred' is trivial, but doing it honestly
-    requires ARC to record whether _atom_map was set by map_reaction or by
-    the setter (arc/reaction/reaction.py:167) / restored from a restart
-    dict (arc/reaction/reaction.py:352). Today those three provenances are
-    indistinguishable, and ADR 0011 exists precisely to keep them apart.
+    One attribute access in _rxn_to_dict (arc/output.py:2808). Moderate because of correctness:
+    +1 on both sides, split running index into (participant, local index) using per-species atom
+    counts expanded by get_species_count (arc/reaction/reaction.py:872) since remove_dup_species
+    collapses A + A, and an explicit assertion that the TS geometry is in reactant order.
+    Recommended: export raw 0-based map + per-participant atom counts (arc_only.reaction.atom_map)
+    and let the adapter reshape.
   blocker: >-
-    Needs a provenance flag on ARCReaction (e.g. _atom_map_source) set at
-    each of the three assignment sites.
+    UNVERIFIED: that AutoTST / GCN / KinBot / GoFlow TS guesses preserve concatenated-reactant atom
+    order; only the NMD element-sequence check guards it.
+  reliability: medium
+  tckdb_value: high
   source: arc/reaction/reaction.py:158
 
-- path: reaction_upload.atom_map.note
-  arc_location: "arc/mapping/driver.py:map_reaction"
+- path: reaction_upload.atom_map.participants[].participant_index
+  arc_location: "arc/reaction/reaction.py:ARCReaction.r_species/p_species + get_species_count:872"
+  in_memory_form: "implicit list position (0-based); duplicates collapsed by remove_dup_species, multiplicity via get_species_count"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: always
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "enumerate(start=1) over r_species/p_species expanded by get_species_count at the write site."
+  blocker: null
+  reliability: high
+  tckdb_value: high
+  source: arc/reaction/reaction.py:872
+
+- path: reaction_upload.atom_map.participants[].side
+  arc_location: "arc/reaction/reaction.py:ARCReaction.__init__ r_species/p_species:108"
+  in_memory_form: "implicit: membership in r_species vs p_species"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: always
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Literal per loop over the two lists."
+  blocker: null
+  reliability: high
+  tckdb_value: high
+  source: arc/reaction/reaction.py:108
+
+- path: reaction_upload.atom_map.participants[].species_key
+  arc_location: "arc/output.py:_rxn_to_dict (reactant_labels/product_labels already exported)"
+  in_memory_form: "list[str] labels"
+  obtained_from: input_setting
+  value_kind: observed
+  computed_when: always
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Labels already in output.yml; the atom-map block reuses them as keys."
+  blocker: null
+  reliability: high
+  tckdb_value: high
+  source: arc/output.py:2844
+
+- path: reaction_upload.atom_map.source
+  arc_location: "arc/reaction/reaction.py:atom_map setter:170, from_dict:400"
   in_memory_form: >-
-    Not stored. The algorithm identity is knowable statically: the family
-    path (map_rxn), the general/isomerization path (map_general_rxn), or
-    the flipped retry (flip_map). TCKDB REQUIRES this note whenever
-    source='inferred'.
-  computed_when: "always when a map exists"
+    Not recorded. A map is either computed by map_reaction ('inferred') or set from a
+    reaction_dict - which is BOTH the input-YAML path and the restart path (from_dict line 400
+    reads reaction_dict['atom_map']) - or by the setter. ARC cannot tell a user-declared map from a
+    restored computed one.
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "whenever a map exists"
   reachable_from_export: true
   export_effort: moderate
   effort_rationale: >-
-    map_reaction currently returns only the list and discards which of its
-    three branches produced it. Returning a (map, branch_name) pair and
-    stashing the branch on the reaction is a small change confined to
-    arc/mapping/driver.py plus the ARCReaction property.
+    Add _atom_map_source set at the three assignment sites (property compute, setter, from_dict)
+    and persist it in as_dict so restarts keep it. Emitting constant 'inferred' without this is
+    wrong for user-declared maps.
+  blocker: "No provenance flag on ARCReaction; as_dict/from_dict round-trip erases it."
+  reliability: medium
+  tckdb_value: high
+  source: arc/reaction/reaction.py:400
+
+- path: reaction_upload.atom_map.note
+  arc_location: "arc/mapping/driver.py:map_reaction:43"
+  in_memory_form: >-
+    Not stored. Branch that produced the map is knowable: map_rxn (family template), map_general_rxn
+    (no family), or flip retry (flip=True / all product_dicts discovered_in_reverse). TCKDB requires
+    the note (algorithm name) when source=inferred.
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "whenever map_reaction ran"
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: "map_reaction returns only the list; return (map, branch) and stash on the reaction; small change in driver.py + property."
   blocker: null
-  source: arc/mapping/driver.py:57
+  reliability: high
+  tckdb_value: high
+  source: arc/mapping/driver.py:43
 
 - path: reaction_upload.atom_map.equivalent_map_count
-  arc_location: "arc/checks/nmd.py:find_equivalent_atoms / identify_equivalent_atoms_in_molecule"
+  arc_location: "arc/reaction/reaction.py:ARCReaction.atom_map_clusters:175 -> arc/mapping/cluster.py:map_reaction_clusters:1028 (MapCluster:98)"
   in_memory_form: >-
-    UNVERIFIED: find_equivalent_atoms returns equivalence classes of atoms
-    (used to accept an NMD check under any equivalent mapping), not a count
-    of symmetry-equivalent whole maps. Converting equivalence classes into
-    TCKDB's equivalent_map_count is a real derivation, not a lookup, and I
-    could not establish that the classes it produces are complete enough to
-    make the count sound.
-  computed_when: "only during the TS normal-mode-displacement check"
-  reachable_from_export: false
-  export_effort: hard
+    list[MapCluster]; each has members (enumerated equivalent maps), degeneracy (exact reaction-path
+    degeneracy of the center, center_degeneracy), enumerated_degeneracy, truncated, recipe_validated.
+    len(members) of the cluster containing rxn.atom_map is an enumeration-bounded count of
+    symmetry-equivalent maps (MAX_ENUMERATED_MAPS=5000, and only RMG template matches are enumerated).
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "NEVER in a production run: the property is lazy and has no caller outside tests; computable on demand at write time (expensive)"
+  reachable_from_export: true
+  export_effort: moderate
   effort_rationale: >-
-    The equivalence classes are computed inside a check that runs against a
-    live freq JobAdapter and are discarded; nothing is stored on the
-    species. Even with plumbing, turning classes into a defensible map
-    count needs new science, and TCKDB explicitly prefers null to a wrong 1.
-  blocker: "Computed transiently inside checks against a Job object; never retained."
-  source: arc/checks/nmd.py:480
+    Call rxn.atom_map_clusters in _rxn_to_dict (guarded, costly: sweeps every template product dict
+    in both directions), find the cluster containing atom_map, emit its member count.
+  blocker: >-
+    UNVERIFIED: that cluster member count equals TCKDB's 'maps equivalent under symmetry of the
+    participating structures'; the docstring calls the enumeration a lower bound (C2H5Cl example),
+    and TCKDB prefers null to a wrong number. truncated=True clusters must emit null.
+  reliability: low
+  tckdb_value: medium
+  source: arc/reaction/reaction.py:175
 
 - path: arc_only.reaction.atom_map
-  arc_location: "ARCReaction.atom_map"
-  in_memory_form: >-
-    list[int], 0-based, length = total reactant atom count; entry i is the
-    product-side running index of reactant atom i. This is ARC's native
-    artefact and has no direct TCKDB equivalent (TCKDB indexes against the
-    TS, not across the reaction).
-  computed_when: "always for reactions whose reactants and products all have xyz"
+  arc_location: "arc/reaction/reaction.py:ARCReaction.atom_map:158"
+  in_memory_form: "list[int] 0-based reactant->product running-index permutation; already persisted to restart.yml via as_dict (line 331)"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "reactions whose participants all have xyz"
   reachable_from_export: true
   export_effort: trivial
-  effort_rationale: >-
-    One line in _rxn_to_dict: rxn_dict['atom_map'] = rxn.atom_map. Should
-    be emitted alongside per-species atom counts and an explicit
-    index_base: 0 field so no consumer can mistake the base. This is the
-    single highest value-per-line change in this inventory.
+  effort_rationale: "rxn_dict['atom_map'] = rxn.atom_map with index_base: 0 and per-participant atom counts; highest value per line in this area."
   blocker: null
-  source: arc/reaction/reaction.py:83
+  reliability: high
+  tckdb_value: high
+  source: arc/reaction/reaction.py:331
+
+- path: arc_only.reaction.atom_map_channels
+  arc_location: "arc/reaction/reaction.py:ARCReaction.atom_map_clusters:175"
+  in_memory_form: "list[MapCluster]; len>1 means atom_map picked one of several distinct channels by arbitrary tie-break (1/293 benchmark reactions)"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "never unless accessed; computable at write time"
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: "Guarded call at write time; emit channel count, per-channel degeneracy, recipe_validated, truncated. Flags ambiguous-channel reactions whose TS may belong to another channel."
+  blocker: "Runtime cost; never computed in the run today."
+  reliability: medium
+  tckdb_value: medium
+  source: arc/mapping/cluster.py:98
 
 - path: arc_only.reaction.formed_and_broken_bonds
-  arc_location: "ARCReaction.get_formed_and_broken_bonds / get_changed_bonds"
-  in_memory_form: >-
-    tuple[list[tuple[int,int]], list[tuple[int,int]]] of atom-index pairs,
-    0-based, expressed in the REACTANT running index space (product bonds
-    are pulled back through atom_map). Raises ReactionError if atom_map is
-    None.
-  computed_when: "on demand; requires a successful atom map"
+  arc_location: "arc/reaction/reaction.py:get_formed_and_broken_bonds:1196 / get_changed_bonds:1216"
+  in_memory_form: "tuple(list[(int,int)], list[(int,int)]) 0-based reactant running-index space; falls back to family recipe when atom_map is None"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "on demand"
   reachable_from_export: true
   export_effort: trivial
-  effort_rationale: >-
-    Method call on the in-scope reaction object, wrapped in the existing
-    _safe() helper because it raises when the map is missing.
+  effort_rationale: "Method call wrapped in output.py's _safe()."
   blocker: null
-  source: arc/reaction/reaction.py:993
+  reliability: medium
+  tckdb_value: medium
+  source: arc/reaction/reaction.py:1196
 
 - path: arc_only.reaction.expected_changing_bonds
-  arc_location: "ARCReaction.get_expected_changing_bonds -> ReactionFamily.actions"
-  in_memory_form: >-
-    tuple of BREAK_BOND / FORM_BOND atom-index pairs taken from the RMG
-    family recipe, keyed by template labels ('*1','*2','*3'); indices are
-    0-based reactant running indices via r_label_dict.
-  computed_when: "only when rxn.family is not None"
+  arc_location: "arc/reaction/reaction.py:get_reactive_bonds_from_family:1114"
+  in_memory_form: "tuple(formed, broken, changed) of 0-based reactant-space index pairs from the family recipe + product_dicts[i]['r_label_map']"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "family known and a forward-discovered product dict of that family exists"
   reachable_from_export: true
-  export_effort: moderate
+  export_effort: trivial
   effort_rationale: >-
-    Needs r_label_dict, which is produced inside the mapping driver
-    (map_rxn) rather than stored on the reaction; the recipe actions
-    themselves are one ReactionFamily(label=rxn.family).actions away.
-  blocker: "r_label_dict is a local of arc/mapping/driver.py:map_rxn and is not retained."
-  source: arc/reaction/reaction.py:806
+    Old blocker (r_label_dict local to the mapping driver) is gone: product_dicts carry r_label_map
+    and get_reactive_bonds_from_family derives the recipe bonds directly. One guarded call.
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/reaction/reaction.py:1114
 
 - path: arc_only.reaction.rxn_smiles
-  arc_location: "ARCReaction.get_rxn_smiles"
-  in_memory_form: "str, 'r1.r2>>p1.p2'; raises ValueError if any SMILES is unavailable"
-  computed_when: "always when every participant has a perceivable mol"
+  arc_location: "arc/reaction/reaction.py:get_rxn_smiles:1280"
+  in_memory_form: "str 'r1.r2>>p1.p2' (unmapped); raises ValueError when a SMILES is missing"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "every participant has a mol"
   reachable_from_export: true
   export_effort: trivial
-  effort_rationale: "Single guarded method call in _rxn_to_dict."
+  effort_rationale: "Single guarded call in _rxn_to_dict."
   blocker: null
-  source: arc/reaction/reaction.py:1063
+  reliability: high
+  tckdb_value: low
+  source: arc/reaction/reaction.py:1280
 
 # ===========================================================================
-# 2. TRANSITION-STATE VALIDATION  (arc/checks/)
+# 5. TS VALIDATION DETAIL (ts_checks verdicts are exported; mappings/rationale are not)
 # ===========================================================================
-
-- path: reaction_upload.transition_state.validation_evidence[].passed
-  arc_location: "ARCSpecies.ts_checks['IRC'] set by arc/checks/ts.py:check_irc_species_and_rxn"
-  in_memory_form: "bool | None inside the ts_checks dict; None = not yet run"
-  computed_when: "only when an IRC job ran for a located TS and its two endpoints were optimized"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    spc.ts_checks is a plain dict on the TS ARCSpecies, live in
-    _spc_to_dict where is_ts is already branched on. output.yml today
-    emits irc_converged (did the IRC job converge) but NOT this — whether
-    the IRC endpoints actually match the declared reactants and products,
-    which is the scientifically load-bearing claim.
-  blocker: null
-  source: arc/checks/ts.py:517
-
-- path: reaction_upload.transition_state.validation_evidence[].kind
-  arc_location: "arc/checks/ts.py:check_irc_species_and_rxn"
-  in_memory_form: "not represented; the constant 'irc' is the only kind TCKDB accepts"
-  computed_when: "same as .passed"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: "Literal constant emitted alongside the ts_checks['IRC'] boolean."
-  blocker: null
-  source: arc/checks/ts.py:497
-
-- path: reaction_upload.transition_state.validation_evidence[].rationale
-  arc_location: "ARCSpecies.ts_checks['warnings'] and ARCSpecies.ts_report"
-  in_memory_form: >-
-    ts_checks['warnings'] is an accumulating str (semicolon-joined);
-    ts_report is a str describing every TS-guess method and its ranking.
-    Neither is exported.
-  computed_when: "populated during TS checks; ts_report during TS search"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Both are string attributes of the TS ARCSpecies. TCKDB requires a
-    non-empty rationale, and the check code also distinguishes the
-    isomorphism path from the distance-matrix fallback in log messages —
-    capturing which path decided the verdict would need one extra field on
-    the species, otherwise the rationale can only say "IRC endpoints
-    matched" without saying how.
-  blocker: null
-  source: arc/species/species.py:2246
 
 - path: reaction_upload.transition_state.validation_evidence[].reactant_participant_mapping
-  arc_location: "arc/checks/ts.py:_perceive_irc_fragments + _match_fragments_to_species"
+  arc_location: "arc/checks/ts.py:check_irc_species_and_rxn:505 -> _perceive_irc_fragments:581 + _match_fragments_to_species:670"
   in_memory_form: >-
-    COMPUTED AND DISCARDED. _perceive_irc_fragments builds
-    `fragment_indices` — a list of 0-based atom index lists, one per
-    connected component of the IRC endpoint geometry — then returns only
-    the perceived Molecule objects. _match_fragments_to_species then finds
-    the one-to-one fragment<->expected-species assignment by backtracking
-    and returns only a bool. Together these two are exactly TCKDB's
-    {participant_key: [atom indices]} mapping, and both throw it away.
-    Indices count into the IRC-endpoint geometry, which inherits the TS
-    input atom ordering (the IRC job starts from the TS and the subsequent
-    opt preserves atom order), so they are TS atom indices — 0-based, and
-    TCKDB requires 1-based.
-  computed_when: "only when an IRC ran, both endpoints were perceived, and the graph-isomorphism path (not the dmat fallback) was taken"
+    COMPUTED AND DISCARDED. _perceive_irc_fragments builds fragment_indices (0-based atom-index
+    lists per connected component of the optimized IRC endpoint) but returns only Molecules;
+    _match_fragments_to_species finds the fragment->species assignment by backtracking but returns
+    bool; which endpoint is the reactant side (the 'or' branch) is also discarded. Endpoint atoms
+    are in TS atom order (IRC starts from the TS, endpoint opt at arc/scheduler.py:4144 preserves
+    order). TCKDB wants {'reactant:N': [1-based TS indices]}.
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "IRC ran both ways, both endpoint opts converged, and the isomorphism path (not the bond-list fallback) decided"
   reachable_from_export: false
   export_effort: moderate
   effort_rationale: >-
-    The values exist but are local. Change _perceive_irc_fragments to
-    return (molecules, fragment_indices), _match_fragments_to_species to
-    return the assignment instead of a bool, and have
-    check_irc_species_and_rxn stash the resulting participant->indices dict
-    on rxn.ts_species (next to ts_checks). Then it is reachable and a
-    +1 shift away. Note TCKDB refuses a PARTIAL map presented as passing,
-    so the fallback (bond-list) path must emit evidence with no mappings
-    rather than an incomplete one.
-  blocker: >-
-    Both producing functions currently narrow their return type to
-    bool / list[Molecule]; nothing is stored on the species.
-  source: arc/checks/ts.py:588
+    Return (mols, fragment_indices) and the assignment instead of bool, record which endpoint
+    matched reactants, stash {side: {participant: indices}} on rxn.ts_species next to ts_checks.
+    Then +1. The bond-list fallback yields no partition, so it must emit evidence without
+    mappings (TCKDB refuses partial maps presented as passing).
+  blocker: "Both helpers narrow their return types; nothing retained on the species."
+  reliability: medium
+  tckdb_value: high
+  source: arc/checks/ts.py:670
 
 - path: reaction_upload.transition_state.validation_evidence[].product_participant_mapping
-  arc_location: "arc/checks/ts.py:_perceive_irc_fragments + _match_fragments_to_species (second endpoint)"
-  in_memory_form: "identical to the reactant side; 0-based TS-frame atom index lists per product fragment"
-  computed_when: "same as the reactant mapping"
+  arc_location: "arc/checks/ts.py:check_irc_species_and_rxn:505 (second endpoint)"
+  in_memory_form: "as reactant side; 0-based TS-frame index lists per product fragment"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "same as reactant mapping"
   reachable_from_export: false
   export_effort: moderate
-  effort_rationale: >-
-    Same single change as the reactant side — the two endpoints go through
-    the same two helpers. TCKDB rejects a one-sided map, so both must be
-    plumbed together or neither.
+  effort_rationale: "Same single change; TCKDB rejects one-sided maps so both sides land together."
   blocker: "Same as reactant_participant_mapping."
-  source: arc/checks/ts.py:589
+  reliability: medium
+  tckdb_value: high
+  source: arc/checks/ts.py:581
 
-- path: arc_only.species.ts_checks
-  arc_location: "ARCSpecies.ts_checks"
+- path: ts_upload.validation_evidence[].reactant_participant_mapping
+  arc_location: "arc/checks/ts.py:_match_fragments_to_species:670"
+  in_memory_form: "same as reaction_upload route"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "same as reaction_upload route"
+  reachable_from_export: false
+  export_effort: moderate
+  effort_rationale: "Same plumbing; standalone TS route."
+  blocker: "Same as reaction_upload route."
+  reliability: medium
+  tckdb_value: high
+  source: arc/checks/ts.py:670
+
+- path: reaction_upload.transition_state.validation_evidence[].rationale
+  arc_location: "arc/checks/ts.py:check_irc_species_and_rxn:505"
   in_memory_form: >-
-    dict with keys 'E0', 'e_elect', 'IRC', 'freq', 'NMD' (each bool|None)
-    plus 'warnings' (str). None means "not evaluated", which is distinct
-    from False.
-  computed_when: "populated for every TS species; individual keys filled as the corresponding check runs"
+    Not recorded. The verdict (ts_checks['IRC'], exported) is decided by one of two methods -
+    graph isomorphism of perceived fragments, or distance-matrix bond-list comparison - and only a
+    logger.debug line says which. ts_checks['warnings'] (exported) carries NMD warnings, not IRC
+    rationale.
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "whenever check_irc_species_and_rxn runs"
   reachable_from_export: true
   export_effort: trivial
-  effort_rationale: >-
-    Direct dict copy in the is_ts branch of _spc_to_dict. This is ARC's
-    complete self-assessment of a saddle point and none of it is currently
-    written down — output.yml records only irc_converged and the imaginary
-    frequency count.
+  effort_rationale: "Set e.g. ts_checks['IRC_method'] = 'isomorphism'|'bond_list' at the two return sites; export beside ts_checks. TCKDB requires a non-empty rationale."
   blocker: null
-  source: arc/species/species.py:2241
+  reliability: high
+  tckdb_value: medium
+  source: arc/checks/ts.py:556
+
+- path: reaction_upload.transition_state.validation_evidence[].source_calculation_key
+  arc_location: "arc/scheduler.py:check_irc_species:4207 (irc_label pairing) + output_dict paths['irc']"
+  in_memory_form: >-
+    Not a key; the IRC logs are exported (irc_logs + irc_log_directions) so the adapter can mint
+    keys, but the verdict is actually computed on the two IRC-endpoint OPT species
+    (IRC_<ts>_1/_2, exported as ordinary species entries) and the TS->endpoint link
+    (ts.irc_label, space-joined labels) is not exported.
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: "IRC requested and both branches converged"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Emit spc.irc_label (TS side: endpoint labels; endpoint side: parent TS label) in _spc_to_dict."
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/scheduler.py:4175
+
+- path: arc_only.species.irc_label
+  arc_location: "arc/species/species.py:ARCSpecies.irc_label:399; set at arc/scheduler.py:4175"
+  in_memory_form: "str; on a TS: space-joined IRC endpoint species labels; on an endpoint species: its TS label"
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: "IRC jobs spawned post-IRC opts"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "One key. Without it the IRC_<ts>_N species rows in output.yml look like ordinary species and a consumer may deposit them as wells."
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/species/species.py:399
 
 - path: arc_only.species.rxn_zone_atom_indices
-  arc_location: "ARCSpecies.rxn_zone_atom_indices, set from arc/checks/ts.py:get_rxn_zone_atom_indices"
-  in_memory_form: >-
-    list[int], 0-based, sorted ascending — the atoms with the largest
-    mass-weighted RMS displacement in the imaginary normal mode, i.e.
-    ARC's identification of the reacting core.
-  computed_when: "only for a TS whose freq job produced parseable normal-mode displacements"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Plain list attribute on the TS ARCSpecies. Needs an explicit
-    index_base: 0 marker on export — the neighbouring exported field
-    (torsions[].atom_indices) is 1-based, so an unlabelled sibling list
-    is an off-by-one waiting to happen.
-  blocker: null
-  source: arc/species/species.py:387
-
-- path: reaction_upload.transition_state.calculations[].freq_result.reaction_coordinate_mode_index
-  arc_location: "arc/checks/ts.py:get_index_of_abs_largest_neg_freq"
-  in_memory_form: "int, 0-BASED index into the frequency array of the mode used as the reaction coordinate"
-  computed_when: "whenever the NMD check runs on a TS with at least one imaginary frequency"
+  arc_location: "arc/checks/ts.py:get_rxn_zone_atom_indices:377"
+  in_memory_form: "list[int] 0-based sorted; atoms with largest RMS displacement in the imaginary mode"
+  obtained_from: parsed_log
+  value_kind: derived
+  computed_when: "TS rotor invalidation step (checks/ts.py:360); returned as a local only"
   reachable_from_export: false
   export_effort: moderate
   effort_rationale: >-
-    The index is computed inside the NMD check against a live freq
-    JobAdapter and never stored. However it is trivially recomputable at
-    write time from spc.freqs, which IS in scope: argmin over the negative
-    entries. Recomputing (rather than plumbing) makes this a small,
-    self-contained change in arc/output.py — but it must be +1'd, because
-    TCKDB's FrequencyModePayload.mode_index is 1-based (ge=1).
-  blocker: "Not stored; either plumb from checks/ts.py or recompute from spc.freqs at write time."
-  source: arc/checks/ts.py:409
+    ARCSpecies.rxn_zone_atom_indices (species.py:411) is never assigned anywhere; the value lives
+    only as a local in invalidate_rotors_with_both_pivots_in_a_reactive_zone. Store it on the
+    species (and in as_dict) then emit with index_base 0.
+  blocker: "Attribute exists but is never written."
+  reliability: medium
+  tckdb_value: low
+  source: arc/checks/ts.py:377
 
-- path: reaction_upload.transition_state.calculations[].freq_result.modes[].imaginary_disposition
-  arc_location: "ARCSpecies.ts_checks['NMD'] (arc/checks/nmd.py:analyze_ts_normal_mode_displacement)"
+- path: arc_only.species.nmd_detail
+  arc_location: "arc/checks/nmd.py:analyze_ts_normal_mode_displacement:53"
   in_memory_form: >-
-    bool | None. True means the imaginary mode's displacement is consistent
-    with the family's expected forming/breaking bonds — i.e. the mode IS
-    the reaction coordinate. ARC does not classify the OTHER imaginary
-    modes of a TS that has more than one, so only the reaction-coordinate
-    disposition is derivable; the rest would have to be 'unassigned'.
-  computed_when: "only for a TS with a family and a parseable freq log, and only when skip_nmd is False"
-  reachable_from_export: true
+    Parsed normal-mode displacement array (parser.get_normal_mode_displacement), the reaction mode
+    index (get_index_of_abs_largest_neg_freq), bond-change candidate used (recipe vs atom map), and
+    amplitude probed; only the bool verdict survives in ts_checks['NMD'].
+  obtained_from: parsed_log
+  value_kind: derived
+  computed_when: "TS freq job done and NMD check not skipped"
+  reachable_from_export: false
   export_effort: moderate
-  effort_rationale: >-
-    The boolean is on the species, but mapping it onto TCKDB's per-mode
-    enum requires pairing it with the mode index (previous row) and
-    deciding what to emit for the additional imaginary modes ARC never
-    inspects. 'unassigned' is a legitimate honest answer there per the
-    enum's own docstring.
-  blocker: null
-  source: arc/checks/ts.py:285
+  effort_rationale: "Needs results returned from the check and stashed on the species. TCKDB deliberately does not store displacement vectors, so arc_only."
+  blocker: "Computed against a live freq JobAdapter; discarded."
+  reliability: medium
+  tckdb_value: low
+  source: arc/checks/nmd.py:53
 
 # ===========================================================================
-# 3. TS SEARCH PROVENANCE  (arc/job/adapters/ts/, arc/scheduler.py)
+# 6. TS FREQUENCY MODES
 # ===========================================================================
 
-- path: arc_only.output_yml.ts_guesses
-  arc_location: "ARCSpecies.ts_guesses (list[TSGuess])"
+- path: reaction_upload.transition_state.calculations[].freq_frequencies_cm1
+  arc_location: "arc/species/species.py:ARCSpecies.freqs:539; set arc/scheduler.py:3712"
   in_memory_form: >-
-    list[TSGuess]. Each carries index (int), method (str), method_index,
-    method_direction (str), method_sources (list[str]), success (bool),
-    energy (float, kJ/mol relative), imaginary_freqs (list[float], cm^-1),
-    execution_time (timedelta), conformer_index, errors (str), cluster,
-    log_path, method_source_paths (dict[str,str]).
-  computed_when: "always for a TS species; one entry per TS-guess attempt across all admitted adapters"
+    list[float] cm^-1 in ESS order, negatives kept in place. output.yml splits it: statmech
+    harmonic_frequencies_cm1 DROPS every negative for a TS (arc/output.py:2108) and
+    imaginary_frequencies_cm1 is re-sorted most-negative-first, so the ESS-order position of the
+    reaction mode is lost. TCKDB's freq_reaction_coordinate_mode_index is 1-based INTO this list.
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: "TS freq job passed check_negative_freq"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Emit [float(f) for f in spc.freqs] unfiltered (e.g. freq_frequencies_cm1) in the TS record."
+  blocker: null
+  reliability: high
+  tckdb_value: high
+  source: arc/scheduler.py:3712
+
+- path: reaction_upload.transition_state.calculations[].freq_reaction_coordinate_mode_index
+  arc_location: "arc/checks/common.py:get_index_of_abs_largest_neg_freq:84, used by arc/checks/nmd.py:analyze_ts_normal_mode_displacement"
+  in_memory_form: "int, 0-based index of the most negative frequency; the mode the NMD check tested as the reaction coordinate"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "TS with >=1 imaginary; value only validated as reaction coordinate when ts_checks['NMD'] is True"
   reachable_from_export: true
   export_effort: trivial
   effort_rationale: >-
-    output.yml deliberately emits ONLY the chosen guess and only four of
-    its fields (arc/output.py:1251), with a comment explaining that
-    TSGuess.as_dict() carries absolute paths and diagnostic state. The
-    non-chosen guesses — which are the whole record of what was tried and
-    rejected — are dropped entirely. Emitting the same four safe fields
-    for every guess, plus success/energy/imaginary_freqs, is a loop change
-    at an existing write site.
+    Not stored, but recomputable at write time from spc.freqs (in scope): argmin + 1 (TCKDB ge=1).
+    Should be emitted only when NMD passed (else null), since ADR 0012 treats it as a claim.
   blocker: null
-  source: arc/output.py:1251
+  reliability: high
+  tckdb_value: high
+  source: arc/checks/common.py:84
+
+- path: ts_upload.additional_calculations[].freq_result.reaction_coordinate_mode_index
+  arc_location: "arc/checks/common.py:get_index_of_abs_largest_neg_freq:84"
+  in_memory_form: "same as reaction_upload route (0-based; TCKDB 1-based)"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "same as reaction_upload route"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Same recomputation; standalone TS route."
+  blocker: null
+  reliability: high
+  tckdb_value: high
+  source: arc/checks/common.py:84
+
+- path: reaction_upload.transition_state.calculations[].freq_imaginary_dispositions
+  arc_location: "arc/checks/ts.py:check_imaginary_frequencies:733"
+  in_memory_form: >-
+    Not represented. ARC admits extra small imaginaries (only one may lie in the major-TS band)
+    but never classifies them; the honest ARC answer for each non-reaction imaginary is
+    'unassigned' (TCKDB: declared, never inferred).
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "TS with >1 imaginary frequency"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "{i+1: 'unassigned'} for every negative in spc.freqs other than the reaction mode. No classification exists to export beyond that."
+  blocker: null
+  reliability: medium
+  tckdb_value: medium
+  source: arc/checks/ts.py:733
+
+- path: ts_upload.additional_calculations[].freq_result.modes[].imaginary_disposition
+  arc_location: "arc/checks/ts.py:check_imaginary_frequencies:733"
+  in_memory_form: "same as freq_imaginary_dispositions ('unassigned' is the only honest value ARC can give)"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "TS with >1 imaginary frequency"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Same as reaction_upload route."
+  blocker: null
+  reliability: medium
+  tckdb_value: medium
+  source: arc/checks/ts.py:733
+
+# ===========================================================================
+# 7. TS SEARCH PROVENANCE (guess alternatives, NEB/GSM)
+# ===========================================================================
+
+- path: arc_only.species.ts_guesses
+  arc_location: "arc/species/species.py:ARCSpecies.ts_guesses:379 (TSGuess:2520)"
+  in_memory_form: >-
+    list[TSGuess]: index, method, method_sources, method_index, method_direction ('F'/'R'),
+    success, initial_xyz, opt_xyz (ts_guess_level geometry), energy (after tsg opt: ABSOLUTE
+    e_elect in kJ/mol from parse_e_elect, arc/scheduler.py:3126 - the docstring's 'relative' is
+    wrong), imaginary_freqs (set only on the chosen guess, scheduler.py:3817), conformer_index,
+    execution_time, cluster (merged duplicate indices), errors, log_path, method_source_paths, t0.
+    successful_irc / successful_normal_mode are declared but never assigned (dead).
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: "every TS species"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    output.py:1955 emits only the CHOSEN guess with 4 fields. Loop over all guesses with the same
+    sanitizer plus success, method_direction, energy (with unit+absolute note), cluster,
+    conformer_index, execution_time, errors, relative log path.
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/output.py:1955
 
 - path: arc_only.species.unsuccessful_methods
-  arc_location: "ARCSpecies.unsuccessful_methods"
-  in_memory_form: "list[str] of TS-search method names that failed to produce a usable guess"
-  computed_when: "always for a TS species"
+  arc_location: "arc/species/species.py:ARCSpecies.unsuccessful_methods:451; filled arc/scheduler.py:3321"
+  in_memory_form: "list[str]"
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: "TS species"
   reachable_from_export: true
   export_effort: trivial
-  effort_rationale: >-
-    output.yml exports successful_ts_methods (arc/output.py:1224) but not
-    its complement, so a consumer cannot tell "not tried" from "tried and
-    failed" — the same distinction TCKDB's own unavailable-envelope design
-    treats as essential.
+  effort_rationale: "successful_ts_methods is exported; its complement is not. One key."
   blocker: null
-  source: arc/species/species.py:421
+  reliability: high
+  tckdb_value: low
+  source: arc/species/species.py:451
 
 - path: arc_only.species.ts_guesses_exhausted
-  arc_location: "ARCSpecies.ts_guesses_exhausted"
-  in_memory_form: "bool — True when every guess was tried without convergence"
-  computed_when: "always for a TS species"
+  arc_location: "arc/species/species.py:ARCSpecies.ts_guesses_exhausted:438"
+  in_memory_form: "bool"
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: "TS species"
   reachable_from_export: true
   export_effort: trivial
-  effort_rationale: "Plain bool attribute; one dict entry in the is_ts branch."
+  effort_rationale: "One key; distinguishes 'no TS found' from 'not attempted'."
   blocker: null
-  source: arc/species/species.py:408
+  reliability: high
+  tckdb_value: low
+  source: arc/species/species.py:438
+
+- path: arc_only.species.chosen_ts_list
+  arc_location: "arc/species/species.py:ARCSpecies.chosen_ts_list:453; appended arc/scheduler.py:3370"
+  in_memory_form: >-
+    list[int] of TSGuess indices tried in order. The ts_checks verdicts of each REJECTED guess are
+    wiped by populate_ts_checks on switch_ts (arc/scheduler.py:4023), so only the order of rejected
+    guesses survives, not why they failed (errors text on TSGuess partially).
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: "TS species"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "One key for the list; per-guess verdict history would need a snapshot of ts_checks before switch_ts (moderate)."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/scheduler.py:3370
 
 - path: reaction_upload.transition_state.calculations[].path_search_result.is_double_ended
-  arc_location: "TSGuess.method / arc/job/adapters/ts/orca_neb.py, xtb_gsm.py"
-  in_memory_form: >-
-    Not represented as a field. Statically known per adapter: orca_neb and
-    xtb_gsm are double-ended (they consume rxn.get_reactants_xyz and
-    get_products_xyz as endpoints), heuristics/linear/gcn are not.
-  computed_when: "only when a path-search TS adapter produced the chosen guess"
+  arc_location: "arc/job/adapters/ts/orca_neb.py:write_input_file:213, arc/job/adapters/ts/xtb_gsm.py"
+  in_memory_form: "implicit per adapter: orca_neb and xtb_gsm take reactant+product endpoints (double-ended)"
+  obtained_from: settings
+  value_kind: derived
+  computed_when: "chosen TS method is orca_neb or xtb_gsm"
   reachable_from_export: true
   export_effort: trivial
-  effort_rationale: >-
-    A constant lookup keyed by the already-exported chosen_ts_method
-    string. The mapping table would live next to the existing
-    _TS_GUESS_METHOD_TO_LOG_FIELD dict in arc/output.py.
+  effort_rationale: "Constant lookup keyed by chosen_ts_method next to _TS_GUESS_METHOD log-field map (arc/output.py:543)."
   blocker: null
-  source: arc/output.py:327
+  reliability: high
+  tckdb_value: low
+  source: arc/output.py:543
 
 - path: reaction_upload.transition_state.calculations[].path_search_result.source_endpoint_count
-  arc_location: "arc/job/adapters/ts/orca_neb.py:234"
-  in_memory_form: "implicit: 2 for NEB/GSM (reactant and product side geometries, aligned via rxn.atom_map)"
-  computed_when: "only for a NEB/GSM TS search"
+  arc_location: "arc/job/adapters/ts/orca_neb.py:write_input_file (reactant.xyz/product.xyz):251"
+  in_memory_form: "implicit constant 2 for NEB/GSM"
+  obtained_from: settings
+  value_kind: derived
+  computed_when: "NEB/GSM chosen"
   reachable_from_export: true
   export_effort: trivial
-  effort_rationale: "Constant 2 emitted whenever the chosen method is a double-ended path search."
+  effort_rationale: "Constant emitted with the method."
   blocker: null
-  source: arc/job/adapters/ts/orca_neb.py:234
+  reliability: high
+  tckdb_value: low
+  source: arc/job/adapters/ts/orca_neb.py:251
 
-# ===========================================================================
-# 4. WAVEFUNCTION AND SPIN DIAGNOSTICS  (arc/parser/)
-# ===========================================================================
-
-- path: species_upload.conformers[].primary_calculation.wavefunction_diagnostic.t1_diagnostic
-  arc_location: "ARCSpecies.t1, assigned in arc/scheduler.py:2960 from parser.parse_t1(paths['sp'])"
-  in_memory_form: "float, dimensionless (Lee-Taylor T1). None when the sp log reports none."
-  computed_when: >-
-    Whenever the single-point log carries a T1 line — i.e. coupled-cluster
-    sp jobs. Parsers exist for gaussian, orca, molpro, psi4, cfour,
-    terachem, xtb and the Arkane-YAML adapter.
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    spc.t1 is already a populated attribute of every ARCSpecies at write
-    time; _spc_to_dict does not mention it. One dict entry. This is the
-    single largest value/effort ratio for the species workflow: T1 is the
-    standard single-reference-quality gate and TCKDB has a first-class
-    field for it.
-  blocker: null
-  source: arc/species/species.py:351
-
-- path: reaction_upload.species[].conformers[].calculation.wavefunction_diagnostic.t1_diagnostic
-  arc_location: "ARCSpecies.t1 (same attribute, reached through the reaction bundle)"
-  in_memory_form: "float, dimensionless"
-  computed_when: "same as the species_upload route"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Identical change; recorded separately because FIELD_KEY rule 5 requires
-    both routes and because a reaction bundle's TS and participants are
-    exactly where T1 matters most for barrier reliability.
-  blocker: null
-  source: arc/species/species.py:351
-
-- path: arc_only.parser.normal_mode_displacement
-  arc_location: "arc/parser/parser.py:191 parse_normal_mode_displacement"
+- path: reaction_upload.transition_state.calculations[].path_search_result.n_points
+  arc_location: "arc/settings/settings.py:orca_neb_settings:293 / xtb_gsm_settings:274 (nnodes); orca_neb.py:240"
   in_memory_form: >-
-    tuple[np.ndarray freqs (cm^-1), np.ndarray displacements
-    (n_modes x n_atoms x 3, Angstrom, atom axis 0-based)]. Adapters exist
-    for gaussian, orca, psi4, cfour, terachem, xtb and yaml.
-  computed_when: "on demand during TS checks; not cached on any species"
+    REQUESTED only: NImages (orca_neb, default 15) / NNODES max nodes (xtb_gsm, default 15).
+    For GSM the observed frame count is already exported via parser_evidence gsm points; for NEB
+    ARC parses nothing but the final TS geometry (orca_neb.py:361), so no observed count exists.
+  obtained_from: settings
+  value_kind: requested
+  computed_when: "NEB/GSM runs"
   reachable_from_export: false
-  export_effort: hard
-  effort_rationale: >-
-    Nothing retains the eigenvectors — the NMD check reduces them to a
-    per-atom RMS list and then to a bool. Emitting them would mean
-    re-parsing the freq log from arc/output.py (feasible, the freq path is
-    in scope) and defining a payload for a potentially large dense array.
-    TCKDB deliberately does NOT store normal-mode displacement vectors
-    (see the ImaginaryModeDisposition docstring), so this is arc_only
-    candidate demand at best, not a gap to close.
-  blocker: "Not cached anywhere; TCKDB has no field for it."
-  source: arc/parser/adapter.py:82
-
-- path: arc_only.species.neg_freqs_trshed
-  arc_location: "ARCSpecies.neg_freqs_trshed"
-  in_memory_form: "list[float] of imaginary frequencies (cm^-1) that were previously troubleshot for this species"
-  computed_when: "populated when a freq job returned unexpected imaginary modes and ARC re-ran it"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Attribute on the in-scope species. Records that the reported final
-    spectrum is the survivor of a troubleshooting loop — provenance a
-    curator would want and which output.yml erases.
-  blocker: null
-  source: arc/species/species.py:238
-
-- path: arc_only.species.active
-  arc_location: "ARCSpecies.active, populated from arc/parser/parser.py:716 parse_active_space"
-  in_memory_form: >-
-    dict with keys 'occ', 'closed', 'frozen', 'core' (list[int], orbital
-    counts per irrep) and 'e_o' (tuple[int,int]: active electrons, active
-    orbitals). Molpro only.
-  computed_when: "only for Molpro CCSD single-point jobs"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Plain dict attribute. TCKDB has no active-space field; this is
-    candidate demand — an active space is part of the level of theory for
-    multireference work and LevelOfTheoryRef currently cannot express it.
-  blocker: null
-  source: arc/species/species.py:376
-
-# ===========================================================================
-# 5. GEOMETRY AND IDENTITY  (arc/species/, arc/molecule/)
-# ===========================================================================
-
-- path: species_upload.conformers[].geometry.isotopes
-  arc_location: "ARCSpecies.final_xyz['isotopes']"
-  in_memory_form: >-
-    tuple[int], one mass number per atom, POSITIONAL (0-based ordinal
-    matching 'symbols' and 'coords'). TCKDB wants dict[int,int] keyed by
-    1-based XYZ atom index.
-  computed_when: "always — every ARC xyz dict carries an 'isotopes' key (check_xyz_dict enforces it)"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    The data is already inside the dict that _spc_to_dict serialises;
-    xyz_to_str is called WITHOUT isotope_format (arc/output.py:1041) so it
-    silently drops the labelling. Either pass isotope_format='gaussian' or
-    emit a separate {i+1: iso} dict for non-default isotopes. Today an
-    isotopologue and its parent export byte-identical geometry text, which
-    for TCKDB is an identity collision, not a rounding loss.
-  blocker: null
-  source: arc/species/converter.py:138
-
-- path: reaction_upload.species[].conformers[].geometry.isotopes
-  arc_location: "ARCSpecies.final_xyz['isotopes'] (reaction-bundle route)"
-  in_memory_form: "tuple[int], positional 0-based; TCKDB wants a 1-based-keyed dict"
-  computed_when: "same as the species_upload route"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: "Same single change in _spc_to_dict; recorded separately per FIELD_KEY rule 5."
-  blocker: null
-  source: arc/species/converter.py:138
-
-- path: reaction_upload.transition_state.geometry.isotopes
-  arc_location: "ARCSpecies.final_xyz['isotopes'] for the TS species"
-  in_memory_form: "tuple[int], positional 0-based"
-  computed_when: "always for a converged TS"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Same change; called out separately because a kinetic isotope effect
-    study is exactly the case where the TS geometry's isotope labelling is
-    the point of the deposit.
-  blocker: null
-  source: arc/output.py:1041
-
-- path: arc_only.species.adjacency_list
-  arc_location: "ARCSpecies.mol.to_adjacency_list() / ARCSpecies.adjlist"
-  in_memory_form: >-
-    str, RMG adjacency-list format — carries per-atom radical electron
-    counts, lone pairs, charges and bond orders, none of which survive the
-    SMILES round trip for exotic species.
-  computed_when: "always when spc.mol is not None (i.e. every non-TS species)"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    _spc_to_dict already calls mol.to_smiles/to_inchi on a deep copy at
-    arc/output.py:1021; adding to_adjacency_list() is one more line in the
-    same block. TCKDB has no adjacency-list field — candidate demand, and
-    the only lossless 2D representation ARC holds for birad singlets and
-    charged species where SMILES multiplicity is ambiguous.
-  blocker: null
-  source: arc/species/species.py:370
-
-- path: arc_only.species.mol_list
-  arc_location: "ARCSpecies.mol_list (set by set_mol_list -> generate_resonance_structures_safely)"
-  in_memory_form: "list[Molecule] of localised resonance structures"
-  computed_when: "always when a mol could be perceived"
-  reachable_from_export: true
   export_effort: moderate
   effort_rationale: >-
-    Reachable, but each structure must be serialised (SMILES or adjlist)
-    and the list can be long. Matters because ARC's symmetry_number and
-    bond_corrections are derived from the resonance hybrid, not from
-    spc.mol alone.
-  blocker: null
-  source: arc/species/species.py:369
-
-- path: arc_only.species.zmat
-  arc_location: "ARCSpecies.zmat"
-  in_memory_form: >-
-    dict with 'symbols', 'coords' (internal coordinates), 'vars' and 'map'
-    (dict mapping z-matrix row -> 0-based Cartesian atom index; dummy atoms
-    appear as 'X' entries not present in the Cartesian geometry).
-  computed_when: "populated when ARC needed internal coordinates (rotor handling, TS interpolation, conformer work)"
-  reachable_from_export: true
-  export_effort: moderate
-  effort_rationale: >-
-    Attribute is live; the moderate rating is for the dummy-atom index
-    map, which makes the z-matrix atom ordering NOT the Cartesian ordering.
-    Exporting it without the 'map' would be actively misleading.
-  blocker: null
-  source: arc/species/species.py:416
-
-- path: arc_only.species.fragments
-  arc_location: "ARCSpecies.fragments"
-  in_memory_form: >-
-    list[list[int]] — one atom-index list per fragment of a van der Waals
-    well or a TS. 0-based (produced by split_mol, which enumerates
-    mol.atoms positionally).
-  computed_when: "set when a species represents more than one non-bonded moiety"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Plain attribute. Directly useful as the participant partition of a
-    TS/VdW geometry — i.e. it is the same shape TCKDB's TS validation
-    participant mapping wants, one +1 away.
-  blocker: null
-  source: arc/species/species.py:384
-
-- path: arc_only.species.number_of_radicals
-  arc_location: "ARCSpecies.number_of_radicals"
-  in_memory_form: "int — user-supplied radical count, used to force an unrestricted reference"
-  computed_when: "only when the user supplied it (ARC never infers it)"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    One attribute. It is the only thing distinguishing a birad singlet
-    from a closed-shell singlet in ARC, and multiplicity alone (which IS
-    exported) cannot carry that. Closest TCKDB relative is
-    LevelOfTheoryRef.spin_treatment, which ARC does not currently populate
-    either.
-  blocker: null
-  source: arc/species/species.py:373
+    Settings are module-level (orca_neb_settings['keyword'], xtb_gsm_settings) and reachable by
+    import at write time, but a user override lives on the job adapter. Must be labelled
+    requested, never used as n_points (observed). NEB path images/energies (.interp, MEP trj) are
+    not parsed anywhere in ARC -> observed NEB path is ARC_ABSENT.
+  blocker: "No NEB path parser; requested values are not observed values."
+  reliability: medium
+  tckdb_value: low
+  source: arc/settings/settings.py:293
 
 # ===========================================================================
-# 6. STATMECH AND ROTORS  (arc/statmech/, arc/species/conformers.py)
-# ===========================================================================
-
-- path: species_upload.statmech.statmech_treatment
-  arc_location: "arc/statmech/arkane.py:402 use_hindered_rotors=True if not skip_rotors else False"
-  in_memory_form: >-
-    bool (use_hindered_rotors) rendered into the Arkane input template, plus
-    the per-rotor 'dimensions' in spc.rotors_dict. Together these decide
-    TCKDB's enum: rrho when no rotors were used, rrho_1d when only 1D
-    rotors, rrho_nd / rrho_1d_nd when any rotor has dimensions > 1.
-  computed_when: "always when Arkane ran"
-  reachable_from_export: true
-  export_effort: moderate
-  effort_rationale: >-
-    rotors_dict is in scope so the 1D/ND part is derivable at write time,
-    but the skip_rotors flag lives in the processor call and is not passed
-    to write_output_yml. Either thread skip_rotors through (one extra
-    parameter, same call site in arc/main.py) or derive it from whether any
-    successful rotor exists — the latter conflates "no rotors found" with
-    "rotors deliberately skipped".
-  blocker: "skip_rotors is a process_arc_project argument, not a write_output_yml argument."
-  source: arc/statmech/arkane.py:402
-
-- path: species_upload.statmech.uses_projected_frequencies
-  arc_location: "arc/statmech/arkane.py:60 useHinderedRotors template variable"
-  in_memory_form: "bool — Arkane projects the torsional modes out of the Hessian exactly when hindered rotors are used"
-  computed_when: "always when Arkane ran"
-  reachable_from_export: true
-  export_effort: moderate
-  effort_rationale: >-
-    Same skip_rotors plumbing as statmech_treatment; once that flag is in
-    scope this is the same boolean. Worth stating explicitly because
-    output.yml exports harmonic_frequencies_cm1 with no indication of
-    whether the statmech treatment consumed them unprojected.
-  blocker: "Same as statmech_treatment."
-  source: arc/statmech/arkane.py:60
-
-- path: species_upload.statmech.torsions[].top_description
-  arc_location: "ARCSpecies.rotors_dict[i]['top']"
-  in_memory_form: "list[int], 1-INDEXED (documented at arc/species/species.py:71) — the atoms of the rotating top"
-  computed_when: "always for every rotor found by conformers.find_internal_rotors"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    _get_torsions already reads rotor['scan'] and rotor['pivots'] from the
-    same dict (arc/output.py:1437); 'top' is sitting beside them and is
-    simply not read. It is the only field that says WHICH side of the pivot
-    rotates, which a reader cannot infer from the pivots alone.
-  blocker: null
-  source: arc/species/species.py:71
-
-- path: species_upload.statmech.torsions[].torsion_index
-  arc_location: "ARCSpecies.rotors_dict keys"
-  in_memory_form: "int, 0-BASED dict key; TCKDB requires ge=1"
-  computed_when: "always"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    _get_torsions iterates rotors_dict.items() and uses rotor_index only to
-    build the scan_key string (arc/output.py:1443); the index itself is
-    never emitted as a field, so the torsion list has no stable identity
-    and its ordering is the only handle. A +1 is required.
-  blocker: null
-  source: arc/output.py:1434
-
-- path: arc_only.species.rotors_dict.invalidation_reason
-  arc_location: "ARCSpecies.rotors_dict[i]['invalidation_reason']"
-  in_memory_form: >-
-    str, accumulating; e.g. 'Pivots participate in the TS reaction zone
-    (code: pivTS). ' written by arc/checks/ts.py:355.
-  computed_when: "whenever a rotor was found but rejected (barrier too low, breaks the TS, non-isomorphic scan points, ...)"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    _get_torsions skips every rotor whose 'success' is not True
-    (arc/output.py:1435), so a reader of output.yml cannot tell that a
-    torsion was found and deliberately excluded from the statmech
-    treatment, nor why. Emitting the rejected rotors with their reason is
-    a change to one `continue`.
-  blocker: null
-  source: arc/species/species.py:76
-
-- path: arc_only.species.rotors_dict.max_e
-  arc_location: "ARCSpecies.rotors_dict[i]['max_e']"
-  in_memory_form: "float, kJ/mol, relative to the scan minimum"
-  computed_when: "populated when a 1D scan completed"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    output.yml recomputes the barrier by re-parsing the scan log
-    (_get_rotor_barrier, arc/output.py:1475) instead of reading ARC's own
-    stored value. Emitting both would let a consumer detect disagreement
-    between the stored and re-parsed barrier.
-  blocker: null
-  source: arc/species/species.py:79
-
-- path: arc_only.species.rotors_dict.trsh_methods
-  arc_location: "ARCSpecies.rotors_dict[i]['trsh_methods'] and ['trsh_counter']"
-  in_memory_form: "list[str] of troubleshooting methods applied to this scan; int counter"
-  computed_when: "populated whenever a rotor scan had to be re-run"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Attribute of the in-scope rotors_dict. Says whether the exported scan
-    is a first attempt or the survivor of N retries.
-  blocker: null
-  source: arc/species/species.py:81
-
-- path: arc_only.species.rotors_dict.torsion
-  arc_location: "ARCSpecies.rotors_dict[i]['torsion']"
-  in_memory_form: >-
-    list[int], 0-INDEXED — the same four atoms as rotors_dict[i]['scan'],
-    which is 1-indexed. Both are stored side by side.
-  computed_when: "always for every rotor"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Deliberately flagged rather than recommended: ARC keeps a 0-based and
-    a 1-based copy of the same quartet in adjacent dict keys. output.yml
-    correctly exports only the 1-based 'scan'. Any future export must NOT
-    emit both without labelling, and any consumer reading rotors_dict
-    directly must know which key it grabbed.
-  blocker: null
-  source: arc/species/species.py:73
-
-- path: arc_only.species.directed_rotors
-  arc_location: "ARCSpecies.directed_rotors"
-  in_memory_form: >-
-    dict of directed-scan specifications, three levels of nested lists,
-    converted from pivots to four-atom torsion indices (1-indexed).
-  computed_when: "only when the user requested directed / ND scans"
-  reachable_from_export: true
-  export_effort: moderate
-  effort_rationale: >-
-    Live attribute, but output.yml explicitly defers all ND rotors
-    (arc/output.py:1524 "Only 1D rotors are emitted here"). Exporting the
-    specification without the ND scan results would be half a record.
-  blocker: null
-  source: arc/species/species.py:414
-
-- path: arc_only.species.symmetry_number
-  arc_location: "ARCSpecies.symmetry_number / get_symmetry_number()"
-  in_memory_form: >-
-    int — the highest symmetry number across resonance isomers and the
-    resonance hybrid. Explicitly DIFFERENT from external_symmetry, which
-    output.yml already exports as statmech.external_symmetry.
-  computed_when: "computed on demand from mol_list"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Method call on the in-scope species. Called out because the two
-    quantities are easy to confuse and only one is currently written down;
-    a consumer that assumed external_symmetry was the total would get the
-    entropy wrong.
-  blocker: null
-  source: arc/species/species.py:2248
-
-- path: arc_only.species.conformers_before_opt
-  arc_location: "ARCSpecies.conformers_before_opt"
-  in_memory_form: "tuple of xyz dicts — the force-field/MD conformer set before any QM optimisation"
-  computed_when: "always when ARC generated conformers (i.e. no user xyz and dont_gen_confs False)"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    output.yml exports the post-screen `conformers` list (arc/output.py:1053)
-    but not the pre-optimisation set, so the conformer funnel's input is
-    invisible. Same serialisation path (xyz_to_str) as the exported list.
-  blocker: null
-  source: arc/species/species.py:353
-
-- path: arc_only.species.conformer_generation
-  arc_location: "ARCSpecies.force_field, .most_stable_conformer, .cheap_conformer, .conf_is_isomorphic, .recent_md_conformer"
-  in_memory_form: >-
-    force_field: str ('MMFF94s' default); most_stable_conformer: int index
-    into spc.conformers (0-based); conf_is_isomorphic: bool|None;
-    recent_md_conformer: [xyz, energy kJ/mol, n_md_runs].
-  computed_when: "always when ARC ran its conformer screen"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Five plain attributes. output.yml exports the conformer geometries and
-    energies but says nothing about how they were generated or which one
-    was selected — provenance a curator needs to judge whether the
-    reported minimum is the global one.
-  blocker: null
-  source: arc/species/species.py:357
-
-# ===========================================================================
-# 7. REACTION-LEVEL FACTS  (arc/reaction/, arc/family/)
+# 8. REACTION-LEVEL FACTS
 # ===========================================================================
 
 - path: reaction_upload.reversible
-  arc_location: "arc/family/family.py:159 ReactionFamily.reversible (from is_reversible)"
-  in_memory_form: "bool, parsed from the RMG family groups.py 'reversible' declaration; defaults True when absent"
-  computed_when: "always when rxn.family is not None"
+  arc_location: "arc/reaction/reaction.py:ARCReaction.__init__ arrow ' <=> ':106"
+  in_memory_form: "implicit constant: every ARC reaction is written reversible (<=>); Arkane TST kinetics satisfy detailed balance"
+  obtained_from: settings
+  value_kind: derived
+  computed_when: always
   reachable_from_export: true
   export_effort: trivial
-  effort_rationale: >-
-    rxn.family (a label str) is already exported; ReactionFamily(label) is
-    process-cached (arc/family/family.py:135) so constructing it in
-    _rxn_to_dict costs nothing after the first call. TCKDB defaults
-    reversible to True, so an irreversible family currently uploads as
-    reversible with no warning — a silent semantic error.
+  effort_rationale: "Emit rxn_dict['reversible']=True. ts_upload.reaction.reversible is REQUIRED, so the adapter needs it for every standalone TS upload."
   blocker: null
-  source: arc/family/family.py:159
+  reliability: high
+  tckdb_value: medium
+  source: arc/reaction/reaction.py:106
+
+- path: ts_upload.reaction.reversible
+  arc_location: "arc/reaction/reaction.py:ARCReaction.__init__:106"
+  in_memory_form: "same constant as reaction_upload.reversible"
+  obtained_from: settings
+  value_kind: derived
+  computed_when: always
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Same one-line emission; required field on the standalone TS route."
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/reaction/reaction.py:106
 
 - path: reaction_upload.reaction_family_source_note
-  arc_location: "ARCReaction.determine_family / ARCReaction.family_own_reverse"
+  arc_location: "arc/reaction/reaction.py:family property:257 / determine_family:674; product_dicts keys family/own_reverse/discovered_in_reverse (arc/family/family.py:546)"
   in_memory_form: >-
-    family_own_reverse: bool (arc/reaction/reaction.py:234), plus whether
-    the family came from RMG's database or from ARC's own custom family set
-    (get_reaction_family(consider_arc_families=True),
-    arc/family/family.py:60).
-  computed_when: "always when a family was determined"
+    Not recorded. The family is either user-set (setter:265, via __init__/from_dict) or determined
+    from product_dicts[0] (RMG + ARC family sets, settings['rmg_family_set']); both set
+    _family_determined=True. discovered_in_reverse and number of matching product dicts are live.
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "family accessed (always, via mapping)"
   reachable_from_export: true
   export_effort: moderate
-  effort_rationale: >-
-    family_own_reverse is a live property and trivial to emit. The
-    RMG-vs-ARC-custom distinction is NOT recorded on the reaction — it is
-    decided inside read_groups_file_lines by which directory the groups
-    file was found in, and that fact is discarded. Recording it needs one
-    field on ReactionFamily.
-  blocker: "The RMG-vs-ARC-custom family provenance is discarded in read_groups_file_lines."
-  source: arc/reaction/reaction.py:234
-
-- path: reaction_upload.kinetics[].degeneracy
-  arc_location: "not computed by ARC"
-  in_memory_form: >-
-    UNVERIFIED / absent. ARC does not compute reaction-path degeneracy. The
-    only degeneracy handling in the tree is arc/scripts/rmg_kinetics.py:98,
-    a helper that asks RMG for LIBRARY/ESTIMATED kinetics for comparison —
-    it never touches the Arkane-fitted rate ARC reports.
-  computed_when: "never"
-  reachable_from_export: false
-  export_effort: hard
-  effort_rationale: >-
-    Recorded as an explicit negative so the matrix does not read the gap as
-    a plumbing problem. Supplying it would mean invoking RMG's family
-    degeneracy machinery on the ARC reaction — new integration, not an
-    export change.
-  blocker: "ARC never computes it for its own kinetics."
-  source: arc/scripts/rmg_kinetics.py:98
-
-- path: reaction_upload.kinetics[].degeneracy_convention
-  arc_location: "arc/statmech/arkane.py:85 (Arkane reaction() template block)"
-  in_memory_form: >-
-    Not represented. Statically true of ARC: the Arkane input template
-    declares reactants/products/transitionState/tunneling and nothing else,
-    so the fitted A never has a degeneracy factor folded in. The correct
-    constant is therefore 'not_applied'.
-  computed_when: "always when ARC's Arkane kinetics ran"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    A constant emitted next to the existing 'tunneling' key in the kinetics
-    dict (arc/output.py:1930), which is already stamped by the same Arkane
-    run. TCKDB defaults this field, and defaulting it wrongly silently
-    rescales every rate a consumer derives.
-  blocker: null
-  source: arc/statmech/arkane.py:85
+  effort_rationale: "Record user-vs-determined at the setter vs determine_family, then compose a note from family set, discovered_in_reverse and match count."
+  blocker: "User-declared and ARC-determined families are indistinguishable after assignment."
+  reliability: medium
+  tckdb_value: medium
+  source: arc/reaction/reaction.py:257
 
 - path: arc_only.reaction.charge
-  arc_location: "ARCReaction.charge property (get_rxn_charge)"
-  in_memory_form: "int, net charge of the reaction PES, summed over r_species"
-  computed_when: "always (lazily, on first access)"
+  arc_location: "arc/reaction/reaction.py:charge property:224"
+  in_memory_form: "int"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: always
   reachable_from_export: true
   export_effort: trivial
-  effort_rationale: >-
-    _rxn_to_dict emits rxn.multiplicity but not rxn.charge
-    (arc/output.py:1938). TCKDB carries charge per species and per TS but
-    not per reaction, so this is arc_only; it is still a consistency check
-    a loader would want.
+  effort_rationale: "multiplicity is exported in _rxn_to_dict but charge is not; one key."
   blocker: null
-  source: arc/reaction/reaction.py:185
-
-- path: arc_only.reaction.dh_rxn298
-  arc_location: "ARCReaction.dh_rxn298, set by arc/statmech/arkane.py:267 set_reaction_dh_rxn"
-  in_memory_form: "float, J/mol (note: J, not kJ — the neighbouring thermo fields are kJ/mol)"
-  computed_when: "when the statmech adapter ran and both sides had thermo"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Plain attribute on the in-scope reaction. The unit mismatch against
-    every other energy in output.yml is the reason to convert explicitly
-    on export rather than pass it through.
-  blocker: null
-  source: arc/reaction/reaction.py:121
+  reliability: high
+  tckdb_value: low
+  source: arc/reaction/reaction.py:224
 
 - path: arc_only.reaction.rmg_kinetics
-  arc_location: "ARCReaction.rmg_kinetics"
-  in_memory_form: >-
-    list[dict] with 'A' (cm-s-mol units), 'n', 'Ea' (kJ/mol) and 'comment'
-    naming the RMG library or family the estimate came from.
-  computed_when: "only when compare_to_rmg is True and the RMG helper script succeeded"
+  arc_location: "arc/processor.py:process_arc_project (rmg_kinetics fill:352), run at arc/main.py:643 before write at :673"
+  in_memory_form: "list[dict{A,n,Ea,comment}] of RMG-database estimates for comparison"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "reactions sent to the RMG kinetics script"
   reachable_from_export: true
   export_effort: trivial
-  effort_rationale: >-
-    Live attribute. Not a TCKDB field (TCKDB stores computed kinetics, not
-    estimates) but it is the literature/estimate baseline ARC compared
-    against, and it is currently only visible in log output.
+  effort_rationale: "Populated before write_output_yml; one key. Must be kept apart from ARC's own kinetics (scientific_origin estimated)."
   blocker: null
-  source: arc/reaction/reaction.py:110
+  reliability: medium
+  tckdb_value: low
+  source: arc/processor.py:352
 
-- path: arc_only.reaction.product_dicts
-  arc_location: "ARCReaction.product_dicts -> arc/family/family.py:505 get_reaction_family_products"
+# ===========================================================================
+# 9. KINETICS PROVENANCE (Arkane)
+# ===========================================================================
+
+- path: arc_only.reaction.kinetics.tst_rate_table
+  arc_location: "calcs/statmech/kinetics/output.py (Arkane KineticsJob.write_output); not parsed by arc/statmech/arkane.py:parse_reaction_kinetics:1312"
   in_memory_form: >-
-    list[dict], each carrying the family-generated product molecules and
-    their template atom-label mapping ({'*1': index, ...}); indices are
-    0-based reactant running indices.
-  computed_when: "lazily, when a family exists and products could be generated"
+    Text table per reaction: T (K), k(TST), tunneling factor kappa (Eckart), k(TST+T), units; plus Kc(T),
+    k_rev(TST), k_rev(TST+T) table and fitted reverse Arrhenius comments. Eckart inputs (TS imaginary
+    frequency scaled by frequencyScaleFactor, E0_reac/E0_TS/E0_prod) are internal to Arkane.
+  obtained_from: arkane_output
+  value_kind: observed
+  computed_when: every successful Arkane kinetics run (T_count points, default 50 in processor)
   reachable_from_export: true
   export_effort: moderate
   effort_rationale: >-
-    Property is in scope but its values are RMG Molecule objects that need
-    serialising, and there can be several candidate product dicts (the
-    per-path ambiguity that makes several atom maps valid — exactly ADR
-    0011's point). Emitting the LABEL MAPS alone, without the molecules,
-    would be trivial and would document which chemically distinct path the
-    exported atom map corresponds to.
-  blocker: null
-  source: arc/reaction/reaction.py:173
+    ARC only regex-extracts the Arrhenius( ... ) block. Needs a comment-table parser in
+    parse_reaction_kinetics (fixed-width '#' lines) and an arc_only block in output.yml. TCKDB 0.51
+    kinetics[] has no k(T) or kappa(T) fields, so this is candidate demand; the fit's n_data_points/dA are
+    already exported. File is rewritten (delete_existing_subdir=True) on every kinetics run.
+  blocker: "no TCKDB home in 0.51"
+  reliability: high
+  tckdb_value: medium
+  source: arc/statmech/arkane.py:1312
 
-- path: arc_only.reaction.ts_xyz_guess
-  arc_location: "ARCReaction.ts_xyz_guess"
-  in_memory_form: "list of user-supplied TS xyz guesses (str or dict)"
-  computed_when: "only when the user supplied TS guesses in the input"
+- path: reaction_upload.kinetics[].note
+  arc_location: "arc/statmech/arkane.py:parse_reaction_kinetics:1372-1375 (kinetics['comment']) and mark_ts_validation_in_kinetics:1418 (kinetics['ts_validation'])"
+  in_memory_form: "str: Arkane fit comment ('Fitted to N data points; dA = *|/ x, dn = +|- y, dEa = +|- z kJ/mol') plus ARC's TS-validation failure marker"
+  obtained_from: arkane_output
+  value_kind: observed
+  computed_when: every Arkane kinetics fit; ts_validation only when the TS failed the IRC check
   reachable_from_export: true
   export_effort: trivial
   effort_rationale: >-
-    Live attribute. Distinguishes a saddle point ARC found on its own from
-    one seeded by a human guess — a provenance distinction ADR 0011 draws
-    for atom maps and which applies equally to geometries.
+    Both keys sit in rxn.kinetics; _rxn_to_dict (arc/output.py:2808) copies only numeric fields. Add
+    'comment' and 'ts_validation'. ts_validation is the one place ARC says "this rate was computed from a
+    TS that failed IRC"; ts_checks on the TS entry carries the verdict but not its binding to the rate.
   blocker: null
-  source: arc/reaction/reaction.py:122
+  reliability: high
+  tckdb_value: medium
+  source: arc/statmech/arkane.py:1418
 
-# ===========================================================================
-# 8. LEVELS OF THEORY AND CALCULATION STRUCTURE
-# ===========================================================================
-
-- path: species_upload.conformers[].primary_calculation.level_of_theory
-  arc_location: "ARCSpecies.opt_level"
-  in_memory_form: >-
-    Level object, per-species. Set when adaptive_levels are in use, where
-    different species run at different levels keyed by heavy-atom count.
-  computed_when: "populated for every species; differs from the run-level opt_level only under adaptive_levels"
+- path: reaction_upload.kinetics[].model_kind
+  arc_location: "arc/statmech/arkane.py main_input_template kinetics(...) block (lines 97-101); Arkane default three_params=True"
+  in_memory_form: "not stored; ARC renders kinetics(label, Tmin, Tmax, Tcount) without three_params, so Arkane fits modified Arrhenius k = A (T/T0)^n exp(-Ea/RT)"
+  obtained_from: input_setting
+  value_kind: derived
+  computed_when: every Arkane kinetics run
   reachable_from_export: true
   export_effort: trivial
   effort_rationale: >-
-    output.yml emits exactly one run-level opt_level/freq_level/sp_level
-    block (arc/output.py:128) and no per-species level. Under
-    adaptive_levels that is simply wrong for some species. spc.opt_level is
-    an attribute of the in-scope species and _level_to_dict already exists;
-    emitting it per species inside _spc_to_dict is a one-line addition.
+    Constant 'modified_arrhenius' for kinetics stamped by parse_reaction_kinetics (same gating as the
+    exported 'tunneling' key). Depends on the Arkane default, verified at RMG-Py 62eb728c0
+    arkane/input.py:437; UNVERIFIED for the RMG-Py actually installed in rmg_env.
   blocker: null
-  source: arc/species/species.py:430
+  reliability: medium
+  tckdb_value: low
+  source: arc/statmech/arkane.py:99
 
-- path: species_upload.conformers[].primary_calculation.depends_on[].role
-  arc_location: "output_dict[label]['paths'] ordering + arc/scheduler.py job spawning order"
+- path: reaction_upload.kinetics[].pressure_context
+  arc_location: "arc/statmech/arkane.py:ArkaneAdapter.compute_high_p_rate_coefficient:236"
+  in_memory_form: "not stored; by construction the only kinetics ARC computes is the TST high-pressure limit"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: every Arkane kinetics run
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Stamp 'high_p_limit' alongside 'tunneling' in parse_reaction_kinetics (kinetics from restart/input YAML must stay null). is_third_body=false follows the same way."
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/statmech/arkane.py:236
+
+- path: reaction_upload.kinetics[].degeneracy_convention
+  arc_location: "Arkane KineticsJob.write_output ('Reaction path degeneracy is INCLUDED in the kinetics itself'); ARC passes no degeneracy in reaction() (arc/statmech/arkane.py:87-94)"
   in_memory_form: >-
-    Implicit in ARC's fixed pipeline: geo_coarse -> geo -> freq -> sp,
-    scans branch off geo. output.yml records the paths but no edges.
-    TCKDB's CalculationDependencyRole enum (optimized_from, freq_on,
-    single_point_on, scan_parent, irc_start) matches ARC's pipeline exactly.
-  computed_when: "always"
+    Not stored. Arkane applies path degeneracy through the symmetry-number ratio of the partition
+    functions (external symmetry + optical isomers, which ARC parses back at arkane.py:1460 and exports);
+    reaction.degeneracy stays at its default.
+  obtained_from: computed
+  value_kind: derived
+  computed_when: every Arkane kinetics run
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    Constant 'already_applied' for Arkane-stamped kinetics. Medium reliability: rests on Arkane's own
+    symmetry determination being correct for the TS (ARC species files give no symmetry), not on an ARC
+    computation.
+  blocker: null
+  reliability: medium
+  tckdb_value: medium
+  source: arc/statmech/arkane.py:87
+
+- path: reaction_upload.kinetics[].degeneracy
+  arc_location: "arc/reaction/reaction.py:ARCReaction.atom_map_clusters:175 -> arc/mapping/cluster.py:MapCluster.degeneracy:120"
+  in_memory_form: "int per reaction channel (MapCluster.degeneracy; also enumerated_degeneracy)"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: only on explicit access of rxn.atom_map_clusters (lazy, expensive, not triggered by a normal run; not persisted)
   reachable_from_export: true
   export_effort: moderate
   effort_rationale: >-
-    The dependency edges are derivable from the paths dict already in scope
-    plus ARC's invariant that freq and sp run on the final opt geometry.
-    Moderate because it requires minting calculation keys (output.yml has
-    none — calculations are identified by field name, e.g. 'freq_log') so
-    that edges have endpoints to name.
-  blocker: null
-  source: arc/scheduler.py:144
+    Accessing the property at write time computes it (expensive sweep of template product dicts). But it is
+    NOT the degeneracy used in the fitted rate — Arkane applies degeneracy via symmetry numbers — so it
+    must be exported as an independent mapping-derived count and never paired with
+    degeneracy_convention='not_applied', or TCKDB would double-count.
+  blocker: "semantic: not the value embedded in A"
+  reliability: medium
+  tckdb_value: low
+  source: arc/reaction/reaction.py:175
 
-- path: species_upload.conformers[].primary_calculation.artifacts[]
-  arc_location: "ARCSpecies.checkfile; JobAdapter.local_path_to_orbitals_file / local_path_to_check_file / local_path_to_hess_file"
+- path: reaction_upload.kinetics[].source_calculations[].role
+  arc_location: "arc/statmech/arkane.py:generate_species_file:465-487 (TS and well species files under calcs/statmech/kinetics/{species,TSs}/); spc.arkane_file:475"
   in_memory_form: >-
-    spc.checkfile is a str path to the latest Gaussian .chk, live on the
-    species. The .fchk (orbitals) and .hess paths live only on JobAdapter
-    objects. TCKDB's ArtifactIn requires content_base64, not a path.
-  computed_when: "checkfile: whenever a Gaussian job ran and keep_checks was set"
+    Per participant and TS: energy=Log(composite or sp log), geometry=Log(freq log, falling back to sp log),
+    frequencies=Log(same), rotors=[HinderedRotor(scanLog=...)] for successful rotors. spc.arkane_file holds
+    the species-file path (persisted in restart as 'arkane_file').
+  obtained_from: input_setting
+  value_kind: observed
+  computed_when: every Arkane kinetics run
   reachable_from_export: true
-  export_effort: hard
+  export_effort: moderate
   effort_rationale: >-
-    The species-level checkfile PATH is trivially reachable, but TCKDB
-    wants embedded base64 content, so exporting an artifact means reading
-    and encoding potentially large binary files inside the output writer —
-    a different class of change from adding a scalar. Note also that
-    arc/main.py:614 deletes check files before write_output_yml runs unless
-    keep_checks is set, so for a default run the artifact is already gone
-    by export time.
-  blocker: "delete_check_files() runs before write_output_yml unless keep_checks is set."
-  source: arc/species/species.py:380
+    Exact log-to-role binding exists in the rendered species file; output.yml only exports the opt/freq/sp
+    log paths per species. Export a per-species/TS 'arkane_inputs' {energy_log, geometry_log, freq_log,
+    rotor_logs} (relative paths) from the same output_dict paths generate_species_file used, so a consumer
+    can key reactant_energy/product_energy/ts_energy/freq roles to calculation keys. Note the freq->sp
+    fallback (arkane.py:484) makes the "freq" source an sp log when no freq ran.
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/statmech/arkane.py:483
 
-- path: species_upload.conformers[].primary_calculation.parameters[]
-  arc_location: "JobAdapter.args (keyword/block dicts) and Level.args"
+# ===========================================================================
+# 10. STATMECH DETAIL (Arkane output.py / species files)
+# ===========================================================================
+
+- path: species_upload.statmech.source_calculations[].role
+  arc_location: "arc/statmech/arkane.py:generate_species_file:465-487 (calcs/statmech/thermo/species/<label>.py)"
+  in_memory_form: "see kinetics source_calculations row; energy<-sp/composite log, geometry+frequencies<-freq log (or sp), scan<-rotor scan logs"
+  obtained_from: input_setting
+  value_kind: observed
+  computed_when: every Arkane thermo/e0 run
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    Same emission as the kinetics row. Caveat: the e0_only run reuses subdir 'thermo' with
+    delete_existing_subdir=True (arkane.py:228-230), so when e0_only species exist the thermo run's species
+    files are deleted before output.yml is written; the binding must be recorded in memory, not re-read.
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/statmech/arkane.py:484
+
+- path: species_upload.statmech.statmech_treatment
+  arc_location: "calcs/statmech/thermo/output.py conformer(... modes=[..., HinderedRotor|FreeRotor ...]) and arkane.log; ARC parses the block only for symmetry/optical isomers (arc/statmech/arkane.py:_parse_conformer_statmech:1426)"
+  in_memory_form: "not stored; derivable from which mode classes Arkane put in the conformer (none -> rrho; 1D HinderedRotor -> rrho_1d)"
+  obtained_from: arkane_output
+  value_kind: observed
+  computed_when: every Arkane statmech run
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    Extend _parse_conformer_statmech to record the rotor mode classes. The observed value differs from what
+    exported torsions imply: Arkane silently drops all rotors when the freq log has no force-constant matrix
+    ('Force Constant Matrix Missing Ignoring rotors', RMG-Py arkane/statmech.py), so output.yml can list
+    successful torsions for a species Arkane treated as RRHO. Derivation from exported torsions alone is
+    therefore not safe.
+  blocker: "e0_only run deletes the thermo output.py (arkane.py:228-230) unless parsed in-run"
+  reliability: high
+  tckdb_value: high
+  source: arc/statmech/arkane.py:1426
+
+- path: species_upload.statmech.uses_projected_frequencies
+  arc_location: "Arkane StatMechJob._fit_rotors/project_rotors (RMG-Py arkane/statmech.py:650,881); visible as the HarmonicOscillator frequencies in calcs/statmech/*/output.py"
+  in_memory_form: "not stored; True exactly when Arkane fitted >=1 rotor with a Hessian present (rotor modes projected out of the Hessian)"
+  obtained_from: arkane_output
+  value_kind: observed
+  computed_when: every Arkane run with successful rotors
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: "Same parse as statmech_treatment: HinderedRotor mode present in the conformer block <=> projected frequencies. One additional boolean."
+  blocker: "same e0_only deletion caveat"
+  reliability: medium
+  tckdb_value: medium
+  source: arc/statmech/arkane.py:1454
+
+- path: arc_only.species.statmech.arkane_frequencies_cm1
+  arc_location: "calcs/statmech/*/output.py conformer HarmonicOscillator(frequencies=...)"
+  in_memory_form: "list[float] cm^-1, SCALED by frequencyScaleFactor and (with rotors) PROJECTED; differs from exported unscaled statmech.harmonic_frequencies_cm1"
+  obtained_from: arkane_output
+  value_kind: observed
+  computed_when: every Arkane statmech run
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: "Regex the HarmonicOscillator frequencies list in _parse_conformer_statmech; emit as an arc_only list. It is the vibrational set the partition function actually used."
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/statmech/arkane.py:1426
+
+- path: species_upload.statmech.rotational_constant_a_cm1
+  arc_location: "calcs/statmech/*/output.py NonlinearRotor(inertia=([Ia, Ib, Ic], 'amu*angstrom^2')) / LinearRotor(inertia=(I, ...)); ARC regex at arkane.py:1459 reads only symmetry"
+  in_memory_form: "moments of inertia amu*angstrom^2 (Arkane); B[cm^-1] = 16.857629 / I[amu*A^2]; A <-> smallest I"
+  obtained_from: arkane_output
+  value_kind: observed
+  computed_when: every Arkane statmech run (species and TS)
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    Extend the same regex to capture inertia; convert (or export inertia and let the adapter convert —
+    unit conversion must be stated). Geometry is the freq-log geometry Arkane read, not output.yml's xyz.
+    No ARC-native inertia function exists (grep: none), so Arkane is the only source short of computing
+    from final_xyz.
+  blocker: "same e0_only deletion caveat for thermo species"
+  reliability: high
+  tckdb_value: medium
+  source: arc/statmech/arkane.py:1459
+
+- path: species_upload.statmech.rotational_constant_b_cm1
+  arc_location: "as rotational_constant_a_cm1"
+  in_memory_form: "middle moment of inertia -> B; for linear species the single LinearRotor inertia"
+  obtained_from: arkane_output
+  value_kind: observed
+  computed_when: every Arkane statmech run
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: "Same parse as rotational_constant_a_cm1."
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/statmech/arkane.py:1459
+
+- path: species_upload.statmech.rotational_constant_c_cm1
+  arc_location: "as rotational_constant_a_cm1"
+  in_memory_form: "largest moment of inertia -> C; absent for linear species"
+  obtained_from: arkane_output
+  value_kind: observed
+  computed_when: every Arkane statmech run, nonlinear species
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: "Same parse as rotational_constant_a_cm1."
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/statmech/arkane.py:1459
+
+- path: species_upload.statmech.torsions[].top_description
+  arc_location: "ARCSpecies.rotors_dict[i]['top'] (arc/species/species.py:72)"
+  in_memory_form: "list[int], 1-based atom indices of the rotating top (list of lists for ND rotors); passed verbatim to Arkane as HinderedRotor(top=...)"
+  obtained_from: computed
+  value_kind: observed
+  computed_when: rotor perception (conformers.find_internal_rotors) for every species with rotors
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "One key in _get_torsions (arc/output.py:2148 loop): add 'top_atoms': rotor['top'] with index_base 1; adapter stringifies."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/species/species.py:72
+
+- path: species_upload.statmech.torsions[].torsion_index
+  arc_location: "ARCSpecies.rotors_dict key (int) — exported only for rejected torsions (rotor_index) and embedded in source_scan_key strings"
+  in_memory_form: "int, 0-based rotors_dict key"
+  obtained_from: computed
+  value_kind: observed
+  computed_when: always when rotors exist
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Add 'rotor_index': rotor_index to each _get_torsions entry (arc/output.py:2148), matching rejected_torsions; today a successful torsion without a scan record has no identifier at all."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/output.py:2148
+
+- path: species_upload.statmech.torsions[].treatment_kind
+  arc_location: "calcs/statmech/*/output.py conformer HinderedRotor(... fourier=...|barrier=...) / FreeRotor; exported 'treatment' comes from rotor.get('type', 'HinderedRotor') at arc/output.py:2154"
+  in_memory_form: "Arkane mode class per rotor. rotors_dict['type'] is never assigned anywhere on main (determine_rotor_type, species.py:3191, has no caller), so the exported treatment is always 'hindered_rotor'."
+  obtained_from: arkane_output
+  value_kind: observed
+  computed_when: every Arkane run with rotors
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    Parse per-rotor mode class from the conformer block (ordering follows the species file rotor list,
+    i.e. successful rotors in rotors_dict order). Needed because the exported value is effectively a
+    constant, and because Arkane may have dropped rotors (see statmech_treatment row).
+  blocker: null
+  reliability: medium
+  tckdb_value: medium
+  source: arc/output.py:2154
+
+- path: arc_only.species.statmech.torsions.arkane_fit
+  arc_location: "calcs/statmech/*/output.py HinderedRotor(inertia=..., symmetry=..., fourier=([[..],[..]], 'kJ/mol') | barrier=...)"
+  in_memory_form: "reduced moment of inertia (amu*A^2), fitted Fourier coefficients (kJ/mol) or cosine barrier; ARC requests fit='best' (arkane.py:130)"
+  obtained_from: arkane_output
+  value_kind: observed
+  computed_when: every Arkane run with rotors
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: "Balanced-paren parse of each HinderedRotor(...) in the conformer block. TCKDB torsions[] has no potential/fit fields; candidate demand."
+  blocker: "no TCKDB home in 0.51"
+  reliability: high
+  tckdb_value: low
+  source: arc/statmech/arkane.py:130
+
+- path: species_upload.thermo.phase
+  arc_location: "Arkane ideal-gas statmech (IdealGasTranslation in every conformer block)"
+  in_memory_form: "not stored; always gas-phase standard state (Arkane has no condensed-phase option)"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: every Arkane thermo run
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Constant 'gas' on thermo stamped by an Arkane run (same gating as standard_state_pressure_pa). Solvation-level energies (level.solvation_method) would still produce ideal-gas thermo; do not map to 'aqueous'."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/statmech/arkane.py:491
+
+# ===========================================================================
+# 11. MULTIDIMENSIONAL / DIRECTED ROTOR SCANS
+# ===========================================================================
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.dimension
+  arc_location: "ARCSpecies.rotors_dict[i]['dimensions'] (>1 for ND directed rotors, arc/species/species.py:1444-1454); rotor_scans skips them at arc/output.py:_build_rotor_scan_entry:2372"
+  in_memory_form: "int; ND rotor has 'scan'/'pivots'/'top'/'torsion' as lists of lists"
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: only when the user requested ND directed scans (directed_rotors input)
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    rotor_scans is 1D-only by design ("ND ... deferred", output.py:2335). An ND record needs a separate
+    builder from rotors_dict[i]['directed_scan'] (or the saved rotors/<pivots>_<type>.yml), one coordinate
+    per dimension, and per-point coordinate_values. statmech.torsions already exports ND atom quartets.
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/output.py:2372
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.points[].coordinate_values[].coordinate_value
+  arc_location: "ARCSpecies.rotors_dict[i]['directed_scan'] keys (arc/scheduler.py:check_directed_scan_job:4491-4496)"
+  in_memory_form: "dict keyed by tuple of '{:.2f}' dihedral strings (degrees, one per dimension, the REQUESTED set-point values) -> {'energy','xyz','is_isomorphic','trsh'}"
+  obtained_from: scheduler_state
+  value_kind: requested
+  computed_when: directed scans (brute_force_* / cont_opt_*), 1D and ND
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    The key is the dihedral ARC asked for, rounded to 0.01 deg — not measured. For *_opt scans the relaxed
+    geometry's dihedral may drift; measure it from 'xyz' (as the 1D exporter does) rather than trusting the
+    key. Also persisted in restart.yml and output/<Species|rxns>/<label>/rotors/<pivots>_<type>.yml.
+  blocker: null
+  reliability: medium
+  tckdb_value: medium
+  source: arc/scheduler.py:4491
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.points[].relative_energy_kj_mol
+  arc_location: "arc/scheduler.py:process_directed_scans:2942-2972"
   in_memory_form: >-
-    dict {'keyword': {...}, 'block': {...}} of ESS-specific execution
-    controls. Level.args IS already exported via _level_to_dict (the level
-    as_dict includes 'args'), but the PER-JOB args — including every
-    keyword the troubleshooting layer (arc/job/trsh.py) added after a
-    failure — live on the JobAdapter and are lost.
-  computed_when: "always for every job; trsh additions only after a failure"
+    float kJ/mol. check_directed_scan_job stores parse_e_elect (absolute, kJ/mol); process_directed_scans
+    then subtracts the minimum IN PLACE (line 2974), so after processing the stored value is relative and
+    the absolute energy is gone from memory. ESS-native ND scans instead go through parse_nd_scan_energies.
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: directed scans after processing
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: "Emit from rotors_dict[i]['directed_scan'] values. electronic_energy_hartree for these points is only recoverable by re-parsing each point's log (paths not retained in rotors_dict) — hard."
+  blocker: "absolute energy destroyed by in-place mutation"
+  reliability: medium
+  tckdb_value: medium
+  source: arc/scheduler.py:2974
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.points[].geometry.xyz_text
+  arc_location: "rotors_dict[i]['directed_scan'][key]['xyz'] (arc/scheduler.py:4493)"
+  in_memory_form: "ARC xyz dict per point"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: directed scans
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "xyz_to_str per point in the ND builder. is_isomorphic and trsh per point are also available (arc_only)."
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/scheduler.py:4493
+
+- path: species_upload.conformers[].additional_calculations[].scan_result.coordinates[].resolution_degrees
+  arc_location: "ARC.rotor_scan_resolution (arc/main.py:316; settings.py:322 default 8.0)"
+  in_memory_form: "float degrees; the REQUESTED 1D scan increment ARC wrote into every ESS scan input"
+  obtained_from: input_setting
+  value_kind: requested
+  computed_when: always (default 8.0)
   reachable_from_export: false
-  export_effort: hard
+  export_effort: trivial
   effort_rationale: >-
-    write_output_yml receives no Job objects. The per-job final args are
-    the difference between "what ARC asked for" and "what actually ran",
-    which is exactly what CalculationParameterObservation is for. Closing
-    it needs a JobAdapter -> species-record handoff; arc/output.py:1204
-    already names this as the future producer for opt_final_settings.
-  blocker: >-
-    scheduler.job_dict is not passed to write_output_yml. Requires a
-    per-job record persisted onto the species (or into output_dict) at job
-    completion time.
-  source: arc/job/adapter.py:642
+    Not passed to write_output_yml (arc/main.py:673); one extra kwarg. Must be labelled requested: the
+    exported requested_step_size is read back from the Gaussian log and is the only observed step; for
+    Orca/QChem/etc. this setting is the only grid information ARC has. Directed scans use
+    directed_rotors increments instead.
+  blocker: "not passed to the writer (one-kwarg change)"
+  reliability: medium
+  tckdb_value: low
+  source: arc/main.py:316
 
-- path: species_upload.conformers[].primary_calculation.execution_environment
-  arc_location: "arc/job/env_run.py, arc/job/adapter.py (server/queue/cpu/memory), arc/settings"
+- path: species_upload.conformers[].additional_calculations[].scan_result.coordinates[].step_count
+  arc_location: "arc/output.py:_build_scan_result_for_rotor:2702 (scan_args['step'] from parse_scan_args)"
+  in_memory_form: "int, requested ModRedundant step count (Gaussian only); used only to compute requested_end, then discarded"
+  obtained_from: parsed_log
+  value_kind: requested
+  computed_when: 1D Gaussian scans
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Already a local variable in the writer; add coord['requested_step_count'] = requested_steps."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/output.py:2702
+
+# ===========================================================================
+# 12. CONFORMER ENSEMBLES (conformer_upload root)
+# ===========================================================================
+
+- path: conformer_upload.calculation.opt_result.final_energy_hartree
+  arc_location: "arc/species/species.py:ARCSpecies.conformer_energies:383; set arc/scheduler.py:3133 (parse_conformer)"
   in_memory_form: >-
-    Scattered: JobAdapter.server (str), .queue (str), .cpu_cores (int),
-    .job_memory_gb (float), .submit_script_memory_mib, .max_job_time (h),
-    .run_time (timedelta), .attempted_queues; plus the conda env name from
-    settings['RMG_ENV_NAME'] and the launcher resolved by
-    env_run._detect_launcher.
-  computed_when: "always, per job"
+    list[float|None]. After QM conformer jobs each entry is the ABSOLUTE electronic energy in kJ/mol
+    from parse_e_elect (arc/parser/adapter.py:102) - NOT relative to the lowest as
+    docs/output_yml_schema.md states. Before QM they are force-field energies (kcal/mol,
+    species.py:1262). parse_conformer serves BOTH conf_opt and conf_sp, so a conf_sp job overwrites
+    the opt energy with the sp energy at conformer_sp_level.
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: "conformer jobs ran"
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    Values are exported as conformer_energies but unit/stage/level ambiguous. Need a stage marker
+    (ff | conf_opt | conf_sp) per list, a hartree conversion (/E_h_kJmol) and the level; stage can
+    partly be inferred from output_dict[label]['job_types'] (conf_opt/conf_sp keys, reachable),
+    UNVERIFIED whether conf_sp True reliably means the energies were overwritten (it is skipped
+    when conformer_sp_level == conformer_opt_level, arc/scheduler.py:1656).
+  blocker: "No stage marker; documented semantics contradict the code."
+  reliability: medium
+  tckdb_value: high
+  source: arc/scheduler.py:3133
+
+- path: conformer_upload.calculation.input_geometries[].xyz_text
+  arc_location: "arc/species/species.py:ARCSpecies.conformers_before_opt:378; set arc/scheduler.py:3015"
+  in_memory_form: "tuple[xyz dict] - force-field/embedded conformer geometries fed to conf_opt, same order as conformers"
+  obtained_from: computed
+  value_kind: observed
+  computed_when: "conformer generation + conf_opt ran (species; not TS)"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Loop xyz_to_str over spc.conformers_before_opt in _spc_to_dict (already persisted in restart)."
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/scheduler.py:3015
+
+- path: conformer_upload.calculation.opt_result.converged
+  arc_location: "arc/job/adapter.py:JobAdapter local_path:478 (calcs/<Species|TSs>/<label>/conf_opt_<i>|conf_sp_<i>|tsg<i>/); arc/checks/common.py:get_conformer_job_name:18"
+  in_memory_form: >-
+    Per-conformer convergence is job.job_status[1]['status'] on the conf_opt JobAdapter
+    (parse_conformer, arc/scheduler.py:3116); a non-converged conformer only leaves a None energy.
+    Per-conformer ESS logs sit on disk at deterministic paths; the JobAdapters (with
+    local_path_to_output_file, convergence status, level) live in scheduler.job_dict which
+    write_output_yml does not receive. output.yml exports no per-conformer log path.
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: "conformer jobs ran"
   reachable_from_export: false
-  export_effort: hard
+  export_effort: moderate
   effort_rationale: >-
-    None of it reaches the writer, and TCKDB's manifest additionally wants
-    content-addressed digests (lockfile / module closure / executable
-    digest) that ARC never computes at all. Even with full Job plumbing
-    the digests would be new work. The DescribedRuntime variant (a free
-    description plus module name/version pairs) is the only realistically
-    reachable shape.
-  blocker: >-
-    Job objects unreachable AND ARC computes no content digests for its
-    runtime, executable or environment.
-  source: arc/job/adapter.py:591
+    Either reconstruct the deterministic path (fragile under pipe mode, arc/job/pipe) or record
+    conformer log paths into output_dict[label]['paths'] when parse_conformer runs. Needed for any
+    conformer_upload with real calculation provenance (convergence, n_steps, software version).
+  blocker: "Paths live on JobAdapters only."
+  reliability: medium
+  tckdb_value: medium
+  source: arc/job/adapter.py:478
 
-- path: species_upload.conformers[].primary_calculation.software_release.version
-  arc_location: "Level.software_version; arc/parser/parser.py parse_ess_version"
+- path: arc_only.species.force_field
+  arc_location: "arc/species/species.py:ARCSpecies.force_field:435 (default MMFF94s)"
+  in_memory_form: "str"
+  obtained_from: input_setting
+  value_kind: requested
+  computed_when: "always (non-restart); used by conformer generation"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "One key; needed to interpret the pre-QM conformer_energies (kcal/mol FF energies)."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/species/species.py:435
+
+- path: arc_only.species.ts_conformers
+  arc_location: "TSGuess.opt_xyz / TSGuess.energy set in arc/scheduler.py:parse_conformer:3126"
+  in_memory_form: "per TS guess: opt_xyz (ts_guess_level geometry) and absolute e_elect kJ/mol; TS entries never get conformers/conformer_energies in output.yml"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: "TS guess opts ran"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Part of the all-guesses export (arc_only.species.ts_guesses) - opt_xyz + energy per guess give the TS conformer ensemble at ts_guess_level."
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/scheduler.py:3126
+
+# ===========================================================================
+# 13. EFFECTIVE CALCULATION SETTINGS (parameters[])
+# ===========================================================================
+
+- path: species_upload.conformers[].primary_calculation.parameters[].raw_key
+  arc_location: "arc/output.py:_gaussian_route_text:918, _orca_route_text:1044"
   in_memory_form: >-
-    ESS versions ARE exported (d['ess_versions'], arc/output.py:1220) but
-    only for the sp/opt/freq/neb logs of a converged species. Level also
-    carries a declared .software_version that is never emitted, and the
-    scan/irc/composite logs are never version-parsed.
-  computed_when: "ess_versions: only when converged is True"
+    str route line (Gaussian '#P ...' joined across wrapped lines; Orca '!' keyword lines,
+    lowercased). Parsed today only to decide freq_hessian_method and then discarded.
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: "any Gaussian/Orca opt/freq/sp whose deck (opt_input/freq_input/sp_input) or log is on disk"
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    The deck the ESS actually read (including fine grid 'integral=(grid=ultrafine)', 'scf=(tight,
+    direct)', 'opt=(tight,maxstep=5,maxcycle=N)', troubleshooting 'trsh' keywords, IOp's) is the
+    effective settings record, and its path is already exported, so the raw text is reachable.
+    ARC could emit route text verbatim per calc (trivial) or tokenise it into raw_key/raw_value
+    pairs (moderate: Gaussian option-list grammar; Orca keyword/%block grammar). Other ESS
+    (molpro, qchem, cfour, psi4, pyscf yml) have no route reader.
+  blocker: null
+  reliability: high
+  reliability_note: "the deck is what was submitted — observed input, not ARC's intent"
+  tckdb_value: high
+  source: arc/output.py:918
+
+- path: species_upload.conformers[].primary_calculation.parameters_json
+  arc_location: "arc/job/adapter.py:JobAdapter.args / fine / ess_trsh_methods (as_dict:806); arc/scheduler.py:run_job:1129-1146"
+  in_memory_form: >-
+    dict args {'keyword': {...}, 'block': {...}, 'trsh': {...}, 'shift': str} plus bool fine and
+    list[str] ess_trsh_methods, per JobAdapter; level.args merged in at scheduler.py:1146.
+  obtained_from: scheduler_state
+  value_kind: requested
+  computed_when: "every job"
+  reachable_from_export: false
+  export_effort: moderate
+  effort_rationale: >-
+    Structured form of what ARC asked the adapter to write (as opposed to the observed deck row
+    above). Needs the JobAdapter->species handoff that arc/output.py:1907 already anticipates
+    ('a JobAdapter->species-record handoff carrying the raw self.fine / self.grid / self.args
+    per job'), e.g. copying the final successful job's as_dict() subset onto ARCSpecies at
+    job-completion time. Only fine-vs-coarse is exported today (opt_final_settings).
+  blocker: "scheduler.job_dict not passed to write_output_yml; lost across restarts for completed jobs"
+  reliability: medium
+  reliability_note: "requested intent; the adapter may add/override keywords (e.g. Orca dft_grid default at orca.py:473), so the deck row is the authority"
+  tckdb_value: medium
+  source: arc/job/adapter.py:820
+
+- path: species_upload.conformers[].primary_calculation.parameters[].section
+  arc_location: "arc/job/adapters/gaussian.py:input_template:61-63 (%mem, %NProcShared); arc/job/adapters/orca.py:102-103 (%maxcore, %pal nprocs); set_input_file_memory gaussian.py:512 / orca.py:662"
+  in_memory_form: "int memory (MB for Gaussian %mem; MB per core for Orca %maxcore) and int cpus written into the deck"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: "every queue/incore Gaussian or Orca job"
   reachable_from_export: true
   export_effort: trivial
   effort_rationale: >-
-    Extending _get_ess_versions' key_map (arc/output.py:574) to cover irc
-    and composite paths, and dropping the `if converged` guard, are both
-    one-line changes; the version of the ESS that produced a NON-converged
-    log is exactly what a failure post-mortem needs.
+    Resource directives in the exported input deck (Link0 section / % blocks). Emit them as
+    parameters with section='link0'/'%pal' when route text is exported. These are the resources
+    the ESS was told to use (after ARC's memory capping in set_cpu_and_mem), not what the
+    scheduler granted.
   blocker: null
-  source: arc/output.py:574
+  reliability: high
+  tckdb_value: low
+  source: arc/job/adapters/gaussian.py:62
 
-- path: species_upload.statmech.freq_scale_factor.software
-  arc_location: "arc/output.py:_resolve_freq_scale_factor_source, data/freq_scale_factors.yml"
+- path: arc_only.job.ess_trsh_methods
+  arc_location: "arc/job/adapter.py:JobAdapter.ess_trsh_methods (as_dict:834; completed_jobs.csv:763)"
+  in_memory_form: "list[str] of troubleshooting methods applied across reruns of one calculation"
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: "jobs that were troubleshot"
+  reachable_from_export: false
+  export_effort: moderate
+  effort_rationale: >-
+    Explains why the effective deck differs from the nominal level (e.g. added scf=qc, changed
+    memory). Needs the JobAdapter handoff; also persisted per job in ~/.arc/completed_jobs.csv
+    (host-global, outside the project directory, rotated at 10000 lines).
+  blocker: "job_dict unreachable; completed_jobs.csv is not project-scoped"
+  reliability: medium
+  tckdb_value: low
+  source: arc/job/adapter.py:834
+
+# ===========================================================================
+# 14. EXECUTION ENVIRONMENT AND JOB FACTS
+# ===========================================================================
+
+- path: species_upload.conformers[].primary_calculation.execution_environment.runtime{described}.description
+  arc_location: "arc/job/adapter.py:write_submit_script:362 (writes <job local_path>/<submit_filenames[cluster_soft]> at :418)"
   in_memory_form: >-
-    The scale factor value and a free-text literature citation string ARE
-    exported (freq_scale_factor, freq_scale_factor_source). The ESS the
-    factor applies to is implicit in the level key
-    (str(freq_level) includes the software) and is never emitted as a
-    field, nor is the citation ever structured.
-  computed_when: "always when the level is in ARC's scale-factor database"
+    str submit script rendered from settings submit_scripts[server][job_adapter] (arc/settings/submit.py):
+    contains 'module load ...', 'conda activate ...', 'export g16root=...', executable invocation,
+    queue, walltime, cpus, memory. Written into the job directory next to the ESS log, inside the
+    project directory.
+  obtained_from: settings
+  value_kind: requested
+  computed_when: "every queue job (server is not None); incore jobs write none"
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    The file sits beside every exported log (same directory), so ARC or the adapter can read it,
+    but it is the user's TEMPLATE for the environment, not an observed environment: modules
+    loaded and paths exported are what the script asked for. Mapping to a 'described' runtime
+    needs extraction of module/conda lines and secret scrubbing (TCKDB rejects descriptions
+    matching password/token/etc.). ARC exports no pointer to it today.
+  blocker: null
+  reliability: medium
+  reliability_note: "requested environment; user-maintained templates can drift from what the node actually had"
+  tckdb_value: medium
+  source: arc/job/adapter.py:418
+
+- path: species_upload.conformers[].primary_calculation.execution_environment.runtime{described}.modules[].name
+  arc_location: "arc/settings/submit.py (e.g. 'module load intel/2020.1.217 openmpi/4.0.3 cfour-mpi/2.1' at :294)"
+  in_memory_form: "free text inside the rendered submit script; no structured module list anywhere in ARC"
+  obtained_from: settings
+  value_kind: requested
+  computed_when: "queue jobs whose template uses environment modules"
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    Needs a 'module load a/b c/d' line parser over the rendered submit script. Version is
+    present only when the template pins it (e.g. cfour-mpi/2.1); unversioned 'module load
+    gaussian' cannot satisfy ModuleDescription.version (required).
+  blocker: null
+  reliability: low
+  tckdb_value: low
+  source: arc/settings/submit.py:294
+
+- path: species_upload.conformers[].primary_calculation.execution_environment.executable.locator
+  arc_location: "arc/settings/settings.py:find_executable:431 (PYSCF_PYTHON:473, XTB:479, TANI_PYTHON:462, ...)"
+  in_memory_form: "str absolute path of the conda-env executable resolved on the ARC host"
+  obtained_from: settings
+  value_kind: observed
+  computed_when: "incore adapters (pyscf, xtb, torchani, uma, sella, gcn, ...) — resolved at import time on the driver host"
   reachable_from_export: true
   export_effort: trivial
   effort_rationale: >-
-    freq_level is already a parameter of write_output_yml and its
-    .software attribute is read three lines away (arc/output.py:148).
+    Module-level constants, importable in arc/output.py. For queue ESS (Gaussian/Orca/Molpro)
+    ARC holds only template text ('$orcadir/orca', '$g16root/g16'), not a resolved path, so this
+    row covers incore adapters only. Host paths may embed usernames; TCKDB rejects locators with
+    secrets, not usernames.
   blocker: null
-  source: arc/output.py:284
+  reliability: medium
+  tckdb_value: low
+  source: arc/settings/settings.py:473
 
-# ===========================================================================
-# 9. RUN AND SPECIES METADATA
-# ===========================================================================
+- path: species_upload.conformers[].primary_calculation.execution_environment.runtime{conda}.lockfile.digest
+  arc_location: "arc/settings/settings.py:find_executable:431 (env name only)"
+  in_memory_form: "env name / env prefix; no lockfile, no digest"
+  obtained_from: settings
+  value_kind: derived
+  computed_when: "never computed today"
+  reachable_from_export: true
+  export_effort: hard
+  effort_rationale: >-
+    A pinned conda runtime needs a content-addressed lockfile (conda list --explicit --md5 ->
+    sha256) plus an executable digest and closure[] entries. ARC knows the env prefix, so it
+    could generate one, but this is new functionality, only meaningful for incore/local jobs,
+    and cannot describe remote queue nodes.
+  blocker: "no lockfile generation anywhere in ARC"
+  reliability: low
+  tckdb_value: low
+  source: arc/settings/settings.py:431
+
+- path: arc_only.job.resources
+  arc_location: "arc/job/adapter.py:set_cpu_and_mem:767 (cpu_cores, job_memory_gb, submit_script_memory), max_job_time, queue/attempted_queues (:1202), server"
+  in_memory_form: >-
+    cpu_cores int; job_memory_gb float (after capping to 95% of node memory); submit_script_memory
+    int MiB (per-core for Slurm); max_job_time hours (may be raised by trsh, :932); queue str;
+    server str (key into settings servers, with cluster_soft)
+  obtained_from: scheduler_state
+  value_kind: requested
+  computed_when: "every job"
+  reachable_from_export: false
+  export_effort: moderate
+  effort_rationale: >-
+    No TCKDB home (ExecutionEnvironmentManifestPayload has no cores/memory/walltime/host
+    fields). Needs the JobAdapter handoff; persisted per job in restart.yml only while running
+    (as_dict:806) and in ~/.arc/initiated_jobs.csv / completed_jobs.csv (memory, server, level).
+    These are scheduler REQUESTS, not observed usage.
+  blocker: "job_dict not passed to write_output_yml"
+  reliability: medium
+  tckdb_value: low
+  source: arc/job/adapter.py:777
+
+- path: arc_only.job.job_id
+  arc_location: "arc/job/adapter.py:execute:332-338 (queue id from submit_job); _set_job_number:713 (incore)"
+  in_memory_form: "int/str queue job id; job_num for incore; job_server_name 'a<num>'"
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: "every submitted job"
+  reachable_from_export: false
+  export_effort: moderate
+  effort_rationale: "JobAdapter handoff; also in ~/.arc/completed_jobs.csv and running_jobs.yml snapshots (scheduler.py:1025). No TCKDB home."
+  blocker: "job_dict not passed to write_output_yml"
+  reliability: high
+  tckdb_value: low
+  source: arc/job/adapter.py:332
+
+- path: arc_only.job.run_time
+  arc_location: "arc/job/adapter.py:set_initial_and_final_times:602, determine_run_time:630"
+  in_memory_form: >-
+    datetime initial_time/final_time from mtimes of 'initial_time'/'final_time' marker files (or
+    the output file) on the server; run_time timedelta rounded to seconds
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: "every completed job"
+  reachable_from_export: false
+  export_effort: moderate
+  effort_rationale: "JobAdapter handoff; also in ~/.arc/completed_jobs.csv (:763). Wall-clock from file mtimes, not ESS-reported CPU time. No TCKDB home."
+  blocker: "job_dict not passed to write_output_yml"
+  reliability: medium
+  tckdb_value: low
+  source: arc/job/adapter.py:638
 
 - path: arc_only.species.run_time
-  arc_location: "ARCSpecies.run_time, aggregated in arc/scheduler.py:3364 from per-job run_times"
-  in_memory_form: "datetime.timedelta — the summed/extremum wall time across this species' jobs"
-  computed_when: "always; accumulated as jobs complete"
+  arc_location: "arc/scheduler.py:4556 (aggregate of conformer/tsg/opt/composite/other job run times)"
+  in_memory_form: "datetime.timedelta on ARCSpecies (serialised as seconds, species.py:824)"
+  obtained_from: scheduler_state
+  value_kind: derived
+  computed_when: "when a species finishes"
   reachable_from_export: true
   export_effort: trivial
-  effort_rationale: >-
-    Already aggregated onto the species by the scheduler, so unlike the
-    per-job timings it needs no Job plumbing — str(spc.run_time) in
-    _spc_to_dict. output.yml records run start and end timestamps for the
-    project but nothing per species.
+  effort_rationale: "Attribute read on ARCSpecies; emit run_time.total_seconds(). Aggregate only; not per calculation."
   blocker: null
-  source: arc/scheduler.py:3364
+  reliability: medium
+  tckdb_value: low
+  source: arc/scheduler.py:4556
 
-- path: arc_only.species.long_thermo_description
-  arc_location: "ARCSpecies.long_thermo_description"
-  in_memory_form: >-
-    str, accumulating; includes the bond-corrections dict, rotor treatment
-    notes and level-of-theory narrative that ARC writes into its RMG thermo
-    library entry.
-  computed_when: "always for a species with computed thermo"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    _rxn_to_dict already exports the reaction analogue
-    (long_kinetic_description, arc/output.py:1942); the species analogue
-    is simply not read. Symmetric one-line addition.
-  blocker: null
-  source: arc/species/species.py:429
-
-- path: arc_only.species.rmg_thermo
-  arc_location: "ARCSpecies.rmg_thermo"
-  in_memory_form: "ThermoData with H298 (kJ/mol) and S298 (J/mol*K) estimated by RMG's database for comparison"
-  computed_when: "only when compare_to_rmg is True"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    _thermo_to_dict already exists and would serialise it unchanged; the
-    writer just never looks at rmg_thermo. It is the estimate ARC's
-    computed value was checked against.
-  blocker: null
-  source: arc/species/species.py:362
-
-- path: arc_only.species.transport_data
-  arc_location: "ARCSpecies.transport_data (RMG TransportData), populated by set_transport_data"
-  in_memory_form: >-
-    shapeIndex (int), epsilon (J/mol), sigma (m), dipoleMoment (Debye,
-    parsed from the opt log by parse_dipole_moment), polarizability
-    (Angstrom^3, from parse_polarizability on the freq log),
-    rotrelaxcollnum, comment.
-  computed_when: "only when compute_transport is True and a OneDMin job ran"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    Live attribute of the in-scope species. TCKDB has no transport model at
-    all — this is candidate demand. Note the dipole moment and
-    polarizability are genuine ESS-parsed molecular properties that ARC
-    currently only surfaces inside a Lennard-Jones comment string.
-  blocker: null
-  source: arc/species/species.py:381
-
-- path: arc_only.species.irc_label
-  arc_location: "ARCSpecies.irc_label"
-  in_memory_form: >-
-    str. On a TS: the two space-separated labels of the species obtained by
-    optimising its IRC endpoints. On an IRC-derived species: the label of
-    the TS it came from.
-  computed_when: "only when IRC endpoint optimisations were spawned"
-  reachable_from_export: true
-  export_effort: trivial
-  effort_rationale: >-
-    output.yml exports irc_logs and irc_converged but not the link between
-    a TS and the species its IRC actually produced — which is the join a
-    consumer needs to verify the saddle point connects the declared wells
-    without re-perceiving geometries.
-  blocker: null
-  source: arc/species/species.py:375
-
-- path: arc_only.species.bdes
-  arc_location: "ARCSpecies.bdes; results processed by arc/processor.py:353 process_bdes"
-  in_memory_form: >-
-    list of 1-INDEXED bonded-atom-index tuples (or the string 'all_h'). The
-    computed BDE values are written to a separate BDE report by
-    process_bdes and never enter output.yml.
-  computed_when: "only when the user requested BDEs"
+- path: arc_only.job.observed_runtime_from_log
+  arc_location: "ESS logs on disk (Gaussian 'Job cpu time'/'Elapsed time', '%nprocshared' echo; Orca 'TOTAL RUN TIME')"
+  in_memory_form: "not parsed — grep of arc/parser finds no nprocs/elapsed/wall-time reader"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: "never today"
   reachable_from_export: true
   export_effort: moderate
   effort_rationale: >-
-    The request list is a trivial attribute, but the computed BDE VALUES
-    live in process_bdes' own output and are not stored back on the
-    species, so exporting the science (not just the request) needs
-    process_bdes to return its results into the species record.
-  blocker: "Computed BDE values are written to a report, not retained on the species."
-  source: arc/species/species.py:413
+    The only OBSERVED resource/time data (vs the requested rows above). Logs are exported, so a
+    new parser method per ESS adapter would supply it; no TCKDB home.
+  blocker: "no ARC parser"
+  reliability: medium
+  tckdb_value: low
+  source: arc/parser/adapter.py:324
 
-- path: arc_only.output_yml.run_settings
-  arc_location: "ARC.main attributes at the write site: job_types, ts_adapters, allow_nonisomorphic_2d, skip_nmd, n_confs, e_confs, trsh_ess_jobs, trsh_rotors, fine_only, max_job_time, adaptive_levels"
-  in_memory_form: "assorted scalars and dicts on the ARC object, in scope in arc/main.py at the call site"
+- path: arc_only.run.settings
+  arc_location: "arc/main.py:ARC.__init__ (max_job_time:296, memory:298, trsh_ess_jobs:304, trsh_rotors:305, job_types:314, rotor_scan_resolution:316, n_confs:317, e_confs:318, ess_settings:400, fine_only:407)"
+  in_memory_form: "run-level input settings on the ARC object; all written to restart.yml / input.yml"
+  obtained_from: input_setting
+  value_kind: requested
+  computed_when: "always"
+  reachable_from_export: false
+  export_effort: trivial
+  effort_rationale: >-
+    Pass selected attributes from main.py:673. job_types['fine'] explains the coarse/fine
+    convention; ess_settings maps ESS->servers. Requested knobs only — never evidence that a
+    job ran that way.
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/main.py:316
+
+# ===========================================================================
+# 15. PER-CALCULATION DIAGNOSTICS AND DAG
+# ===========================================================================
+
+- path: species_upload.conformers[].primary_calculation.wavefunction_diagnostic.t1_diagnostic
+  arc_location: "arc/scheduler.py:post_sp_actions:4102-4103 -> ARCSpecies.t1 (species.py:375)"
+  in_memory_form: "float | None on ARCSpecies (also appended to output_dict[label]['info'] as 'T1 = ...; ')"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: >-
+    only when the RUN-level sp_level.method contains 'ccsd' (not the adaptive per-species level)
+    and the ESS parser implements parse_t1 (Molpro, Orca, CFour; Gaussian returns None,
+    gaussian.py:391)
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "spc.t1 is live in _spc_to_dict; emit it on the sp calc. Could also call parse_t1 on the exported sp log directly to avoid the run-level 'ccsd' gate."
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/scheduler.py:4103
+
+- path: arc_only.species.active
+  arc_location: "arc/scheduler.py:post_sp_actions:4106-4108 (parser.parse_active_space)"
+  in_memory_form: "dict active-space description on ARCSpecies.active (occ/closed orbitals per irrep)"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: "sp at a wavefunction method_type"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Attribute read; would belong in parameters[] of a multireference sp calc."
+  blocker: null
+  reliability: medium
+  tckdb_value: low
+  source: arc/scheduler.py:4107
+
+- path: species_upload.conformers[].additional_calculations[].spin_diagnostic.s_squared
+  arc_location: "arc/output.py:_parse_spin_diagnostic:711 (sp first, freq/opt only as fallback); parser parse_s_squared (arc/parser/adapter.py:275)"
+  in_memory_form: "dict {s_squared, s_squared_expected, s_squared_annihilated}"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: "unrestricted opt/freq logs"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    Only the sp calc's <S**2> is exported (sp_spin_diagnostic); opt and freq logs, whose
+    wavefunction may differ in level and reference, are read only as a fallback when the sp log
+    is missing. Calling _parse_spin_diagnostic(None, None, geo) and (None, freq, None) per calc
+    gives per-calculation diagnostics.
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/output.py:741
+
+- path: species_upload.conformers[].primary_calculation.depends_on[].role
+  arc_location: "arc/scheduler.py:run_freq_job:1620 / run_sp_job:1641 (both launched on spc.final_xyz after opt)"
+  in_memory_form: "implicit workflow order opt(coarse)->opt(fine)->freq, ->sp, ->scan, ->irc; each JobAdapter holds its input xyz (job.xyz)"
+  obtained_from: scheduler_state
+  value_kind: derived
+  computed_when: "always (workflow convention)"
+  reachable_from_export: false
+  export_effort: moderate
+  effort_rationale: >-
+    ARC never records a parent job id. The adapter can derive optimized_from / freq_on /
+    single_point_on / scan_parent from the convention and from exported coarse_opt_output_xyz /
+    opt_input_xyz / xyz; ARC-side proof (job.xyz of each job equals the parent's output) needs
+    the JobAdapter handoff. Composite runs collapse opt+sp into one calc, so the DAG differs.
+  blocker: "job.xyz lives on JobAdapter"
+  reliability: medium
+  tckdb_value: medium
+  source: arc/scheduler.py:1620
+
+- path: species_upload.conformers[].additional_calculations[].input_geometries[].xyz_text
+  arc_location: "arc/job/adapter.py:JobAdapter.xyz (as_dict:867); freq/sp decks on disk"
+  in_memory_form: "xyz dict per job; the same geometry is in the exported freq_input/sp_input deck"
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: "every job"
+  reachable_from_export: false
+  export_effort: trivial
+  effort_rationale: >-
+    For opt the input geometry is exported (opt_input_xyz, coarse_opt_input_xyz); for freq/sp
+    it is not, though it normally equals the exported final xyz. Trivial to recover by parsing
+    the exported deck (or parse_geometry on the freq/sp log) rather than via job_dict.
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/job/adapter.py:867
+
+- path: arc_only.output_dict.comments
+  arc_location: "arc/scheduler.py:initialize_output_dict:5380 (keys conformers, isomorphism, restart, info, warnings, errors)"
+  in_memory_form: "free-text str per species, accumulated with +=; e.g. 'opt passed isomorphism check; ' (scheduler.py:3581), 'T1 = ...; '"
+  obtained_from: scheduler_state
+  value_kind: observed
   computed_when: "always"
   reachable_from_export: true
   export_effort: trivial
   effort_rationale: >-
-    write_output_yml is already called from inside ARC.execute() with all
-    of these in scope; only irc_requested (job_types['irc']) is currently
-    threaded through. Adding a run_settings block is extra keyword
-    arguments at one call site (arc/main.py:649). These are the knobs that
-    decide whether an absent field means "not requested" or "failed" —
-    the same distinction the evidence sidecar's unavailable envelope exists
-    to preserve.
+    output_dict is already passed to write_output_yml; none of these keys is emitted (only
+    'convergence', 'paths', 'job_types' are read). The isomorphism verdict per calc is the one
+    with scientific weight (optimized geometry still matches the 2D graph) and could feed a
+    calculation note or quality; free text, so emit verbatim.
   blocker: null
-  source: arc/main.py:649
+  reliability: medium
+  tckdb_value: medium
+  source: arc/scheduler.py:5423
+
+- path: species_upload.conformers[].primary_calculation.quality
+  arc_location: "none"
+  in_memory_form: "ARC has no raw/curated/rejected notion; nearest signals are output_dict convergence and isomorphism comments"
+  obtained_from: scheduler_state
+  value_kind: derived
+  computed_when: "n/a"
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: "Would be a policy mapping (e.g. failed isomorphism -> rejected), not latent data. UNVERIFIED: whether TCKDB intends producers to set it at all."
+  blocker: "no ARC concept"
+  reliability: low
+  tckdb_value: low
+  source: arc/scheduler.py:5423
+
+# ===========================================================================
+# 16. TRANSPORT
+# ===========================================================================
+
+- path: transport_upload.dipole_debye
+  arc_location: "arc/parser/parser.py:parse_dipole_moment:269 (per-ESS parse_dipole_moment, e.g. arc/parser/adapters/gaussian.py:1247); called only from ARCSpecies.set_transport_data (arc/species/species.py:2096)"
+  in_memory_form: "float Debye, total dipole of the last printed dipole block in the opt log (Gaussian 'field-independent basis'), at the opt level and final opt geometry"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: parser exists for all converged species with an opt log; ARC only calls it in the (dead) OneDMin path
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    Call parse_dipole_moment on output_dict[label]['paths']['geo'] in _spc_to_dict and emit dipole_debye
+    with its source log (level = opt level, not sp). Moderate because per-ESS parsers need fixture checks
+    and the 'last occurrence' choice must be confirmed for opt logs.
+  blocker: null
+  reliability: medium
+  tckdb_value: medium
+  source: arc/species/species.py:2096
+
+- path: transport_upload.polarizability_angstrom3
+  arc_location: "arc/parser/adapters/gaussian.py:parse_polarizability:1280 ('Isotropic polarizability for W=' in the freq log, Bohr^3 -> A^3); called only from set_transport_data (species.py:2103)"
+  in_memory_form: "float angstrom^3, isotropic static polarizability at the freq level"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: only when the ESS printed it (Gaussian freq output); UNVERIFIED for Orca/QChem parsers
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: "Same as dipole: call on the freq log at write time; null when absent. Level = freq level."
+  blocker: null
+  reliability: medium
+  tckdb_value: medium
+  source: arc/parser/adapters/gaussian.py:1280
+
+- path: transport_upload.sigma_angstrom
+  arc_location: "ARCSpecies.set_transport_data (arc/species/species.py:2055-2115) reading OneDMin 'Sigmas[angstrom]'"
+  in_memory_form: "TransportData.sigma (m, converted from A); epsilon (J/mol from cm^-1)"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: >-
+    Effectively never on main: scheduler.run_onedmin_job (arc/scheduler.py:2565) needs an 'onedmin' job
+    adapter, but no adapter registers 'onedmin' (registered: ase, autotst, cfour, gaussian, gcn, goflow,
+    heuristics, kinbot, linear, mockter, molpro, openbabel, orca, orca_neb, psi4, pyscf, qchem, rits,
+    terachem, torchani, xtb, xtb_gsm); processor transport step is '# todo' (arc/processor.py:237);
+    transport_data is not persisted in ARCSpecies.as_dict.
+  reachable_from_export: false
+  export_effort: hard
+  effort_rationale: "Requires a OneDMin JobAdapter, persistence of transport_data, and processor wiring before any export makes sense."
+  blocker: "no OneDMin job adapter on main"
+  reliability: low
+  tckdb_value: medium
+  source: arc/species/species.py:2055
+
+- path: transport_upload.epsilon_over_k_k
+  arc_location: "ARCSpecies.set_transport_data (arc/species/species.py:2080-2082)"
+  in_memory_form: "TransportData.epsilon (J/mol) = OneDMin 'Epsilons[1/cm]' * 11.96266; eps/k_B[K] = cm^-1 * 1.438777"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: effectively never (see sigma_angstrom row)
+  reachable_from_export: false
+  export_effort: hard
+  effort_rationale: "Same blocker as sigma_angstrom."
+  blocker: "no OneDMin job adapter on main"
+  reliability: low
+  tckdb_value: medium
+  source: arc/species/species.py:2082
+
+- path: transport_upload.rotational_relaxation
+  arc_location: "ARCSpecies.set_transport_data (arc/species/species.py:2114 rotrelaxcollnum=2)"
+  in_memory_form: "hard-coded 2; comment says 'was not determined, default value is 2'"
+  obtained_from: settings
+  value_kind: requested
+  computed_when: only inside the dead OneDMin path
+  reachable_from_export: false
+  export_effort: hard
+  effort_rationale: "A placeholder default, not a result; must never be exported as observed. Listed so the join does not treat it as latent supply."
+  blocker: "not a computed value"
+  reliability: low
+  tckdb_value: low
+  source: arc/species/species.py:2114
+
+# ===========================================================================
+# 17. SPECIES IDENTITY
+# ===========================================================================
+
+- path: species_upload.conformers[].geometry.isotopes
+  arc_location: "arc/species/converter.py xyz dict 'isotopes' tuple (str_to_xyz:112, check_xyz_dict:638)"
+  in_memory_form: >-
+    Every ARC xyz dict carries 'isotopes' (mass number per atom, default most common isotope).
+    xyz_to_str (converter.py:138) drops it unless isotope_format is given, so output.yml xyz text
+    loses any substitution. TCKDB wants {1-based index: mass number} for non-default atoms only.
+  obtained_from: computed
+  value_kind: observed
+  computed_when: always (any xyz)
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Compare spc.final_xyz['isotopes'] with get_most_common_isotope_for_element per atom; emit substituted atoms with +1 index."
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/species/converter.py:112
+
+- path: reaction_upload.transition_state.geometry.isotopes
+  arc_location: "arc/species/converter.py xyz dict 'isotopes'"
+  in_memory_form: "same as species route, on the TS final_xyz"
+  obtained_from: computed
+  value_kind: observed
+  computed_when: always
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Same helper applied to the TS record."
+  blocker: null
+  reliability: high
+  tckdb_value: medium
+  source: arc/species/converter.py:112
+
+- path: species_upload.species_entry.stereo_label
+  arc_location: "arc/species/conformers.py:determine_chirality:2245"
+  in_memory_form: >-
+    dict {(atom,) : 'R'|'S'|'NR'|'NS', (a,b): 'E'|'Z'}, 0-based, computed per conformer dict during
+    generation; only xyz and FF energy are copied onto the species (species.py:1261-1262), so the
+    chirality is discarded. Exported SMILES come from spc.mol, which carries no stereo.
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "during conformer generation only; recomputable from final_xyz + mol"
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    Recompute determine_chirality on the final geometry at write time (RDKit embed), or keep the
+    chosen conformer's chirality dict; then render CIP labels / isomeric SMILES and derive
+    stereo_kind (achiral vs enantiomer/diastereomer/ez_isomer).
+  blocker: "Discarded after generation; recompute needs RDKit at write time."
+  reliability: medium
+  tckdb_value: medium
+  source: arc/species/conformers.py:2245
+
+- path: species_upload.species_entry.stereo_kind
+  arc_location: "arc/species/conformers.py:determine_chirality:2245"
+  in_memory_form: "derivable from the chirality dict: empty -> achiral; R/S centres -> enantiomer/diastereomer; E/Z bonds -> ez_isomer"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "as stereo_label"
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: "Same recomputation as stereo_label plus a mapping onto TCKDB's StereoKind."
+  blocker: "As stereo_label."
+  reliability: medium
+  tckdb_value: medium
+  source: arc/species/conformers.py:2245
+
+- path: species_upload.species_entry.molecule_kind
+  arc_location: "arc/species/species.py:ARCSpecies (every ARC species is atom-resolved)"
+  in_memory_form: "implicit constant 'molecule'"
+  obtained_from: settings
+  value_kind: derived
+  computed_when: always
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Constant; ARC has no pseudo-species or free-electron concept."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/species/species.py:392
+
+- path: species_upload.species_entry.species_entry_kind
+  arc_location: "arc/species/species.py:ARCSpecies.fragments:408 / multi-fragment perception"
+  in_memory_form: "fragments: list[list[int]] (user-given atom groups) for vdW-type multi-fragment species; otherwise None"
+  obtained_from: input_setting
+  value_kind: requested
+  computed_when: "only when the user supplies fragments"
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    minimum vs vdw_complex could be derived from spc.fragments (declared) or from the number of
+    connected components of the final xyz (derived); IRC endpoint species (irc_label set) are
+    often complexes. Needs a policy, not plumbing.
+  blocker: "UNVERIFIED: whether ARC ever sets fragments automatically."
+  reliability: low
+  tckdb_value: low
+  source: arc/species/species.py:408
+
+- path: arc_only.species.adjacency_list
+  arc_location: "arc/species/species.py:ARCSpecies.mol / adjlist:394"
+  in_memory_form: "ARC Molecule graph (bond orders, radicals, lone pairs); spc.mol.to_adjacency_list()"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "whenever spc.mol exists"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "One guarded call; disambiguates radical/resonance structure that SMILES/InChI may flatten."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/species/species.py:394
+
+# ===========================================================================
+# 18. CARRIED FORWARD FROM THE 0.22 INVENTORY (re-verified, arc_only)
+# ===========================================================================
+
+- path: arc_only.species.bde_report
+  arc_location: "arc/processor.py:process_arc_project:248 -> process_bdes"
+  in_memory_form: >-
+    dict {(i, j): BDE} per species, i/j 1-based atom indices of the broken bond,
+    value in kJ/mol computed as e0(fragment1) + e0(fragment2) - e0(parent) from
+    the Arkane E0s of fragment species ARC generated. Written only to
+    output/BDE_report.txt via plotter.log_bde_report.
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "only for species declaring bdes in the input"
+  reachable_from_export: false
+  export_effort: moderate
+  effort_rationale: >-
+    bde_report is a local of process_arc_project and is discarded after the text
+    report is written. Either return it to main and pass it to write_output_yml, or
+    recompute it at write time from spc.bdes and the fragment species' e0 (all in
+    species_dict). Inherits the e0 correction-marker problem (see
+    arc_only.species.statmech.e0_atom_corrections_applied).
+  blocker: "value not stored on the species; lives only in BDE_report.txt"
+  reliability: medium
+  tckdb_value: low
+  source: arc/processor.py:248
+
+- path: arc_only.species.neg_freqs_trshed
+  arc_location: "arc/species/species.py:ARCSpecies.neg_freqs_trshed:538; extended arc/scheduler.py:4633"
+  in_memory_form: "list[float], cm^-1, spurious imaginary frequencies ARC troubleshot away by displacing the geometry"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: "only when a non-TS freq job returned imaginary modes and ARC troubleshot them"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "One list copy in _spc_to_dict; already persisted in restart.yml."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/scheduler.py:4633
+
+- path: arc_only.species.mol_list
+  arc_location: "arc/species/species.py:ARCSpecies.mol_list:393"
+  in_memory_form: "list[Molecule] resonance structures; export as adjacency-list strings"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "whenever a species has a Molecule"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "[m.to_adjacency_list() for m in spc.mol_list] at the write site."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/species/species.py:393
+
+- path: arc_only.species.zmat
+  arc_location: "arc/species/species.py:ARCSpecies.zmat:446"
+  in_memory_form: "dict {symbols, coords, vars, map}; ARC's internal-coordinate representation, 0-based map"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "lazily, when ARC needs internal coordinates (rotor scans, TS guesses)"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Plain dict; dump as-is. Low value outside ARC."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/species/species.py:446
+
+- path: arc_only.species.fragments
+  arc_location: "arc/species/species.py:ARCSpecies.fragments:408"
+  in_memory_form: "list[list[int]] user-declared fragment atom groups (for vdW complexes)"
+  obtained_from: input_setting
+  value_kind: requested
+  computed_when: "only when the user declares fragments"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "List copy. It is a declaration, not a result."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/species/species.py:408
+
+- path: arc_only.species.rotors_dict.trsh_methods
+  arc_location: "arc/species/conformers.py:find_internal_rotors (rotor['trsh_methods']):1753"
+  in_memory_form: "list[str|dict] per rotor, troubleshooting actions applied to its scan"
+  obtained_from: scheduler_state
+  value_kind: observed
+  computed_when: "every rotor; non-empty only after scan troubleshooting"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    rotors_dict is already walked by _get_torsions / _get_rejected_torsions; add the key to
+    both. Explains why a scan's constraints differ from the requested ones.
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/species/conformers.py:1753
+
+- path: arc_only.species.rotors_dict.max_e
+  arc_location: "arc/species/conformers.py:find_internal_rotors (rotor['max_e']):1761"
+  in_memory_form: "float, kJ/mol, highest point of the rotor scan relative to its minimum"
+  obtained_from: parsed_log
+  value_kind: observed
+  computed_when: "after the scan is processed"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    Duplicates torsions[].barrier_kj_mol for successful 1D rotors; the non-redundant value is
+    on rejected and ND rotors, where barrier_kj_mol is null. One dict read in _get_rejected_torsions.
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/species/conformers.py:1761
+
+- path: arc_only.species.directed_rotors
+  arc_location: "arc/species/species.py:ARCSpecies.directed_rotors:444"
+  in_memory_form: "dict {scan_type: [[pivots...]]}, user request for directed (brute-force / ND) scans"
+  obtained_from: input_setting
+  value_kind: requested
+  computed_when: "only when the user requests directed scans"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    Dict copy. Requested, never a result: the realised ND scans are the
+    scan_result rows (dimension > 1) elsewhere in this file.
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/species/species.py:444
+
+- path: arc_only.reaction.product_dicts
+  arc_location: "arc/reaction/reaction.py:ARCReaction.product_dicts:212"
+  in_memory_form: >-
+    list[dict] family-template matches (family, own_reverse, discovered_in_reverse,
+    r_label_map, p_label_map, products); label maps are 0-based atom indices.
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "lazily, for reactions with a determinable family"
+  reachable_from_export: true
+  export_effort: moderate
+  effort_rationale: >-
+    Serialisable except the RMG Molecule objects under 'products' (convert to SMILES/adjlist).
+    Supplies the evidence behind reaction_family_source_note and expected_changing_bonds.
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/reaction/reaction.py:212
+
+- path: arc_only.reaction.ts_xyz_guess
+  arc_location: "arc/reaction/reaction.py:ARCReaction.ts_xyz_guess:124"
+  in_memory_form: "list[xyz dict|str] user-supplied TS guess geometries"
+  obtained_from: input_setting
+  value_kind: requested
+  computed_when: "only when the user supplies TS guesses"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "xyz_to_str per entry; tells a consumer a TS guess came from the user (method 'user')."
+  blocker: null
+  reliability: high
+  tckdb_value: low
+  source: arc/reaction/reaction.py:124
+
+- path: arc_only.species.long_thermo_description
+  arc_location: "arc/species/species.py:ARCSpecies.long_thermo_description:459; appended arc/plotter.py:851"
+  in_memory_form: "str, human-readable provenance of the thermo (levels, corrections, rotors)"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "every species with thermo"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    Symmetric with the already-exported reactions[].long_kinetic_description. Free text, so
+    useful only as species_upload.thermo.note material, never as structured data.
+  blocker: null
+  reliability: medium
+  tckdb_value: low
+  source: arc/species/species.py:459
+
+- path: arc_only.species.rmg_thermo
+  arc_location: "arc/species/species.py:ARCSpecies.rmg_thermo:386"
+  in_memory_form: "RMG ThermoData estimate (group additivity / library), same units as thermo"
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "only when compare_to_rmg is on"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: "Reuse _thermo_to_dict. A comparison value, never a computed-thermo result."
+  blocker: null
+  reliability: medium
+  tckdb_value: low
+  source: arc/species/species.py:386
+
+- path: arc_only.species.symmetry_number
+  arc_location: "arc/species/species.py:ARCSpecies.get_symmetry_number:2395"
+  in_memory_form: >-
+    int, RMG total symmetry number (highest across resonance structures / the resonance
+    hybrid). Not the same quantity as statmech.external_symmetry (exported) nor the
+    per-rotor symmetry numbers (exported on torsions / rotor_scans).
+  obtained_from: computed
+  value_kind: derived
+  computed_when: "on demand from mol_list"
+  reachable_from_export: true
+  export_effort: trivial
+  effort_rationale: >-
+    One method call in _spc_to_dict. Worth exporting only with an explicit name, because the
+    three symmetry numbers are easily confused.
+  blocker: null
+  reliability: medium
+  tckdb_value: low
+  source: arc/species/species.py:2395

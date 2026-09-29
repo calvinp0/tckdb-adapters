@@ -6,7 +6,9 @@ agents spell the same field differently, the join silently drops the row and the
 matrix reports a gap that does not exist. Follow this document exactly.
 
 The authority for path spelling is **TCKDB's Pydantic models at `tckdb-schemas`
-0.22.0 (working tree HEAD of `TCKDB_v2`)**. ARC-side and adapter-side inventories
+0.51.0 (`TCKDB_v2` HEAD `ad3cd706`)**, plus the backend-side
+`TransportUploadRequest` for the `transport_upload` root, which is not published
+in `tckdb-schemas`. ARC-side and adapter-side inventories
 adopt TCKDB's spelling even when their own local name differs — that local name is
 recorded in a separate column, never in `path`.
 
@@ -16,12 +18,18 @@ recorded in a separate column, never in `path`.
 <root>.<field>[.<field>…]
 ```
 
-**Roots** — exactly two, one per upload workflow:
+**Roots** — exactly five, one per upload workflow:
 
-| Root | Model | Module |
-|---|---|---|
-| `species_upload` | `ComputedSpeciesUploadRequest` | `tckdb_schemas/workflows/computed_species_upload.py` |
-| `reaction_upload` | `ComputedReactionUploadRequest` | `tckdb_schemas/workflows/computed_reaction_upload.py` |
+| Root | Model | Module | Endpoint |
+|---|---|---|---|
+| `species_upload` | `ComputedSpeciesUploadRequest` | `tckdb_schemas/workflows/computed_species_upload.py` | `POST /api/v1/uploads/computed-species` |
+| `reaction_upload` | `ComputedReactionUploadRequest` | `tckdb_schemas/workflows/computed_reaction_upload.py` | `POST /api/v1/uploads/computed-reaction` |
+| `ts_upload` | `TransitionStateUploadRequest` | `tckdb_schemas/workflows/transition_state_upload.py` | `POST /api/v1/uploads/transition-states` |
+| `conformer_upload` | `ConformerUploadRequest` | `tckdb_schemas/workflows/conformer_upload.py` | `POST /api/v1/uploads/conformers` |
+| `transport_upload` | `TransportUploadRequest` | `backend/app/schemas/workflows/transport_upload.py` (backend-side; extends the wire `TransportUploadPayload` in `tckdb_schemas/workflows/transport_upload.py`) | `POST /api/v1/uploads/transport` |
+
+Module paths without a `backend/` prefix are relative to
+`schemas/python/tckdb-schemas/`.
 
 **Rules**
 
@@ -92,6 +100,13 @@ decides it. Put the trigger in `condition`. `on_absence` records what TCKDB actu
 does when the field is missing (reject / warn / silently accept); this is what makes
 the eventual priority ranking defensible rather than a guess.
 
+Backend checks that go beyond the annotation (ownership, role/type, level-of-theory,
+enthalpy declaration, composition, idempotency, deposit rights) are extra A1 rows
+with `row_kind: workflow_check`, keyed on the path they constrain and carrying
+`check`, `code`, `tier` (`block | warn | silent_default | idempotency | other`),
+`http_status` and `on_violation`. They follow all field rows, so a path's field row
+is always its first A1 row.
+
 ### A2 — ARC exported supply (`ARC_SUPPLY_EXPORTED.yml`)
 
 ```yaml
@@ -141,18 +156,20 @@ so and describe the plumbing in `blocker`. `export_effort` must be justified in
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:1204
   maps_from: "output.yml: species[].conformers[].xyz"
   transform: "xyz dict → xyz_text via _vendor.xyz_to_str"
-  status_at_0_22_0: unknown     # leave `unknown`; A5's drift ledger decides
+  status_at_0_51: unknown     # leave `unknown`; A5's drift ledger decides
   source: tckdb_arc/tckdb_arc/adapter.py:1204
 ```
 
 A4 reports **what the adapter does**, not whether it still works. Judging validity
-needs A5's drift ledger, so `status_at_0_22_0` stays `unknown` here and Phase B
+needs A5's drift ledger, so `status_at_0_51` stays `unknown` here and Phase B
 fills it. Resist the urge to guess.
 
 ### A5 — schema drift (`SCHEMA_DRIFT.yml`)
 
-`git diff tckdb-schemas-v0.8.0..HEAD` over
-`schemas/python/tckdb-schemas/tckdb_schemas/`.
+`git diff 3f929069..ad3cd706` (tckdb-schemas 0.22.0 → 0.51.0) over
+`schemas/python/tckdb-schemas/tckdb_schemas/`, plus the backend workflow seams
+that refuse or warn (`backend/app/workflows/`, `backend/app/services/`). The previous
+ledger covered `tckdb-schemas-v0.8.0..0.22.0`.
 
 ```yaml
 - path: reaction_upload.atom_map

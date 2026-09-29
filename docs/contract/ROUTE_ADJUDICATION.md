@@ -1,5 +1,13 @@
 # B2 — route adjudication
 
+> **0.51 refresh (2026-09-29).** Sections 1–6 are the 0.22-era rulings and still
+> apply by concept tail. Section 7 records what changed for tckdb-schemas 0.51.0:
+> new row kinds (applicability rules, flattened aliases, route mirrors, mapping
+> reviews), 39 new concept rulings, and the three 0.22 rulings this refresh
+> supersedes (§1.5 is now `NOT_APPLICABLE` rather than `GENERALISES`; the
+> `execution_environment` and `frequency_scale_factor` carve-outs are pattern
+> rules so they reach the new roots). The counts in the table below are 0.22 counts.
+
 Companion narrative to `ROUTE_ADJUDICATION.yml` (222 rows: 208 sub-model concepts
 covering all 529 `ROUTE_UNRESOLVED` rows, plus the 14 real `ORPHAN_MAPPING` rows).
 
@@ -430,3 +438,95 @@ mis-keyed `imaginary_disposition`, A1's missing AEC param leaves, and the siblin
 verdict on `spin_treatment`). Where a sibling row's own content looked wrong but was
 not load-bearing for the route question, I left it alone and said so in the rationale
 rather than silently adjudicating around it.
+
+---
+
+## 7. The 0.51 refresh (Phase B, 2026-09-29)
+
+Inputs: A1 at tckdb-schemas 0.51.0 (TCKDB_v2 `ad3cd706`, five roots, 3,803 field
+rows plus 508 workflow checks), and fresh A2–A5. The join (`tools/join_inventories.py`)
+was rerun after the fixes below; it now reports **0 near-misses and 0
+`ROUTE_UNRESOLVED`**.
+
+### 7.1 Why the join semantics changed
+
+A4 now enumerates every route the adapter emits, one row per path, generated from a
+per-route catalog and cross-checked against 521 built payloads. So the adapter side of
+a row is observed, not inferred. At 0.22 a `GENERALISES` ruling re-verdicted a row from
+its sibling's whole verdict (sibling WIRED ⇒ row WIRED), because A4 then keyed each
+concept once. That would now claim the adapter emits routes A4 shows it does not.
+**A ruling now borrows only ARC-side supply (A2/A3) from the sibling; the adapter side
+is always the row's own A4 row.** Concretely, 404 rows the old logic called `WIRED` were
+re-examined; most were result blocks on the wrong calculation type or routes on the three
+new roots.
+
+Route resolution also runs now for rows the adapter maps but no supply inventory keys at
+that route. At 0.22 only unmapped rows were adjudicated, so the `reaction_upload.species[]`
+mirror rows the adapter does fill stayed `SOURCE_UNCONFIRMED` even though A2 had keyed
+their supply one route over.
+
+### 7.2 New row kinds in `ROUTE_ADJUDICATION.yml`
+
+| Kind | What it does | Rows |
+|---|---|---|
+| `route_applicability` (AP-1…AP-11) | Regex over the demand path; applies only when no inventory has a row at that path. `VACUOUS` → `NOT_APPLICABLE`; `DIFFERENT_INSTANCE`/`GATED` → `ARC_ABSENT` with nothing borrowed. | 11 rules, 1,261 rows |
+| `flattened_alias` | Relates a `ComputedReactionCalculationIn` scalar (`freq_n_imag`, `opt_converged`, `sp_electronic_energy_hartree`, …) to the nested tail it flattens (`freq_result.n_imag`, …). This is keying issue 3 from the brief: the two spellings never share a path tail, so the tail matcher could not relate them. | 10 aliases, 15 rows |
+| `route_mirror` (RM-1…RM-9) | Same ARC record reached through a mirrored route: `reaction_upload.species[]` ↔ `species_upload`, `conformer_upload` ↔ `species_upload`, `ts_upload` ↔ `reaction_upload.transition_state`. Makes §1.2 mechanical. | 9 rules, 198 rows |
+| `mapping_review` (MR-1, MR-2) | The adapter emits a field (or A2 proposes a supply) from an ARC key that is the wrong object; replaces the verdict. | 2 rules, 15 rows |
+
+### 7.3 Rulings, with the reason for each
+
+**Applicability.**
+
+- **AP-1** (361 rows, `NOT_APPLICABLE`). freq/sp/irc/path-search/scan result blocks, and the flattened `freq_*`/`sp_*` scalars, on the primary calculation of a conformer or TS. TCKDB forces that calculation to be type `opt` and admits only the matching result block. `conformer_upload.calculation` is not forced by the schema but is the adapter's opt in conformer mode.
+- **AP-2** (160, `NOT_APPLICABLE`). IRC and path-search results on minima routes. **Supersedes §1.5**, which reached the same "not a gap" conclusion but encoded it as `GENERALISES`, so these rows showed as `WIRED`.
+- **AP-3** (4, `NOT_APPLICABLE`). `reaction_coordinate_mode_index` on minima; the schema says it is refused there.
+- **AP-4** (197, `ARC_ABSENT`, gated). All of `transport_upload.*` and `conformer_upload.transport.*`. ARC produces no transport data, so borrowing calculation/provenance supply onto a transport record would describe a deposit nobody can make.
+- **AP-5, AP-6, AP-7** (266 / 175 / 11). §2.2, §2.1 and §2.4 as patterns. The 0.22 PARTIAL rulings on `workflow_tool_release.*` and `software_release.*` enumerated only the 0.22 routes as exceptions, so the new roots' execution-environment routes had leaked into `WIRED`.
+- **AP-8** (25, `ARC_ABSENT`). A correction scheme's `workflow_tool_release` is the tool whose table was the proximate source (Arkane/RMG), not ARC. The 0.22 ruling generalised it from the bundle's ARC release because the route did not exist then. Sending ARC here would be wrong provenance.
+- **AP-9** (5). `scheme.level_of_theory.spin_treatment`: the calculation routes gained a supply since 0.22 (`scf_reference`), which describes ARC's own freq/sp jobs, not the level a scheme was fitted at.
+- **AP-10** (2, `NOT_APPLICABLE`). `conformer_key` on TS calculations; the 0.51 TS block has no conformers.
+- **AP-11** (55, `ARC_ABSENT`). Hessian, spin diagnostic and spin treatment on the primary opt. They come from the freq/sp jobs; the adapter deliberately does not propagate them (`adapter.py:3416-3418`).
+
+**Concept rulings added (39).** All in the YAML with evidence. The ones that carry a
+judgement:
+
+- `software_release.revision` — PARTIAL. Arkane routes generalise the RMG-Py commit. On calculation routes the ESS revision is a different object, but it is **not absent**: ARC exports the full banner (`Gaussian 16, Revision C.01`) and the adapter sends it whole as `version`. So those legs carry `different_instance_verdict: ADAPTER_GAP` (a new ruling field: what is true of the route when the sibling does not apply).
+- `scf_stability.*` — PARTIAL. Generalises across additional-calculation routes; not onto the primary opt (the stability job tested the sp/freq reference).
+- `parameters[].*` — PARTIAL, same split (the supply is the freq Hessian method). `parameters[].section` generalises (A3's deck resource sections exist for every opt).
+- `source_literature.title` — PARTIAL. FSF citation generalises across statmech routes; a correction scheme's citation is a different object.
+- `freq_scale_factor.software.version` — DIFFERENT_INSTANCE. The only sibling was the scheme's software, which MR-2 rules invalid anyway.
+- The rest are the species/conformer/TS mirrors and coarse-opt generalisations (ARC writes `coarse_opt_*` from the shared `_spc_to_dict` for species and TS records alike).
+
+**Mapping reviews.**
+
+- **MR-1** (6 rows → `ADAPTER_GAP`). The adapter fills `scheme.atom_params[]` from `parameter_table.values`, which ARC writes only on the Petersson BAC record. The atom-energy record carries its table as `reference_atom_energies` (`ARC:arc/output.py:1575-1587`), which the adapter never reads. So the rows looked `WIRED` and are never emitted on current ARC output. This is integration-gate finding C4.
+- **MR-2** (9 rows → `ARC_ABSENT`). A2 maps `scheme.software` from Arkane. TCKDB defines it as the ESS release that computed the scheme's parameters. Arkane's correction database does not record that release, so ARC cannot fill it honestly; Arkane there would be wrong data inside the scheme's identity tuple.
+
+### 7.4 Inventory fixes made for the join (no row deleted)
+
+1. **A2 `scheme.{atom,bond,component}_params`** (9 rows, 3 routes). Re-keyed from the leaf spelling to the 0.51 container spelling `…[]`, and 21 leaf rows added from each container's `arc_key` (`atom_params[].element/.value`, `bond_params[].bond_key/.value`, `component_params[].component_kind/.key/.value`). Each carries a `phase_b_note`. A2: 535 → 556 rows.
+1b. **A2 `energy_level_of_theory` leaves** (review fix). 21 rows were added for `aux_basis`, `cabs_basis`, `dispersion`, `keywords`, `solvent`, `solvent_model` and `spin_treatment` on `species_upload.thermo`, `species_upload.statmech` and `conformer_upload.statmech`. ARC exports the energy level as a whole level dict via `_level_to_dict` → `Level.as_dict` (`ARC:arc/output.py:451-465`), and the sp reference via `scf_reference.sp_reference`; A2 had keyed only `.method` and `.basis`. The reaction-species mirror picks them up through RM-1. Effect: 35 rows moved from `ARC_ABSENT` to `ADAPTER_GAP`. A2 went from 556 to 577 rows.
+2. **A5 `…applied_energy_corrections[].components[]`** (4 rows). The three species routes flipped to `breaking_for_producer: true`. Current ARC drops a Petersson BAC's entire component list when any bond lacks a parameter (`ARC:arc/output.py:1592-1596`) but still exports the total, and the adapter forwards `components or []`. A bonded species then gets a 422 `bac_total_requires_components`. The TS row stays true, with a note that current ARC main never exports a TS BAC (`_bac_is_applied_to`, `ARC:arc/output.py:1402`), so the TS break needs pre-`c8240195` output or a legacy record. A5 asked Phase B to confirm exactly this.
+3. **Join tool.** Container, root and union rows get `CONTAINER` with a roll-up. Breaking drift on a container whose descendants the adapter maps is `BROKEN`, which is how the one producer-breaking drift A5 found (keyed on a container) now reaches the matrix at all. The near-miss check ignores list markers and union braces, which is what catches keying issue 1. A5 `removed` rows are listed rather than reported as near-misses. The tail index excludes `arc_only.*` and non-demand paths (§2.5's warning). Workflow checks are attached to their path.
+4. **Keying issue 2** (transport extras only in A1) needed no inventory change. ARC and the adapter have no transport, so there is nothing to key; AP-4 rules the whole root.
+5. **Keying issue 4** (A1 container/union/root rows) is handled by the `CONTAINER` verdict above.
+6. **Superseded 0.22 rulings.** The two `NEVER_EXISTED` rows (`reaction_upload.species[].thermo.source_calculations[]`) are resolved: `BundleThermoIn` gained `source_calculations[]` at 0.51 (`61f4b256`, #151), so the adapter's key is now valid. The 12 `A1_MISS` rows are resolved: A1 at 0.51 has the `atom_params[]`/`bond_params[]` leaves. The join now skips both kinds when it looks up route rulings.
+
+### 7.4b `ADAPTER_GAP` with unconfirmed ARC supply (review fix)
+
+A `GENERALISES` ruling whose sibling is supplied only by the adapter (an A4 row with no
+A2 or A3 row) still yields `ADAPTER_GAP` when the adapter does not emit the route. That
+is 57 of the 288 `ADAPTER_GAP` rows. Those rows now carry the flag
+`ARC_SUPPLY_UNCONFIRMED` (`arc_supply: unconfirmed` in `gap_matrix.yml`): the adapter
+could emit them only if its source at the sibling is real ARC data, and no inventory
+confirms that. The other 231 have an A2 export.
+
+Separately, a `WIRED` verdict reached through a concept, mirror or alias ruling proves the
+ARC key exists, not that the value is right. `GAP_MATRIX.md` now says so.
+
+### 7.5 Confidence
+
+- **High.** AP-1/2/3/10 (schema validators), AP-4 (three inventories agree ARC has no transport), AP-5/6 (0.22 rulings, now reaching the new roots), MR-1 (read in both repos), the A5 species BAC flip (read in all three repos).
+- **Medium.** AP-8 and MR-2 rest on TCKDB's docstring semantics for scheme `software` and `workflow_tool_release`. Whether Arkane's tables live in RMG-Py or RMG-database is UNVERIFIED. RM-8/RM-9 matched only one row.
+- **Low.** Treating `conformer_upload.calculation` as the primary opt (AP-1, AP-11, the `*_opt_primary` exceptions). The schema allows another type there; the ruling holds for the adapter's conformer mode, not for every producer.

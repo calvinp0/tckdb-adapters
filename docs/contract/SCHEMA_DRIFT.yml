@@ -1,534 +1,3365 @@
 # repo: TCKDB_v2
 #
-# A5 — schema drift ledger. Rows conform to FIELD_KEY.md's A5 schema.
-# Diff: git diff tckdb-schemas-v0.8.0..HEAD -- schemas/python/tckdb-schemas/tckdb_schemas/
-# HEAD declares tckdb-schemas 0.22.0 and is UNTAGGED.
+# A5 — schema drift ledger, tckdb-schemas 0.22.0 (3f929069, the previous audit's authority) -> 0.51.0 (HEAD ad3cd706).
+# Rows conform to FIELD_KEY.md's A5 schema. `source` is repo-relative to TCKDB_v2 and points at the HEAD location
+# (for `removed` rows: the parent model at HEAD).
 #
-# `source` is repo-relative to TCKDB_v2 and points at the CURRENT (HEAD) location.
-# One row per path. Where a field was introduced and then reshaped inside the
-# range (e.g. atom_to_ts), the row records the NET state at HEAD and cites the
-# introducing commit; the intermediate churn is in SCHEMA_DRIFT.md.
-
-# ===========================================================================
-# 1. Reaction atom map — ADR 0011. Entirely new surface.
-# ===========================================================================
-
-- path: reaction_upload.atom_map
-  change: added
+# How it was built (see SCHEMA_DRIFT_0_51.md):
+#   * added / removed / retyped / requiredness_changed — mechanical: both trees' five/two upload roots were walked with the
+#     FIELD_KEY grammar and diffed path by path. `commit` = first commit in 3f929069..ad3cd706 whose class body declares the
+#     field (per-class AST history), for descendants of a new container the container's commit.
+#   * semantics_changed — curated: behaviour the path diff cannot see (new backend refusals/warnings, new defaults, identity
+#     rules), traced to the raising line. A path may carry several rows.
+#   * the three roots new to this audit (ts_upload, conformer_upload, transport_upload) get one `added` row each; their
+#     descendants are all new to the audit and are enumerated in TCKDB_DEMAND.yml, not repeated here.
+#   * breaking_for_producer is judged against what tckdb_arc builds TODAY (worktree HEAD 0913124), per FIELD_KEY: true only
+#     where a payload the adapter builds now is refused or changes meaning.
+# Counts: {'added': 301, 'removed': 8, 'retyped': 6, 'requiredness_changed': 34, 'semantics_changed': 95}; breaking_for_producer=true: 1.
+- path: "conformer_upload"
+  change: "added"
   from: null
-  to: "ReactionAtomMapIn | None"
+  to: >-
+    ConformerUploadRequest — wire contract published in tckdb-schemas 0.23.0; the adapter's conformer mode posts
+    it (adapter.py:310). New to this audit.
   breaking_for_producer: false
-  commit: 3dd20db0
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:963
-
-- path: reaction_upload.atom_map.source
-  change: added
+  commit: "da0d5815"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/conformer_upload.py:224"
+- path: "transport_upload"
+  change: "added"
   from: null
-  to: "AtomMapSource (declared | inferred), required, no default"
+  to: >-
+    TransportUploadRequest — backend-side request (backend/app/schemas/workflows/transport_upload.py:66) extending
+    the wire TransportUploadPayload; exists since before 0.22 (c99665ee is the repo split that first shows it);
+    not posted by the adapter. New to this audit.
   breaking_for_producer: false
-  commit: 3dd20db0
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:285
-
-- path: reaction_upload.atom_map.ts_geometry_key
-  change: added
+  commit: "c99665ee"
+  source: "backend/app/schemas/workflows/transport_upload.py:66"
+- path: "ts_upload"
+  change: "added"
   from: null
-  to: "str (min_length=1), required; must equal transition_state.geometry.key"
+  to: >-
+    TransitionStateUploadRequest — wire contract published in tckdb-schemas 0.23.0; the adapter's computed_ts mode
+    posts it (sweep.py:17). New to this audit.
   breaking_for_producer: false
-  commit: 3dd20db0
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:286
-
-- path: reaction_upload.atom_map.participants[]
-  change: added
-  from: null
-  to: "list[ReactionAtomMapParticipantIn] (min_length=1), required"
+  commit: "da0d5815"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/transition_state_upload.py:106"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.version"
+  change: "removed"
+  from: "str | None (optional)"
+  to: >-
+    scheme.version removed: the free-form scheme version is not part of a correction scheme's identity; software
+    (SoftwareReleaseRef) and workflow_tool_release replace it. extra='forbid' -> sending it is a 422.
   breaking_for_producer: false
-  commit: 3dd20db0
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:287
-
-- path: reaction_upload.atom_map.participants[].side
-  change: added
-  from: null
-  to: "ReactionRole (reactant | product), required"
+  commit: "df45eb20"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:227"
+- path: "reaction_upload.species[].calculations[].literature_id"
+  change: "removed"
+  from: "int | None (optional)"
+  to: >-
+    raw-FK literature_id removed from CalculationIn; replaced by inline literature: LiteratureUploadRequest.
+    extra='forbid' -> sending it is a 422 extra_forbidden.
   breaking_for_producer: false
-  commit: 3dd20db0
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:193
-
-- path: reaction_upload.atom_map.participants[].species_key
-  change: added
-  from: null
-  to: "str (min_length=1), required; must match the declared participant slot"
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:654"
+- path: "reaction_upload.species[].conformers[].calculation.literature_id"
+  change: "removed"
+  from: "int | None (optional)"
+  to: >-
+    raw-FK literature_id removed from CalculationIn; replaced by inline literature: LiteratureUploadRequest.
+    extra='forbid' -> sending it is a 422 extra_forbidden.
   breaking_for_producer: false
-  commit: 3dd20db0
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:194
-
-- path: reaction_upload.atom_map.participants[].participant_index
-  change: added
-  from: null
-  to: "int (ge=1), required; 1-BASED position on its side of the reaction"
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:268"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme.version"
+  change: "removed"
+  from: "str | None (optional)"
+  to: >-
+    scheme.version removed: the free-form scheme version is not part of a correction scheme's identity; software
+    (SoftwareReleaseRef) and workflow_tool_release replace it. extra='forbid' -> sending it is a 422.
   breaking_for_producer: false
-  commit: 3dd20db0
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:195
-
-- path: reaction_upload.atom_map.participants[].geometry_key
-  change: added
-  from: null
-  to: "str | None (min_length=1); required iff atom_to_ts is non-empty"
+  commit: "df45eb20"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:227"
+- path: "reaction_upload.transition_state.calculation.literature_id"
+  change: "removed"
+  from: "int | None (optional)"
+  to: >-
+    raw-FK literature_id removed from CalculationIn; replaced by inline literature: LiteratureUploadRequest.
+    extra='forbid' -> sending it is a 422 extra_forbidden.
   breaking_for_producer: false
-  commit: 3dd20db0
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:196
-
-- path: reaction_upload.atom_map.participants[].atom_to_ts
-  change: added
-  from: null
-  to: "dict[int, int], required; BOTH sides 1-BASED; empty only for an atomless participant"
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:899"
+- path: "reaction_upload.transition_state.calculations[].literature_id"
+  change: "removed"
+  from: "int | None (optional)"
+  to: >-
+    raw-FK literature_id removed from CalculationIn; replaced by inline literature: LiteratureUploadRequest.
+    extra='forbid' -> sending it is a 422 extra_forbidden.
   breaking_for_producer: false
-  commit: 3dd20db0
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:201
-
-- path: reaction_upload.atom_map.equivalent_map_count
-  change: added
-  from: null
-  to: "int | None (ge=1); null is NOT 1"
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:900"
+- path: "species_upload.applied_energy_corrections[].scheme.version"
+  change: "removed"
+  from: "str | None (optional)"
+  to: >-
+    scheme.version removed: the free-form scheme version is not part of a correction scheme's identity; software
+    (SoftwareReleaseRef) and workflow_tool_release replace it. extra='forbid' -> sending it is a 422.
   breaking_for_producer: false
-  commit: 3dd20db0
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:288
-
-- path: reaction_upload.atom_map.note
-  change: added
-  from: null
-  to: "str | None; REQUIRED when source='inferred' (must name the algorithm)"
+  commit: "df45eb20"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:227"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.version"
+  change: "removed"
+  from: "str | None (optional)"
+  to: >-
+    scheme.version removed: the free-form scheme version is not part of a correction scheme's identity; software
+    (SoftwareReleaseRef) and workflow_tool_release replace it. extra='forbid' -> sending it is a 422.
   breaking_for_producer: false
-  commit: 3dd20db0
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/reaction_atom_map.py:289
-
-# ===========================================================================
-# 2. Transition-state IRC validation evidence. Entirely new surface.
-# ===========================================================================
-
-- path: reaction_upload.transition_state.validation_evidence[]
-  change: added
-  from: null
-  to: "list[TransitionStateValidationEvidenceIn], default []"
+  commit: "df45eb20"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:227"
+- path: "reaction_upload.species[].applied_energy_corrections[].frequency_scale_factor.software"
+  change: "retyped"
+  from: "SoftwareRef | None (optional)"
+  to: "SoftwareReleaseRef | None (optional)"
   breaking_for_producer: false
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:632
-
-- path: reaction_upload.transition_state.validation_evidence[].kind
-  change: added
-  from: null
-  to: "Literal['irc'], required"
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:429"
+- path: "reaction_upload.species[].statmech.freq_scale_factor.software"
+  change: "retyped"
+  from: "SoftwareRef | None (optional)"
+  to: "SoftwareReleaseRef | None (optional)"
   breaking_for_producer: false
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/ts_validation_evidence.py:58
-
-- path: reaction_upload.transition_state.validation_evidence[].passed
-  change: added
-  from: null
-  to: "bool, required"
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:429"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].frequency_scale_factor.software"
+  change: "retyped"
+  from: "SoftwareRef | None (optional)"
+  to: "SoftwareReleaseRef | None (optional)"
   breaking_for_producer: false
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/ts_validation_evidence.py:59
-
-- path: reaction_upload.transition_state.validation_evidence[].rationale
-  change: added
-  from: null
-  to: "str (min_length=1), required"
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:429"
+- path: "species_upload.applied_energy_corrections[].frequency_scale_factor.software"
+  change: "retyped"
+  from: "SoftwareRef | None (optional)"
+  to: "SoftwareReleaseRef | None (optional)"
   breaking_for_producer: false
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/ts_validation_evidence.py:60
-
-- path: reaction_upload.transition_state.validation_evidence[].source_calculation_key
-  change: added
-  from: null
-  to: "str | None on the fragment, but REQUIRED on this route and must name an irc calc owned by the TS"
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:429"
+- path: "species_upload.statmech.freq_scale_factor.software"
+  change: "retyped"
+  from: "SoftwareRef | None (optional)"
+  to: "SoftwareReleaseRef | None (optional)"
   breaking_for_producer: false
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/ts_validation_evidence.py:61
-
-- path: reaction_upload.transition_state.validation_evidence[].reactant_participant_mapping
-  change: added
-  from: null
-  to: "dict[str, list[int]] | None; keys 'reactant:N' 1-BASED, values 1-BASED TS atom indices"
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:429"
+- path: "species_upload.thermo.applied_energy_corrections[].frequency_scale_factor.software"
+  change: "retyped"
+  from: "SoftwareRef | None (optional)"
+  to: "SoftwareReleaseRef | None (optional)"
   breaking_for_producer: false
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/ts_validation_evidence.py:62
-
-- path: reaction_upload.transition_state.validation_evidence[].product_participant_mapping
-  change: added
-  from: null
-  to: "dict[str, list[int]] | None; keys 'product:N' 1-BASED, values 1-BASED TS atom indices"
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:429"
+- path: "reaction_upload.species[].thermo.nasa.a1"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
   breaking_for_producer: false
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/ts_validation_evidence.py:63
-
-# ===========================================================================
-# 3. ADR 0012 — imaginary modes judged by magnitude, not counted.
-#    New fields on every calculation route, and NEW BLOCKING validators
-#    applied to freq_n_imag / n_imag, which existed unchanged at 0.8.0.
-# ===========================================================================
-
-- path: reaction_upload.transition_state.calculation.freq_reaction_coordinate_mode_index
-  change: added
-  from: null
-  to: "int | None (ge=1); 1-BASED index into freq_frequencies_cm1; REQUIRED when freq_n_imag > 1"
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:120"
+- path: "reaction_upload.species[].thermo.nasa.a2"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:121"
+- path: "reaction_upload.species[].thermo.nasa.a3"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:122"
+- path: "reaction_upload.species[].thermo.nasa.a4"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:123"
+- path: "reaction_upload.species[].thermo.nasa.a5"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:124"
+- path: "reaction_upload.species[].thermo.nasa.a6"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:125"
+- path: "reaction_upload.species[].thermo.nasa.a7"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:126"
+- path: "reaction_upload.species[].thermo.nasa.b1"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:127"
+- path: "reaction_upload.species[].thermo.nasa.b2"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:128"
+- path: "reaction_upload.species[].thermo.nasa.b3"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:129"
+- path: "reaction_upload.species[].thermo.nasa.b4"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:130"
+- path: "reaction_upload.species[].thermo.nasa.b5"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:131"
+- path: "reaction_upload.species[].thermo.nasa.b6"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:132"
+- path: "reaction_upload.species[].thermo.nasa.b7"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:133"
+- path: "reaction_upload.species[].thermo.nasa.t_high"
+  change: "requiredness_changed"
+  from: "float | None (optional; gt=0)"
+  to: "float (required; gt=0)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:119"
+- path: "reaction_upload.species[].thermo.nasa.t_low"
+  change: "requiredness_changed"
+  from: "float | None (optional; gt=0)"
+  to: "float (required; gt=0)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:117"
+- path: "reaction_upload.species[].thermo.nasa.t_mid"
+  change: "requiredness_changed"
+  from: "float | None (optional; gt=0)"
+  to: "float (required; gt=0)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:118"
+- path: "species_upload.thermo.nasa.a1"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:120"
+- path: "species_upload.thermo.nasa.a2"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:121"
+- path: "species_upload.thermo.nasa.a3"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:122"
+- path: "species_upload.thermo.nasa.a4"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:123"
+- path: "species_upload.thermo.nasa.a5"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:124"
+- path: "species_upload.thermo.nasa.a6"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:125"
+- path: "species_upload.thermo.nasa.a7"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:126"
+- path: "species_upload.thermo.nasa.b1"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:127"
+- path: "species_upload.thermo.nasa.b2"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:128"
+- path: "species_upload.thermo.nasa.b3"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:129"
+- path: "species_upload.thermo.nasa.b4"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:130"
+- path: "species_upload.thermo.nasa.b5"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:131"
+- path: "species_upload.thermo.nasa.b6"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:132"
+- path: "species_upload.thermo.nasa.b7"
+  change: "requiredness_changed"
+  from: "float | None (optional)"
+  to: "float (required)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:133"
+- path: "species_upload.thermo.nasa.t_high"
+  change: "requiredness_changed"
+  from: "float | None (optional; gt=0)"
+  to: "float (required; gt=0)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:119"
+- path: "species_upload.thermo.nasa.t_low"
+  change: "requiredness_changed"
+  from: "float | None (optional; gt=0)"
+  to: "float (required; gt=0)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:117"
+- path: "species_upload.thermo.nasa.t_mid"
+  change: "requiredness_changed"
+  from: "float | None (optional; gt=0)"
+  to: "float (required; gt=0)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:118"
+- path: "reaction_upload.analysis_software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.species[].applied_energy_corrections[]"
+  change: "semantics_changed"
+  from: "list[AppliedEnergyCorrectionInBundle] (optional)"
+  to: "list[AppliedEnergyCorrectionInBundle] (optional)"
+  breaking_for_producer: false
+  commit: "75f1a114"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:657"
+- path: "reaction_upload.species[].applied_energy_corrections[].components[]"
+  change: "semantics_changed"
+  from: "a bac_total with no components was stored as a bare total"
+  to: >-
+    422 bac_total_requires_components for a componentless bac_petersson bac_total on a BONDED species (monatomic
+    species exempt; bac_melius exempt)
   breaking_for_producer: true
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:105
-
-- path: reaction_upload.transition_state.calculations[].freq_reaction_coordinate_mode_index
-  change: added
-  from: null
-  to: "int | None (ge=1); 1-BASED index into freq_frequencies_cm1; REQUIRED when freq_n_imag > 1"
+  commit: "9b412250"
+  phase_b_note: 'Phase B ruling (0.51 refresh): flipped from false. Current ARC (main db0934d5) drops a Petersson BAC''s entire components list when any bond lacks a parameter (ARC:arc/output.py:1592-1596) but still exports the total, and the adapter forwards `components or []` (tckdb_arc/tckdb_arc/adapter.py:303) and drops any remaining component with a null parameter_value (adapter.py:5020-5028). A bonded species with an unparameterised bond therefore reaches TCKDB as a componentless bac_petersson bac_total and the whole upload is refused 422. Conditional (needs a bond outside Arkane''s Petersson table at that level); no fixture exercises it.'
+  source: "backend/app/services/energy_correction_resolution.py:604"
+- path: "reaction_upload.species[].applied_energy_corrections[].frequency_scale_factor.software.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme"
+  change: "semantics_changed"
+  from: "found-or-created by (kind, name, level_of_theory, version)"
+  to: >-
+    found-or-created by (kind, name, level_of_theory, source_literature, software_release, workflow_tool_release);
+    units not identity (0.43.0); a differing citation/release makes a DIFFERENT scheme row
+  breaking_for_producer: false
+  commit: "df45eb20"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:227"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.software.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.species[].calculations[].execution_environment.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.species[].calculations[].freq_frequencies_cm1"
+  change: "semantics_changed"
+  from: "frequency list length unchecked against the geometry"
+  to: >-
+    more than 3N modes: 422 freq_list_exceeds_geometry_degrees_of_freedom; fewer than 3N-6: warning
+    freq_list_incomplete_for_geometry (a TS freq calc with no list gets the warning — the 0.33 audit's finding)
+  breaking_for_producer: false
+  commit: "080aea31"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/frequency_completeness.py:194"
+- path: "reaction_upload.species[].calculations[].freq_frequencies_cm1"
+  change: "semantics_changed"
+  from: "mode count not compared with the geometry's linearity"
+  to: >-
+    warning freq_list_linear_mode_count_for_bent_geometry (3N-5 modes on a bent geometry) /
+    freq_list_bent_mode_count_for_linear_geometry (3N-6 on a linear one); sync routes only
+  breaking_for_producer: false
+  commit: "38766219"
+  source: "backend/app/services/frequency_geometry_linearity.py:432"
+- path: "reaction_upload.species[].calculations[].geometry_key"
+  change: "semantics_changed"
+  from: >-
+    geometry_key named the calculation's geometry AND decided which conformer observation the calculation anchors
+    to
+  to: >-
+    geometry_key names the geometry only; conformer_key is the anchor (fallback to geometry_key kept). A calc
+    naming neither is stored unanchored with warning calculation_conformer_anchor_unresolved
+  breaking_for_producer: false
+  commit: "4ae6e756"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:112"
+- path: "reaction_upload.species[].calculations[].input_geometries[]"
+  change: "semantics_changed"
+  from: "calculation geometries were not compared with their subject"
+  to: >-
+    422 calculation_geometry_composition_mismatch when any geometry linked to a calculation does not have its
+    subject's element counts (species formula; TS = sum of reactants)
+  breaking_for_producer: false
+  commit: "aee41adb"
+  source: "backend/app/services/calculation_geometry_composition.py:370"
+- path: "reaction_upload.species[].calculations[].software_release"
+  change: "semantics_changed"
+  from: "any declared name accepted"
+  to: >-
+    422 calculation_software_is_workflow_tool when name folds to arkane/arc/rmg/rmgpy (the ESS must be named;
+    ARC/Arkane go in workflow_tool_release / analysis software). Composite banner versions are split with a
+    warning (0.38.0).
+  breaking_for_producer: false
+  commit: "400e2a5e"
+  source: "backend/app/services/calculation_resolution.py:321"
+- path: "reaction_upload.species[].calculations[].software_release.version"
+  change: "semantics_changed"
+  from: "a missing version stayed missing"
+  to: >-
+    when omitted and an output-log artifact carries a recognisable ESS banner, the version is filled from the log
+    with warning software_release_version_filled_from_artifact
+  breaking_for_producer: false
+  commit: "34509c46"
+  source: "backend/app/services/software_banner_extraction.py:221"
+- path: "reaction_upload.species[].calculations[].software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.species[].conformers[].calculation.execution_environment.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.species[].conformers[].calculation.freq_frequencies_cm1"
+  change: "semantics_changed"
+  from: "frequency list length unchecked against the geometry"
+  to: >-
+    more than 3N modes: 422 freq_list_exceeds_geometry_degrees_of_freedom; fewer than 3N-6: warning
+    freq_list_incomplete_for_geometry (a TS freq calc with no list gets the warning — the 0.33 audit's finding)
+  breaking_for_producer: false
+  commit: "080aea31"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/frequency_completeness.py:194"
+- path: "reaction_upload.species[].conformers[].calculation.freq_frequencies_cm1"
+  change: "semantics_changed"
+  from: "mode count not compared with the geometry's linearity"
+  to: >-
+    warning freq_list_linear_mode_count_for_bent_geometry (3N-5 modes on a bent geometry) /
+    freq_list_bent_mode_count_for_linear_geometry (3N-6 on a linear one); sync routes only
+  breaking_for_producer: false
+  commit: "38766219"
+  source: "backend/app/services/frequency_geometry_linearity.py:432"
+- path: "reaction_upload.species[].conformers[].calculation.input_geometries[]"
+  change: "semantics_changed"
+  from: "calculation geometries were not compared with their subject"
+  to: >-
+    422 calculation_geometry_composition_mismatch when any geometry linked to a calculation does not have its
+    subject's element counts (species formula; TS = sum of reactants)
+  breaking_for_producer: false
+  commit: "aee41adb"
+  source: "backend/app/services/calculation_geometry_composition.py:370"
+- path: "reaction_upload.species[].conformers[].calculation.software_release"
+  change: "semantics_changed"
+  from: "any declared name accepted"
+  to: >-
+    422 calculation_software_is_workflow_tool when name folds to arkane/arc/rmg/rmgpy (the ESS must be named;
+    ARC/Arkane go in workflow_tool_release / analysis software). Composite banner versions are split with a
+    warning (0.38.0).
+  breaking_for_producer: false
+  commit: "400e2a5e"
+  source: "backend/app/services/calculation_resolution.py:321"
+- path: "reaction_upload.species[].conformers[].calculation.software_release.version"
+  change: "semantics_changed"
+  from: "a missing version stayed missing"
+  to: >-
+    when omitted and an output-log artifact carries a recognisable ESS banner, the version is filled from the log
+    with warning software_release_version_filled_from_artifact
+  breaking_for_producer: false
+  commit: "34509c46"
+  source: "backend/app/services/software_banner_extraction.py:221"
+- path: "reaction_upload.species[].conformers[].calculation.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.species[].statmech.freq_scale_factor.software.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.species[].statmech.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.species[].statmech.source_calculations[]"
+  change: "semantics_changed"
+  from: "opt/sp role links not checked for level-of-theory consistency"
+  to: >-
+    calculation_levels.py R-rules: 422 *_role_duplicate, *_sp_geometry_mismatch, *_energy_level_ambiguous,
+    *_energy_level_requires_sp on the opt/sp links (and *_energy_level_contradiction against a declared
+    energy_level_of_theory)
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "backend/app/services/calculation_levels.py:368"
+- path: "reaction_upload.species[].statmech.source_calculations[].role"
+  change: "semantics_changed"
+  from: "role not checked against the resolved Calculation.type"
+  to: >-
+    422 statmech_source_role_type_mismatch when the role cannot be played by the calculation type (sp role accepts
+    sp or opt)
+  breaking_for_producer: false
+  commit: "d2904a7d"
+  source: "backend/app/services/statmech_resolution.py:296"
+- path: "reaction_upload.species[].thermo"
+  change: "semantics_changed"
+  from: "BundleThermoIn had no content validator: an empty thermo block was accepted"
+  to: >-
+    validate_scientific_content: 422 unless h298_kj_mol, s298_j_mol_k, enthalpy_formation_0k_kj_mol, nasa or
+    points present; points unique by temperature_k
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:655"
+- path: "reaction_upload.species[].thermo.h298_kj_mol"
+  change: "semantics_changed"
+  from: "accepted with no statement of which enthalpy zero it stands on"
+  to: >-
+    enthalpy content: 422 enthalpy_declaration_absent unless enthalpy_reference_kind='formation_298k' (backend
+    workflow, not schema); declaring on a record with no enthalpy content is 422
+    enthalpy_declaration_without_content
+  breaking_for_producer: false
+  commit: "b338025a"
+  source: "backend/app/workflows/thermo.py:291"
+- path: "reaction_upload.species[].thermo.nasa"
+  change: "semantics_changed"
+  from: "accepted with no statement of which enthalpy zero it stands on"
+  to: >-
+    enthalpy content: 422 enthalpy_declaration_absent unless enthalpy_reference_kind='formation_298k' (backend
+    workflow, not schema); declaring on a record with no enthalpy content is 422
+    enthalpy_declaration_without_content
+  breaking_for_producer: false
+  commit: "b338025a"
+  source: "backend/app/workflows/thermo.py:291"
+- path: "reaction_upload.species[].thermo.phase"
+  change: "semantics_changed"
+  from: "field absent at 0.22"
+  to: "omitted on a computed record -> 'gas' (apply_computed_state_defaults); explicit null kept as unknown"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:241"
+- path: "reaction_upload.species[].thermo.points[].g_kj_mol"
+  change: "semantics_changed"
+  from: "point Gibbs energy accepted with no declared reference; not counted as enthalpy content until 0.50"
+  to: >-
+    since 0.51.0 a stored G counts as enthalpy content (G = H - TS on the record's enthalpy zero): a point
+    carrying only G requires enthalpy_reference_kind (422 enthalpy_declaration_absent)
+  breaking_for_producer: false
+  commit: "2a32f694"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/enthalpy_reference.py:50"
+- path: "reaction_upload.species[].thermo.points[].h_kj_mol"
+  change: "semantics_changed"
+  from: "point enthalpy accepted with no declared reference"
+  to: >-
+    enthalpy content: requires enthalpy_reference_kind='formation_298k' (422 enthalpy_declaration_absent)
+  breaking_for_producer: false
+  commit: "b338025a"
+  source: "backend/app/workflows/thermo.py:291"
+- path: "reaction_upload.species[].thermo.reference_pressure_bar"
+  change: "semantics_changed"
+  from: "field absent at 0.22; introduced in 0.45.0 (fd68f1ba) with a 1.0 bar default"
+  to: >-
+    never defaulted for any origin since 0.49.0: omitted -> NULL. ARC entropies are at 1 atm (1.01325 bar); the
+    1.0 bar default mis-stamped them
+  breaking_for_producer: false
+  commit: "71177e31"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:244"
+- path: "reaction_upload.species[].thermo.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.species[].thermo.source_calculations[]"
+  change: "semantics_changed"
+  from: "opt/sp role links not checked for level-of-theory consistency"
+  to: >-
+    calculation_levels.py R-rules: 422 *_role_duplicate, *_sp_geometry_mismatch, *_energy_level_ambiguous,
+    *_energy_level_requires_sp on the opt/sp links (and *_energy_level_contradiction against a declared
+    energy_level_of_theory)
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "backend/app/services/calculation_levels.py:368"
+- path: "reaction_upload.species[].thermo.source_calculations[].role"
+  change: "semantics_changed"
+  from: "role not checked against the resolved Calculation.type"
+  to: "422 thermo_source_role_type_mismatch (opt->opt, freq->freq, sp->sp|opt)"
+  breaking_for_producer: false
+  commit: "e14209a3"
+  source: "backend/app/workflows/thermo.py:152"
+- path: "reaction_upload.transition_state.applied_energy_corrections[]"
+  change: "semantics_changed"
+  from: "list[AppliedEnergyCorrectionInBundle] (optional)"
+  to: "list[AppliedEnergyCorrectionInBundle] (optional)"
+  breaking_for_producer: false
+  commit: "75f1a114"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:901"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].components[]"
+  change: "semantics_changed"
+  from: "a bac_total with no components was stored as a bare total"
+  to: >-
+    422 bac_total_requires_components for a bac_petersson bac_total with no components on a TS target (always).
+    ARC supplies no bond components for a saddle point (TCKDB measured 17 such ARC rows); the adapter forwards
+    ARC's components or [] (tckdb_arc/tckdb_arc/adapter.py:303, :2904)
   breaking_for_producer: true
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:105
-
-- path: reaction_upload.species[].conformers[].calculation.freq_reaction_coordinate_mode_index
-  change: added
-  from: null
-  to: "int | None (ge=1); 1-BASED index into freq_frequencies_cm1; inert on a species entry"
+  commit: "9b412250"
+  phase_b_note: 'Phase B note (0.51 refresh): kept true, with a narrower trigger than the row text implies. Current ARC main never exports a BAC record for a TS (_bac_is_applied_to returns False for is_ts, ARC:arc/output.py:1402-1416, since c8240195), so the break needs a pre-c8240195 output.yml or a legacy applied_energy_corrections record; TCKDB''s measured 17 rows are that shape. The adapter still has no guard (adapter.py:303, :2904).'
+  source: "backend/app/services/energy_correction_resolution.py:604"
+- path: >-
+    reaction_upload.transition_state.applied_energy_corrections[].frequency_scale_factor.software.version
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
   breaking_for_producer: false
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:105
-
-- path: reaction_upload.species[].calculations[].freq_reaction_coordinate_mode_index
-  change: added
-  from: null
-  to: "int | None (ge=1); 1-BASED index into freq_frequencies_cm1; inert on a species entry"
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme"
+  change: "semantics_changed"
+  from: "found-or-created by (kind, name, level_of_theory, version)"
+  to: >-
+    found-or-created by (kind, name, level_of_theory, source_literature, software_release, workflow_tool_release);
+    units not identity (0.43.0); a differing citation/release makes a DIFFERENT scheme row
   breaking_for_producer: false
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:105
-
-- path: reaction_upload.transition_state.calculation.freq_imaginary_dispositions
-  change: added
-  from: null
-  to: "dict[int, ImaginaryModeDisposition] | None; keys 1-BASED; absence BLOCKS when an extra imaginary mode is >= |omega_RC|"
+  commit: "df45eb20"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:227"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme.software.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.transition_state.calculation.execution_environment.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.transition_state.calculation.freq_frequencies_cm1"
+  change: "semantics_changed"
+  from: "frequency list length unchecked against the geometry"
+  to: >-
+    more than 3N modes: 422 freq_list_exceeds_geometry_degrees_of_freedom; fewer than 3N-6: warning
+    freq_list_incomplete_for_geometry (a TS freq calc with no list gets the warning — the 0.33 audit's finding)
+  breaking_for_producer: false
+  commit: "080aea31"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/frequency_completeness.py:194"
+- path: "reaction_upload.transition_state.calculation.freq_frequencies_cm1"
+  change: "semantics_changed"
+  from: "mode count not compared with the geometry's linearity"
+  to: >-
+    warning freq_list_linear_mode_count_for_bent_geometry (3N-5 modes on a bent geometry) /
+    freq_list_bent_mode_count_for_linear_geometry (3N-6 on a linear one); sync routes only
+  breaking_for_producer: false
+  commit: "38766219"
+  source: "backend/app/services/frequency_geometry_linearity.py:432"
+- path: "reaction_upload.transition_state.calculation.input_geometries[]"
+  change: "semantics_changed"
+  from: "calculation geometries were not compared with their subject"
+  to: >-
+    422 calculation_geometry_composition_mismatch when any geometry linked to a calculation does not have its
+    subject's element counts (species formula; TS = sum of reactants)
+  breaking_for_producer: false
+  commit: "aee41adb"
+  source: "backend/app/services/calculation_geometry_composition.py:370"
+- path: "reaction_upload.transition_state.calculation.software_release"
+  change: "semantics_changed"
+  from: "any declared name accepted"
+  to: >-
+    422 calculation_software_is_workflow_tool when name folds to arkane/arc/rmg/rmgpy (the ESS must be named;
+    ARC/Arkane go in workflow_tool_release / analysis software). Composite banner versions are split with a
+    warning (0.38.0).
+  breaking_for_producer: false
+  commit: "400e2a5e"
+  source: "backend/app/services/calculation_resolution.py:321"
+- path: "reaction_upload.transition_state.calculation.software_release.version"
+  change: "semantics_changed"
+  from: "a missing version stayed missing"
+  to: >-
+    when omitted and an output-log artifact carries a recognisable ESS banner, the version is filled from the log
+    with warning software_release_version_filled_from_artifact
+  breaking_for_producer: false
+  commit: "34509c46"
+  source: "backend/app/services/software_banner_extraction.py:221"
+- path: "reaction_upload.transition_state.calculation.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.transition_state.calculations[].execution_environment.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "reaction_upload.transition_state.calculations[].freq_frequencies_cm1"
+  change: "semantics_changed"
+  from: "frequency list length unchecked against the geometry"
+  to: >-
+    more than 3N modes: 422 freq_list_exceeds_geometry_degrees_of_freedom; fewer than 3N-6: warning
+    freq_list_incomplete_for_geometry (a TS freq calc with no list gets the warning — the 0.33 audit's finding)
+  breaking_for_producer: false
+  commit: "080aea31"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/frequency_completeness.py:194"
+- path: "reaction_upload.transition_state.calculations[].freq_frequencies_cm1"
+  change: "semantics_changed"
+  from: "mode count not compared with the geometry's linearity"
+  to: >-
+    warning freq_list_linear_mode_count_for_bent_geometry (3N-5 modes on a bent geometry) /
+    freq_list_bent_mode_count_for_linear_geometry (3N-6 on a linear one); sync routes only
+  breaking_for_producer: false
+  commit: "38766219"
+  source: "backend/app/services/frequency_geometry_linearity.py:432"
+- path: "reaction_upload.transition_state.calculations[].input_geometries[]"
+  change: "semantics_changed"
+  from: "calculation geometries were not compared with their subject"
+  to: >-
+    422 calculation_geometry_composition_mismatch when any geometry linked to a calculation does not have its
+    subject's element counts (species formula; TS = sum of reactants)
+  breaking_for_producer: false
+  commit: "aee41adb"
+  source: "backend/app/services/calculation_geometry_composition.py:370"
+- path: "reaction_upload.transition_state.calculations[].software_release"
+  change: "semantics_changed"
+  from: "any declared name accepted"
+  to: >-
+    422 calculation_software_is_workflow_tool when name folds to arkane/arc/rmg/rmgpy (the ESS must be named;
+    ARC/Arkane go in workflow_tool_release / analysis software). Composite banner versions are split with a
+    warning (0.38.0).
+  breaking_for_producer: false
+  commit: "400e2a5e"
+  source: "backend/app/services/calculation_resolution.py:321"
+- path: "reaction_upload.transition_state.calculations[].software_release.version"
+  change: "semantics_changed"
+  from: "a missing version stayed missing"
+  to: >-
+    when omitted and an output-log artifact carries a recognisable ESS banner, the version is filled from the log
+    with warning software_release_version_filled_from_artifact
+  breaking_for_producer: false
+  commit: "34509c46"
+  source: "backend/app/services/software_banner_extraction.py:221"
+- path: "reaction_upload.transition_state.calculations[].software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "species_upload.applied_energy_corrections[]"
+  change: "semantics_changed"
+  from: "list[AppliedEnergyCorrectionInBundle] (optional)"
+  to: "list[AppliedEnergyCorrectionInBundle] (optional)"
+  breaking_for_producer: false
+  commit: "75f1a114"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:665"
+- path: "species_upload.applied_energy_corrections[].components[]"
+  change: "semantics_changed"
+  from: "a bac_total with no components was stored as a bare total"
+  to: >-
+    422 bac_total_requires_components for a componentless bac_petersson bac_total on a BONDED species (monatomic
+    species exempt; bac_melius exempt)
   breaking_for_producer: true
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:109
-
-- path: reaction_upload.transition_state.calculations[].freq_imaginary_dispositions
-  change: added
-  from: null
-  to: "dict[int, ImaginaryModeDisposition] | None; keys 1-BASED; absence BLOCKS when an extra imaginary mode is >= |omega_RC|"
+  commit: "9b412250"
+  phase_b_note: 'Phase B ruling (0.51 refresh): flipped from false. Current ARC (main db0934d5) drops a Petersson BAC''s entire components list when any bond lacks a parameter (ARC:arc/output.py:1592-1596) but still exports the total, and the adapter forwards `components or []` (tckdb_arc/tckdb_arc/adapter.py:303) and drops any remaining component with a null parameter_value (adapter.py:5020-5028). A bonded species with an unparameterised bond therefore reaches TCKDB as a componentless bac_petersson bac_total and the whole upload is refused 422. Conditional (needs a bond outside Arkane''s Petersson table at that level); no fixture exercises it.'
+  source: "backend/app/services/energy_correction_resolution.py:604"
+- path: "species_upload.applied_energy_corrections[].frequency_scale_factor.software.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "species_upload.applied_energy_corrections[].scheme"
+  change: "semantics_changed"
+  from: "found-or-created by (kind, name, level_of_theory, version)"
+  to: >-
+    found-or-created by (kind, name, level_of_theory, source_literature, software_release, workflow_tool_release);
+    units not identity (0.43.0); a differing citation/release makes a DIFFERENT scheme row
+  breaking_for_producer: false
+  commit: "df45eb20"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:227"
+- path: "species_upload.applied_energy_corrections[].scheme.software.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "species_upload.conformers[].additional_calculations[].execution_environment.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "species_upload.conformers[].additional_calculations[].freq_result.modes[]"
+  change: "semantics_changed"
+  from: "frequency list length unchecked against the geometry"
+  to: >-
+    more than 3N modes: 422 freq_list_exceeds_geometry_degrees_of_freedom; fewer than 3N-6 (3N-5 for N<=2):
+    warning freq_list_incomplete_for_geometry
+  breaking_for_producer: false
+  commit: "080aea31"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/frequency_completeness.py:194"
+- path: "species_upload.conformers[].additional_calculations[].freq_result.modes[]"
+  change: "semantics_changed"
+  from: "mode count not compared with the geometry's linearity"
+  to: >-
+    warning freq_list_linear_mode_count_for_bent_geometry (3N-5 modes on a bent geometry) /
+    freq_list_bent_mode_count_for_linear_geometry (3N-6 on a linear one); sync routes only
+  breaking_for_producer: false
+  commit: "38766219"
+  source: "backend/app/services/frequency_geometry_linearity.py:432"
+- path: "species_upload.conformers[].additional_calculations[].software_release"
+  change: "semantics_changed"
+  from: "any declared name accepted"
+  to: >-
+    422 calculation_software_is_workflow_tool when name folds to arkane/arc/rmg/rmgpy (the ESS must be named;
+    ARC/Arkane go in workflow_tool_release / analysis software). Composite banner versions are split with a
+    warning (0.38.0).
+  breaking_for_producer: false
+  commit: "400e2a5e"
+  source: "backend/app/services/calculation_resolution.py:321"
+- path: "species_upload.conformers[].additional_calculations[].software_release.version"
+  change: "semantics_changed"
+  from: "a missing version stayed missing"
+  to: >-
+    when omitted and an output-log artifact carries a recognisable ESS banner, the version is filled from the log
+    with warning software_release_version_filled_from_artifact
+  breaking_for_producer: false
+  commit: "34509c46"
+  source: "backend/app/services/software_banner_extraction.py:221"
+- path: "species_upload.conformers[].additional_calculations[].software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "species_upload.conformers[].primary_calculation.execution_environment.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "species_upload.conformers[].primary_calculation.freq_result.modes[]"
+  change: "semantics_changed"
+  from: "frequency list length unchecked against the geometry"
+  to: >-
+    more than 3N modes: 422 freq_list_exceeds_geometry_degrees_of_freedom; fewer than 3N-6 (3N-5 for N<=2):
+    warning freq_list_incomplete_for_geometry
+  breaking_for_producer: false
+  commit: "080aea31"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/frequency_completeness.py:194"
+- path: "species_upload.conformers[].primary_calculation.freq_result.modes[]"
+  change: "semantics_changed"
+  from: "mode count not compared with the geometry's linearity"
+  to: >-
+    warning freq_list_linear_mode_count_for_bent_geometry (3N-5 modes on a bent geometry) /
+    freq_list_bent_mode_count_for_linear_geometry (3N-6 on a linear one); sync routes only
+  breaking_for_producer: false
+  commit: "38766219"
+  source: "backend/app/services/frequency_geometry_linearity.py:432"
+- path: "species_upload.conformers[].primary_calculation.software_release"
+  change: "semantics_changed"
+  from: "any declared name accepted"
+  to: >-
+    422 calculation_software_is_workflow_tool when name folds to arkane/arc/rmg/rmgpy (the ESS must be named;
+    ARC/Arkane go in workflow_tool_release / analysis software). Composite banner versions are split with a
+    warning (0.38.0).
+  breaking_for_producer: false
+  commit: "400e2a5e"
+  source: "backend/app/services/calculation_resolution.py:321"
+- path: "species_upload.conformers[].primary_calculation.software_release.version"
+  change: "semantics_changed"
+  from: "a missing version stayed missing"
+  to: >-
+    when omitted and an output-log artifact carries a recognisable ESS banner, the version is filled from the log
+    with warning software_release_version_filled_from_artifact
+  breaking_for_producer: false
+  commit: "34509c46"
+  source: "backend/app/services/software_banner_extraction.py:221"
+- path: "species_upload.conformers[].primary_calculation.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "species_upload.note"
+  change: "semantics_changed"
+  from: "str | None (optional)"
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "75f1a114"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:687"
+- path: "species_upload.statmech.freq_scale_factor.software.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "species_upload.statmech.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "species_upload.statmech.source_calculations[]"
+  change: "semantics_changed"
+  from: "opt/sp role links not checked for level-of-theory consistency"
+  to: >-
+    calculation_levels.py R-rules: 422 *_role_duplicate, *_sp_geometry_mismatch, *_energy_level_ambiguous,
+    *_energy_level_requires_sp on the opt/sp links (and *_energy_level_contradiction against a declared
+    energy_level_of_theory)
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "backend/app/services/calculation_levels.py:368"
+- path: "species_upload.statmech.source_calculations[].role"
+  change: "semantics_changed"
+  from: "role not checked against the resolved Calculation.type"
+  to: >-
+    422 statmech_source_role_type_mismatch when the role cannot be played by the calculation type (sp role accepts
+    sp or opt)
+  breaking_for_producer: false
+  commit: "d2904a7d"
+  source: "backend/app/services/statmech_resolution.py:296"
+- path: "species_upload.thermo.applied_energy_corrections[].components[]"
+  change: "semantics_changed"
+  from: "a bac_total with no components was stored as a bare total"
+  to: >-
+    422 bac_total_requires_components for a componentless bac_petersson bac_total on a BONDED species (monatomic
+    species exempt; bac_melius exempt)
   breaking_for_producer: true
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:109
-
-- path: reaction_upload.species[].conformers[].calculation.freq_imaginary_dispositions
-  change: added
+  commit: "9b412250"
+  phase_b_note: 'Phase B ruling (0.51 refresh): flipped from false. Current ARC (main db0934d5) drops a Petersson BAC''s entire components list when any bond lacks a parameter (ARC:arc/output.py:1592-1596) but still exports the total, and the adapter forwards `components or []` (tckdb_arc/tckdb_arc/adapter.py:303) and drops any remaining component with a null parameter_value (adapter.py:5020-5028). A bonded species with an unparameterised bond therefore reaches TCKDB as a componentless bac_petersson bac_total and the whole upload is refused 422. Conditional (needs a bond outside Arkane''s Petersson table at that level); no fixture exercises it.'
+  source: "backend/app/services/energy_correction_resolution.py:604"
+- path: "species_upload.thermo.applied_energy_corrections[].frequency_scale_factor.software.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme"
+  change: "semantics_changed"
+  from: "found-or-created by (kind, name, level_of_theory, version)"
+  to: >-
+    found-or-created by (kind, name, level_of_theory, source_literature, software_release, workflow_tool_release);
+    units not identity (0.43.0); a differing citation/release makes a DIFFERENT scheme row
+  breaking_for_producer: false
+  commit: "df45eb20"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:227"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.software.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "species_upload.thermo.h298_kj_mol"
+  change: "semantics_changed"
+  from: "accepted with no statement of which enthalpy zero it stands on"
+  to: >-
+    enthalpy content: 422 enthalpy_declaration_absent unless enthalpy_reference_kind='formation_298k' (backend
+    workflow, not schema); declaring on a record with no enthalpy content is 422
+    enthalpy_declaration_without_content
+  breaking_for_producer: false
+  commit: "b338025a"
+  source: "backend/app/workflows/thermo.py:291"
+- path: "species_upload.thermo.h298_kj_mol"
+  change: "semantics_changed"
+  from: "validate_has_scientific_content: one of h298/s298/nasa/points"
+  to: "enthalpy_formation_0k_kj_mol also satisfies the content rule"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:373"
+- path: "species_upload.thermo.nasa"
+  change: "semantics_changed"
+  from: "accepted with no statement of which enthalpy zero it stands on"
+  to: >-
+    enthalpy content: 422 enthalpy_declaration_absent unless enthalpy_reference_kind='formation_298k' (backend
+    workflow, not schema); declaring on a record with no enthalpy content is 422
+    enthalpy_declaration_without_content
+  breaking_for_producer: false
+  commit: "b338025a"
+  source: "backend/app/workflows/thermo.py:291"
+- path: "species_upload.thermo.nasa"
+  change: "semantics_changed"
+  from: "validate_has_scientific_content: one of h298/s298/nasa/points"
+  to: "enthalpy_formation_0k_kj_mol also satisfies the content rule"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:381"
+- path: "species_upload.thermo.phase"
+  change: "semantics_changed"
+  from: "field absent at 0.22"
+  to: "omitted on a computed record -> 'gas' (apply_computed_state_defaults); explicit null kept as unknown"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:241"
+- path: "species_upload.thermo.points[]"
+  change: "semantics_changed"
+  from: "validate_has_scientific_content: one of h298/s298/nasa/points"
+  to: "enthalpy_formation_0k_kj_mol also satisfies the content rule"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:382"
+- path: "species_upload.thermo.points[].g_kj_mol"
+  change: "semantics_changed"
+  from: "point Gibbs energy accepted with no declared reference; not counted as enthalpy content until 0.50"
+  to: >-
+    since 0.51.0 a stored G counts as enthalpy content (G = H - TS on the record's enthalpy zero): a point
+    carrying only G requires enthalpy_reference_kind (422 enthalpy_declaration_absent)
+  breaking_for_producer: false
+  commit: "2a32f694"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/enthalpy_reference.py:50"
+- path: "species_upload.thermo.points[].h_kj_mol"
+  change: "semantics_changed"
+  from: "point enthalpy accepted with no declared reference"
+  to: >-
+    enthalpy content: requires enthalpy_reference_kind='formation_298k' (422 enthalpy_declaration_absent)
+  breaking_for_producer: false
+  commit: "b338025a"
+  source: "backend/app/workflows/thermo.py:291"
+- path: "species_upload.thermo.reference_pressure_bar"
+  change: "semantics_changed"
+  from: "field absent at 0.22; introduced in 0.45.0 (fd68f1ba) with a 1.0 bar default"
+  to: >-
+    never defaulted for any origin since 0.49.0: omitted -> NULL. ARC entropies are at 1 atm (1.01325 bar); the
+    1.0 bar default mis-stamped them
+  breaking_for_producer: false
+  commit: "71177e31"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:244"
+- path: "species_upload.thermo.s298_j_mol_k"
+  change: "semantics_changed"
+  from: "validate_has_scientific_content: one of h298/s298/nasa/points"
+  to: "enthalpy_formation_0k_kj_mol also satisfies the content rule"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:374"
+- path: "species_upload.thermo.software_release.version"
+  change: "semantics_changed"
+  from: "stored verbatim"
+  to: >-
+    a banner-shaped composite version whose leading token matches name is split into version/revision (trace
+    appended to notes) with warning software_release_version_is_composite; a leading token that does NOT match
+    name is left untouched with warning software_release_name_looks_wrong (sync upload routes only)
+  breaking_for_producer: false
+  commit: "54e36c37"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:106"
+- path: "species_upload.thermo.source_calculations[]"
+  change: "semantics_changed"
+  from: "opt/sp role links not checked for level-of-theory consistency"
+  to: >-
+    calculation_levels.py R-rules: 422 *_role_duplicate, *_sp_geometry_mismatch, *_energy_level_ambiguous,
+    *_energy_level_requires_sp on the opt/sp links (and *_energy_level_contradiction against a declared
+    energy_level_of_theory)
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "backend/app/services/calculation_levels.py:368"
+- path: "species_upload.thermo.source_calculations[].role"
+  change: "semantics_changed"
+  from: "role not checked against the resolved Calculation.type"
+  to: "422 thermo_source_role_type_mismatch (opt->opt, freq->freq, sp->sp|opt)"
+  breaking_for_producer: false
+  commit: "e14209a3"
+  source: "backend/app/workflows/thermo.py:152"
+- path: "species_upload.workflow_tool_release"
+  change: "semantics_changed"
+  from: "WorkflowToolReleaseRef | None (optional)"
+  to: "WorkflowToolReleaseRef | None (optional)"
+  breaking_for_producer: false
+  commit: "75f1a114"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:679"
+- path: "reaction_upload.rights"
+  change: "added"
   from: null
-  to: "dict[int, ImaginaryModeDisposition] | None; keys 1-BASED; inert on a species entry"
+  to: "DepositRights | None (optional)"
   breaking_for_producer: false
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:109
-
-- path: reaction_upload.species[].calculations[].freq_imaginary_dispositions
-  change: added
+  commit: "a2c34447"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:1288"
+- path: "reaction_upload.rights.depositor_attests_right_to_license"
+  change: "added"
   from: null
-  to: "dict[int, ImaginaryModeDisposition] | None; keys 1-BASED; inert on a species entry"
+  to: "Literal[True] (required)"
   breaking_for_producer: false
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:109
-
-- path: reaction_upload.transition_state.calculation.freq_n_imag
-  change: semantics_changed
-  from: "int | None, recorded and never checked"
-  to: "int | None; freq_n_imag <= 0 now BLOCKS (transition_state_no_imaginary_mode); > 1 blocks without a designated reaction coordinate"
-  breaking_for_producer: true
-  commit: ea48d36a
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:675
-
-- path: reaction_upload.transition_state.calculations[].freq_n_imag
-  change: semantics_changed
-  from: "int | None, recorded and never checked"
-  to: "int | None; freq_n_imag <= 0 now BLOCKS (transition_state_no_imaginary_mode); > 1 blocks without a designated reaction coordinate"
-  breaking_for_producer: true
-  commit: ea48d36a
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:675
-
-- path: reaction_upload.species[].conformers[].calculation.freq_n_imag
-  change: semantics_changed
-  from: "int | None, recorded and never checked"
-  to: "int | None; > 0 now BLOCKS when species_entry_kind='minimum' (n_imag_contradicts_minimum)"
-  breaking_for_producer: true
-  commit: ea48d36a
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:563
-
-- path: reaction_upload.species[].calculations[].freq_n_imag
-  change: semantics_changed
-  from: "int | None, recorded and never checked"
-  to: "int | None; > 0 now BLOCKS when species_entry_kind='minimum' (n_imag_contradicts_minimum)"
-  breaking_for_producer: true
-  commit: ea48d36a
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:563
-
-- path: species_upload.conformers[].primary_calculation.freq_result.n_imag
-  change: semantics_changed
-  from: "int | None, recorded and never checked"
-  to: "int | None; > 0 now BLOCKS when species_entry_kind='minimum' (n_imag_contradicts_minimum)"
-  breaking_for_producer: true
-  commit: ea48d36a
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:679
-
-- path: species_upload.conformers[].additional_calculations[].freq_result.n_imag
-  change: semantics_changed
-  from: "int | None, recorded and never checked"
-  to: "int | None; > 0 now BLOCKS when species_entry_kind='minimum' (n_imag_contradicts_minimum)"
-  breaking_for_producer: true
-  commit: ea48d36a
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:679
-
-- path: species_upload.conformers[].primary_calculation.freq_result.reaction_coordinate_mode_index
-  change: added
+  commit: "a2c34447"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/rights.py:40"
+- path: "reaction_upload.rights.license"
+  change: "added"
   from: null
-  to: "int | None (ge=1); must name an imaginary mode; refused when n_imag=0"
+  to: "str (required; min_length=1, max_length=64)"
   breaking_for_producer: false
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:220
-
-- path: species_upload.conformers[].additional_calculations[].freq_result.reaction_coordinate_mode_index
-  change: added
+  commit: "a2c34447"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/rights.py:39"
+- path: "reaction_upload.rights.source_terms"
+  change: "added"
   from: null
-  to: "int | None (ge=1); must name an imaginary mode; refused when n_imag=0"
+  to: "str | None (optional)"
   breaking_for_producer: false
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:220
-
-- path: species_upload.conformers[].primary_calculation.freq_result.modes[].imaginary_disposition
-  change: added
+  commit: "a2c34447"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/rights.py:41"
+- path: "reaction_upload.species[].applied_energy_corrections[].frequency_scale_factor.software.build"
+  change: "added"
   from: null
-  to: "ImaginaryModeDisposition | None; refused on a mode with is_imaginary=False"
+  to: "str | None (optional)"
   breaking_for_producer: false
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:173
-
-- path: species_upload.conformers[].additional_calculations[].freq_result.modes[].imaginary_disposition
-  change: added
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:81"
+- path: "reaction_upload.species[].applied_energy_corrections[].frequency_scale_factor.software.notes"
+  change: "added"
   from: null
-  to: "ImaginaryModeDisposition | None; refused on a mode with is_imaginary=False"
+  to: "str | None (optional)"
   breaking_for_producer: false
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:173
-
-- path: reaction_upload.species[].species_entry.species_entry_kind
-  change: semantics_changed
-  from: "StationaryPointKind, a free declaration"
-  to: "StationaryPointKind, now cross-checked against the entry's own frequency evidence; 'minimum' with any imaginary mode is refused"
-  breaking_for_producer: true
-  commit: ea48d36a
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:563
-
-- path: species_upload.species_entry.species_entry_kind
-  change: semantics_changed
-  from: "StationaryPointKind, a free declaration"
-  to: "StationaryPointKind, now cross-checked against the entry's own frequency evidence; 'minimum' with any imaginary mode is refused"
-  breaking_for_producer: true
-  commit: ea48d36a
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:679
-
-- path: reaction_upload.transition_state.calculation.parameters[].canonical_key
-  change: semantics_changed
-  from: "str | None, free-form provenance"
-  to: "str | None; the keys freq.hessian_method / grid.quality / opt.convergence now resolve ADR 0012's tau, which decides the structural flag"
-  breaking_for_producer: false
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/stationary_point.py:146
-
-- path: reaction_upload.transition_state.calculation.parameters[].canonical_value
-  change: semantics_changed
-  from: "str | None, free-form provenance"
-  to: "str | None; values of the three tau keys are matched against _TIGHT_GRID_VALUES / _TIGHT_OPT_VALUES / HessianMethod"
-  breaking_for_producer: false
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/stationary_point.py:155
-
-- path: reaction_upload.transition_state.calculations[].parameters[].canonical_key
-  change: semantics_changed
-  from: "str | None, free-form provenance"
-  to: "str | None; the keys freq.hessian_method / grid.quality / opt.convergence now resolve ADR 0012's tau, which decides the structural flag"
-  breaking_for_producer: false
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/stationary_point.py:146
-
-- path: reaction_upload.transition_state.calculations[].parameters[].canonical_value
-  change: semantics_changed
-  from: "str | None, free-form provenance"
-  to: "str | None; values of the three tau keys are matched against _TIGHT_GRID_VALUES / _TIGHT_OPT_VALUES / HessianMethod"
-  breaking_for_producer: false
-  commit: fe2a3ac4
-  source: schemas/python/tckdb-schemas/tckdb_schemas/stationary_point.py:155
-
-# ===========================================================================
-# 4. Isotopic identity — isotopologue_label removed, isotopes added.
-# ===========================================================================
-
-- path: species_upload.species_entry.isotopologue_label
-  change: removed
-  from: "str | None (max_length=64)"
-  to: null
-  breaking_for_producer: true
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/identity.py:199
-
-- path: reaction_upload.species[].species_entry.isotopologue_label
-  change: removed
-  from: "str | None (max_length=64)"
-  to: null
-  breaking_for_producer: true
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/identity.py:199
-
-- path: species_upload.species_entry.smiles
-  change: semantics_changed
-  from: "str; graph identity SMILES"
-  to: "str; isotope labels ([2H], [13C]) are now atom-resolved and fork the species_entry, replacing isotopologue_label; '[e-]' is a reserved sentinel bound to molecule_kind='electron'"
-  breaking_for_producer: false
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/identity.py:137
-
-- path: reaction_upload.species[].species_entry.smiles
-  change: semantics_changed
-  from: "str; graph identity SMILES"
-  to: "str; isotope labels ([2H], [13C]) are now atom-resolved and fork the species_entry, replacing isotopologue_label; '[e-]' is a reserved sentinel bound to molecule_kind='electron'"
-  breaking_for_producer: false
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/identity.py:137
-
-- path: species_upload.conformers[].geometry.isotopes
-  change: added
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:83"
+- path: "reaction_upload.species[].applied_energy_corrections[].frequency_scale_factor.software.release_date"
+  change: "added"
   from: null
-  to: "dict[int, int] | None; keys are 1-BASED XYZ atom indices, values isotope mass numbers"
+  to: "date | None (optional)"
   breaking_for_producer: false
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/fragments/geometry.py:19
-
-- path: reaction_upload.species[].conformers[].geometry.isotopes
-  change: added
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:82"
+- path: "reaction_upload.species[].applied_energy_corrections[].frequency_scale_factor.software.revision"
+  change: "added"
   from: null
-  to: "dict[int, int] | None; keys are 1-BASED XYZ atom indices, values isotope mass numbers"
+  to: "str | None (optional)"
   breaking_for_producer: false
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:297
-
-- path: reaction_upload.transition_state.geometry.isotopes
-  change: added
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:80"
+- path: "reaction_upload.species[].applied_energy_corrections[].frequency_scale_factor.software.version"
+  change: "added"
   from: null
-  to: "dict[int, int] | None; keys are 1-BASED XYZ atom indices, values isotope mass numbers"
+  to: "str | None (optional)"
   breaking_for_producer: false
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:297
-
-# ===========================================================================
-# 5. Free electron as a participant.
-# ===========================================================================
-
-- path: species_upload.species_entry.molecule_kind
-  change: retyped
-  from: "MoleculeKind {molecule, pseudo}"
-  to: "MoleculeKind {molecule, pseudo, electron} — enum WIDENED"
-  breaking_for_producer: false
-  commit: f54c01b5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/enums.py:46
-
-- path: reaction_upload.species[].species_entry.molecule_kind
-  change: retyped
-  from: "MoleculeKind {molecule, pseudo}"
-  to: "MoleculeKind {molecule, pseudo, electron} — enum WIDENED; also now decides whether an empty atom_to_ts / evidence atom list is legal"
-  breaking_for_producer: false
-  commit: f54c01b5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/enums.py:46
-
-# ===========================================================================
-# 6. Execution environment manifest (new optional subtree on every calc).
-#    The manifest's own ~25 leaves are deliberately not enumerated here —
-#    see SCHEMA_DRIFT.md, "Deliberate exclusions".
-# ===========================================================================
-
-- path: species_upload.conformers[].primary_calculation.execution_environment
-  change: added
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:79"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.software"
+  change: "added"
   from: null
-  to: "ExecutionEnvironmentManifestPayload | None"
+  to: "SoftwareReleaseRef | None (optional)"
   breaking_for_producer: false
-  commit: 9f79826f
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:138
-
-- path: species_upload.conformers[].additional_calculations[].execution_environment
-  change: added
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:79"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.software.build"
+  change: "added"
   from: null
-  to: "ExecutionEnvironmentManifestPayload | None"
+  to: "str | None (optional)"
   breaking_for_producer: false
-  commit: 9f79826f
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:138
-
-- path: reaction_upload.species[].conformers[].calculation.execution_environment
-  change: added
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:81"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.software.name"
+  change: "added"
   from: null
-  to: "ExecutionEnvironmentManifestPayload | None"
+  to: "str (required; min_length=1)"
   breaking_for_producer: false
-  commit: 9f79826f
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:88
-
-- path: reaction_upload.species[].calculations[].execution_environment
-  change: added
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:78"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.software.notes"
+  change: "added"
   from: null
-  to: "ExecutionEnvironmentManifestPayload | None"
+  to: "str | None (optional)"
   breaking_for_producer: false
-  commit: 9f79826f
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:88
-
-- path: reaction_upload.transition_state.calculation.execution_environment
-  change: added
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:83"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.software.release_date"
+  change: "added"
   from: null
-  to: "ExecutionEnvironmentManifestPayload | None"
+  to: "date | None (optional)"
   breaking_for_producer: false
-  commit: 9f79826f
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:88
-
-- path: reaction_upload.transition_state.calculations[].execution_environment
-  change: added
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:82"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.software.revision"
+  change: "added"
   from: null
-  to: "ExecutionEnvironmentManifestPayload | None"
+  to: "str | None (optional)"
   breaking_for_producer: false
-  commit: 9f79826f
-  source: schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:88
-
-# ===========================================================================
-# 7. Kinetics degeneracy convention.
-# ===========================================================================
-
-- path: reaction_upload.kinetics[].degeneracy
-  change: retyped
-  from: "float | None (gt=0)"
-  to: "float | None (gt=0, allow_inf_nan=False) — constraint TIGHTENED"
-  breaking_for_producer: true
-  commit: 7ad5cb99
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:794
-
-- path: reaction_upload.kinetics[].degeneracy_convention
-  change: added
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:80"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.software.version"
+  change: "added"
   from: null
-  to: "KineticsDegeneracyConvention {already_applied, not_applied, unknown}, default 'unknown'"
+  to: "str | None (optional)"
   breaking_for_producer: false
-  commit: 7ad5cb99
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:795
-
-# ===========================================================================
-# 8. Statmech treatment now has to justify itself.
-# ===========================================================================
-
-- path: species_upload.statmech.statmech_treatment
-  change: requiredness_changed
-  from: "StatmechTreatmentKind | None, unconditionally accepted"
-  to: "StatmechTreatmentKind | None; conditional — rrho_1d / rrho_nd / rrho_1d_nd now REQUIRE a non-empty torsions list"
-  breaking_for_producer: true
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:551
-
-- path: reaction_upload.species[].statmech.statmech_treatment
-  change: requiredness_changed
-  from: "StatmechTreatmentKind | None, unconditionally accepted"
-  to: "StatmechTreatmentKind | None; conditional — rrho_1d / rrho_nd / rrho_1d_nd now REQUIRE a non-empty torsions list"
-  breaking_for_producer: true
-  commit: ee7377f5
-  source: schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:430
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:79"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.workflow_tool_release"
+  change: "added"
+  from: null
+  to: "WorkflowToolReleaseRef | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:80"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.workflow_tool_release.git_commit"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1, max_length=40)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:315"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.workflow_tool_release.name"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:313"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.workflow_tool_release.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:317"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.workflow_tool_release.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:316"
+- path: "reaction_upload.species[].applied_energy_corrections[].scheme.workflow_tool_release.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:314"
+- path: "reaction_upload.species[].calculations[].conformer_key"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1)"
+  breaking_for_producer: false
+  commit: "4ae6e756"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:113"
+- path: "reaction_upload.species[].calculations[].literature"
+  change: "added"
+  from: null
+  to: "LiteratureUploadRequest | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:118"
+- path: "reaction_upload.species[].calculations[].literature.doi"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:50"
+- path: "reaction_upload.species[].calculations[].literature.institution"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:55"
+- path: "reaction_upload.species[].calculations[].literature.isbn"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:51"
+- path: "reaction_upload.species[].calculations[].literature.issue"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:47"
+- path: "reaction_upload.species[].calculations[].literature.journal"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:44"
+- path: "reaction_upload.species[].calculations[].literature.kind"
+  change: "added"
+  from: null
+  to: "LiteratureKind | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:41"
+- path: "reaction_upload.species[].calculations[].literature.pages"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:48"
+- path: "reaction_upload.species[].calculations[].literature.publisher"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:54"
+- path: "reaction_upload.species[].calculations[].literature.title"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:42"
+- path: "reaction_upload.species[].calculations[].literature.url"
+  change: "added"
+  from: null
+  to: "HttpUrl | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:52"
+- path: "reaction_upload.species[].calculations[].literature.volume"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:46"
+- path: "reaction_upload.species[].calculations[].literature.year"
+  change: "added"
+  from: null
+  to: "int | None (optional; ge=1, le=3000)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:45"
+- path: "reaction_upload.species[].calculations[].scf_stability"
+  change: "added"
+  from: null
+  to: "SCFStabilityContent | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:152"
+- path: "reaction_upload.species[].calculations[].scf_stability.instability_count"
+  change: "added"
+  from: null
+  to: "int | None (optional; ge=0)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:429"
+- path: "reaction_upload.species[].calculations[].scf_stability.instability_type"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:430"
+- path: "reaction_upload.species[].calculations[].scf_stability.lowest_eigenvalue"
+  change: "added"
+  from: null
+  to: "float | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:428"
+- path: "reaction_upload.species[].calculations[].scf_stability.note"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:432"
+- path: "reaction_upload.species[].calculations[].scf_stability.reoptimized_wavefunction"
+  change: "added"
+  from: null
+  to: "bool | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:431"
+- path: "reaction_upload.species[].calculations[].scf_stability.status"
+  change: "added"
+  from: null
+  to: "SCFStabilityStatus (required)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:427"
+- path: "reaction_upload.species[].conformers[].calculation.conformer_key"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1)"
+  breaking_for_producer: false
+  commit: "4ae6e756"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:113"
+- path: "reaction_upload.species[].conformers[].calculation.literature"
+  change: "added"
+  from: null
+  to: "LiteratureUploadRequest | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:118"
+- path: "reaction_upload.species[].conformers[].calculation.literature.doi"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:50"
+- path: "reaction_upload.species[].conformers[].calculation.literature.institution"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:55"
+- path: "reaction_upload.species[].conformers[].calculation.literature.isbn"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:51"
+- path: "reaction_upload.species[].conformers[].calculation.literature.issue"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:47"
+- path: "reaction_upload.species[].conformers[].calculation.literature.journal"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:44"
+- path: "reaction_upload.species[].conformers[].calculation.literature.kind"
+  change: "added"
+  from: null
+  to: "LiteratureKind | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:41"
+- path: "reaction_upload.species[].conformers[].calculation.literature.pages"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:48"
+- path: "reaction_upload.species[].conformers[].calculation.literature.publisher"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:54"
+- path: "reaction_upload.species[].conformers[].calculation.literature.title"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:42"
+- path: "reaction_upload.species[].conformers[].calculation.literature.url"
+  change: "added"
+  from: null
+  to: "HttpUrl | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:52"
+- path: "reaction_upload.species[].conformers[].calculation.literature.volume"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:46"
+- path: "reaction_upload.species[].conformers[].calculation.literature.year"
+  change: "added"
+  from: null
+  to: "int | None (optional; ge=1, le=3000)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:45"
+- path: "reaction_upload.species[].conformers[].calculation.scf_stability"
+  change: "added"
+  from: null
+  to: "SCFStabilityContent | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:152"
+- path: "reaction_upload.species[].conformers[].calculation.scf_stability.instability_count"
+  change: "added"
+  from: null
+  to: "int | None (optional; ge=0)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:429"
+- path: "reaction_upload.species[].conformers[].calculation.scf_stability.instability_type"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:430"
+- path: "reaction_upload.species[].conformers[].calculation.scf_stability.lowest_eigenvalue"
+  change: "added"
+  from: null
+  to: "float | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:428"
+- path: "reaction_upload.species[].conformers[].calculation.scf_stability.note"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:432"
+- path: "reaction_upload.species[].conformers[].calculation.scf_stability.reoptimized_wavefunction"
+  change: "added"
+  from: null
+  to: "bool | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:431"
+- path: "reaction_upload.species[].conformers[].calculation.scf_stability.status"
+  change: "added"
+  from: null
+  to: "SCFStabilityStatus (required)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:427"
+- path: "reaction_upload.species[].statmech.energy_level_of_theory"
+  change: "added"
+  from: null
+  to: "LevelOfTheoryRef | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:553"
+- path: "reaction_upload.species[].statmech.energy_level_of_theory.aux_basis"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:337"
+- path: "reaction_upload.species[].statmech.energy_level_of_theory.basis"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:336"
+- path: "reaction_upload.species[].statmech.energy_level_of_theory.cabs_basis"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:338"
+- path: "reaction_upload.species[].statmech.energy_level_of_theory.dispersion"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:339"
+- path: "reaction_upload.species[].statmech.energy_level_of_theory.keywords"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:342"
+- path: "reaction_upload.species[].statmech.energy_level_of_theory.method"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:335"
+- path: "reaction_upload.species[].statmech.energy_level_of_theory.solvent"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:340"
+- path: "reaction_upload.species[].statmech.energy_level_of_theory.solvent_model"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:341"
+- path: "reaction_upload.species[].statmech.energy_level_of_theory.spin_treatment"
+  change: "added"
+  from: null
+  to: "SpinTreatment | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:343"
+- path: "reaction_upload.species[].statmech.freq_scale_factor.software.build"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:81"
+- path: "reaction_upload.species[].statmech.freq_scale_factor.software.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:83"
+- path: "reaction_upload.species[].statmech.freq_scale_factor.software.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:82"
+- path: "reaction_upload.species[].statmech.freq_scale_factor.software.revision"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:80"
+- path: "reaction_upload.species[].statmech.freq_scale_factor.software.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:79"
+- path: "reaction_upload.species[].statmech.literature"
+  change: "added"
+  from: null
+  to: "LiteratureUploadRequest | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:531"
+- path: "reaction_upload.species[].statmech.literature.doi"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:50"
+- path: "reaction_upload.species[].statmech.literature.institution"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:55"
+- path: "reaction_upload.species[].statmech.literature.isbn"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:51"
+- path: "reaction_upload.species[].statmech.literature.issue"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:47"
+- path: "reaction_upload.species[].statmech.literature.journal"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:44"
+- path: "reaction_upload.species[].statmech.literature.kind"
+  change: "added"
+  from: null
+  to: "LiteratureKind | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:41"
+- path: "reaction_upload.species[].statmech.literature.pages"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:48"
+- path: "reaction_upload.species[].statmech.literature.publisher"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:54"
+- path: "reaction_upload.species[].statmech.literature.title"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:42"
+- path: "reaction_upload.species[].statmech.literature.url"
+  change: "added"
+  from: null
+  to: "HttpUrl | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:52"
+- path: "reaction_upload.species[].statmech.literature.volume"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:46"
+- path: "reaction_upload.species[].statmech.literature.year"
+  change: "added"
+  from: null
+  to: "int | None (optional; ge=1, le=3000)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:45"
+- path: "reaction_upload.species[].statmech.rotational_constant_a_cm1"
+  change: "added"
+  from: null
+  to: "float | None (optional; gt=0)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:542"
+- path: "reaction_upload.species[].statmech.rotational_constant_b_cm1"
+  change: "added"
+  from: null
+  to: "float | None (optional; gt=0)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:543"
+- path: "reaction_upload.species[].statmech.rotational_constant_c_cm1"
+  change: "added"
+  from: null
+  to: "float | None (optional; gt=0)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:544"
+- path: "reaction_upload.species[].statmech.software_release"
+  change: "added"
+  from: null
+  to: "SoftwareReleaseRef | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:532"
+- path: "reaction_upload.species[].statmech.software_release.build"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:81"
+- path: "reaction_upload.species[].statmech.software_release.name"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:78"
+- path: "reaction_upload.species[].statmech.software_release.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:83"
+- path: "reaction_upload.species[].statmech.software_release.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:82"
+- path: "reaction_upload.species[].statmech.software_release.revision"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:80"
+- path: "reaction_upload.species[].statmech.software_release.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:79"
+- path: "reaction_upload.species[].statmech.workflow_tool_release"
+  change: "added"
+  from: null
+  to: "WorkflowToolReleaseRef | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:533"
+- path: "reaction_upload.species[].statmech.workflow_tool_release.git_commit"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1, max_length=40)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:315"
+- path: "reaction_upload.species[].statmech.workflow_tool_release.name"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:313"
+- path: "reaction_upload.species[].statmech.workflow_tool_release.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:317"
+- path: "reaction_upload.species[].statmech.workflow_tool_release.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:316"
+- path: "reaction_upload.species[].statmech.workflow_tool_release.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "c734499c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:314"
+- path: "reaction_upload.species[].thermo.energy_level_of_theory"
+  change: "added"
+  from: null
+  to: "LevelOfTheoryRef | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:358"
+- path: "reaction_upload.species[].thermo.energy_level_of_theory.aux_basis"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:337"
+- path: "reaction_upload.species[].thermo.energy_level_of_theory.basis"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:336"
+- path: "reaction_upload.species[].thermo.energy_level_of_theory.cabs_basis"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:338"
+- path: "reaction_upload.species[].thermo.energy_level_of_theory.dispersion"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:339"
+- path: "reaction_upload.species[].thermo.energy_level_of_theory.keywords"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:342"
+- path: "reaction_upload.species[].thermo.energy_level_of_theory.method"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:335"
+- path: "reaction_upload.species[].thermo.energy_level_of_theory.solvent"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:340"
+- path: "reaction_upload.species[].thermo.energy_level_of_theory.solvent_model"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:341"
+- path: "reaction_upload.species[].thermo.energy_level_of_theory.spin_treatment"
+  change: "added"
+  from: null
+  to: "SpinTreatment | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:343"
+- path: "reaction_upload.species[].thermo.enthalpy_formation_0k_kj_mol"
+  change: "added"
+  from: null
+  to: "float | None (optional)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:245"
+- path: "reaction_upload.species[].thermo.enthalpy_formation_0k_uncertainty_kj_mol"
+  change: "added"
+  from: null
+  to: "float | None (optional; ge=0)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:246"
+- path: "reaction_upload.species[].thermo.enthalpy_reference_kind"
+  change: "added"
+  from: null
+  to: "EnthalpyReferenceKind | str | None (optional)"
+  breaking_for_producer: false
+  commit: "b338025a"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:243"
+- path: "reaction_upload.species[].thermo.h298_uncertainty_kj_mol"
+  change: "added"
+  from: null
+  to: "float | None (optional; ge=0)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:346"
+- path: "reaction_upload.species[].thermo.literature"
+  change: "added"
+  from: null
+  to: "LiteratureUploadRequest | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:340"
+- path: "reaction_upload.species[].thermo.literature.doi"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:50"
+- path: "reaction_upload.species[].thermo.literature.institution"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:55"
+- path: "reaction_upload.species[].thermo.literature.isbn"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:51"
+- path: "reaction_upload.species[].thermo.literature.issue"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:47"
+- path: "reaction_upload.species[].thermo.literature.journal"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:44"
+- path: "reaction_upload.species[].thermo.literature.kind"
+  change: "added"
+  from: null
+  to: "LiteratureKind | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:41"
+- path: "reaction_upload.species[].thermo.literature.pages"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:48"
+- path: "reaction_upload.species[].thermo.literature.publisher"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:54"
+- path: "reaction_upload.species[].thermo.literature.title"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:42"
+- path: "reaction_upload.species[].thermo.literature.url"
+  change: "added"
+  from: null
+  to: "HttpUrl | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:52"
+- path: "reaction_upload.species[].thermo.literature.volume"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:46"
+- path: "reaction_upload.species[].thermo.literature.year"
+  change: "added"
+  from: null
+  to: "int | None (optional; ge=1, le=3000)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:45"
+- path: "reaction_upload.species[].thermo.phase"
+  change: "added"
+  from: null
+  to: "PhaseKind | None (optional)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:241"
+- path: "reaction_upload.species[].thermo.reference_pressure_bar"
+  change: "added"
+  from: null
+  to: "float | None (optional; gt=0)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:244"
+- path: "reaction_upload.species[].thermo.s298_uncertainty_j_mol_k"
+  change: "added"
+  from: null
+  to: "float | None (optional; ge=0)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:347"
+- path: "reaction_upload.species[].thermo.software_release"
+  change: "added"
+  from: null
+  to: "SoftwareReleaseRef | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:341"
+- path: "reaction_upload.species[].thermo.software_release.build"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:81"
+- path: "reaction_upload.species[].thermo.software_release.name"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:78"
+- path: "reaction_upload.species[].thermo.software_release.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:83"
+- path: "reaction_upload.species[].thermo.software_release.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:82"
+- path: "reaction_upload.species[].thermo.software_release.revision"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:80"
+- path: "reaction_upload.species[].thermo.software_release.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:79"
+- path: "reaction_upload.species[].thermo.source_calculations[]"
+  change: "added"
+  from: null
+  to: "list[ThermoSourceCalcInBundle] (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:352"
+- path: "reaction_upload.species[].thermo.source_calculations[].calculation_key"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:347"
+- path: "reaction_upload.species[].thermo.source_calculations[].role"
+  change: "added"
+  from: null
+  to: "ThermoCalculationRole (required)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:348"
+- path: "reaction_upload.species[].thermo.workflow_tool_release"
+  change: "added"
+  from: null
+  to: "WorkflowToolReleaseRef | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_reaction_upload.py:342"
+- path: "reaction_upload.species[].thermo.workflow_tool_release.git_commit"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1, max_length=40)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:315"
+- path: "reaction_upload.species[].thermo.workflow_tool_release.name"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:313"
+- path: "reaction_upload.species[].thermo.workflow_tool_release.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:317"
+- path: "reaction_upload.species[].thermo.workflow_tool_release.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:316"
+- path: "reaction_upload.species[].thermo.workflow_tool_release.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:314"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].frequency_scale_factor.software.build"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:81"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].frequency_scale_factor.software.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:83"
+- path: >-
+    reaction_upload.transition_state.applied_energy_corrections[].frequency_scale_factor.software.release_date
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:82"
+- path: >-
+    reaction_upload.transition_state.applied_energy_corrections[].frequency_scale_factor.software.revision
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:80"
+- path: >-
+    reaction_upload.transition_state.applied_energy_corrections[].frequency_scale_factor.software.version
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:79"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme.software"
+  change: "added"
+  from: null
+  to: "SoftwareReleaseRef | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:79"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme.software.build"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:81"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme.software.name"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:78"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme.software.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:83"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme.software.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:82"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme.software.revision"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:80"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme.software.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:79"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme.workflow_tool_release"
+  change: "added"
+  from: null
+  to: "WorkflowToolReleaseRef | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:80"
+- path: >-
+    reaction_upload.transition_state.applied_energy_corrections[].scheme.workflow_tool_release.git_commit
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1, max_length=40)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:315"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme.workflow_tool_release.name"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:313"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme.workflow_tool_release.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:317"
+- path: >-
+    reaction_upload.transition_state.applied_energy_corrections[].scheme.workflow_tool_release.release_date
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:316"
+- path: "reaction_upload.transition_state.applied_energy_corrections[].scheme.workflow_tool_release.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:314"
+- path: "reaction_upload.transition_state.calculation.conformer_key"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1)"
+  breaking_for_producer: false
+  commit: "4ae6e756"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:113"
+- path: "reaction_upload.transition_state.calculation.literature"
+  change: "added"
+  from: null
+  to: "LiteratureUploadRequest | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:118"
+- path: "reaction_upload.transition_state.calculation.literature.doi"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:50"
+- path: "reaction_upload.transition_state.calculation.literature.institution"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:55"
+- path: "reaction_upload.transition_state.calculation.literature.isbn"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:51"
+- path: "reaction_upload.transition_state.calculation.literature.issue"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:47"
+- path: "reaction_upload.transition_state.calculation.literature.journal"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:44"
+- path: "reaction_upload.transition_state.calculation.literature.kind"
+  change: "added"
+  from: null
+  to: "LiteratureKind | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:41"
+- path: "reaction_upload.transition_state.calculation.literature.pages"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:48"
+- path: "reaction_upload.transition_state.calculation.literature.publisher"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:54"
+- path: "reaction_upload.transition_state.calculation.literature.title"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:42"
+- path: "reaction_upload.transition_state.calculation.literature.url"
+  change: "added"
+  from: null
+  to: "HttpUrl | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:52"
+- path: "reaction_upload.transition_state.calculation.literature.volume"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:46"
+- path: "reaction_upload.transition_state.calculation.literature.year"
+  change: "added"
+  from: null
+  to: "int | None (optional; ge=1, le=3000)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:45"
+- path: "reaction_upload.transition_state.calculation.scf_stability"
+  change: "added"
+  from: null
+  to: "SCFStabilityContent | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:152"
+- path: "reaction_upload.transition_state.calculation.scf_stability.instability_count"
+  change: "added"
+  from: null
+  to: "int | None (optional; ge=0)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:429"
+- path: "reaction_upload.transition_state.calculation.scf_stability.instability_type"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:430"
+- path: "reaction_upload.transition_state.calculation.scf_stability.lowest_eigenvalue"
+  change: "added"
+  from: null
+  to: "float | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:428"
+- path: "reaction_upload.transition_state.calculation.scf_stability.note"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:432"
+- path: "reaction_upload.transition_state.calculation.scf_stability.reoptimized_wavefunction"
+  change: "added"
+  from: null
+  to: "bool | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:431"
+- path: "reaction_upload.transition_state.calculation.scf_stability.status"
+  change: "added"
+  from: null
+  to: "SCFStabilityStatus (required)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:427"
+- path: "reaction_upload.transition_state.calculations[].conformer_key"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1)"
+  breaking_for_producer: false
+  commit: "4ae6e756"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:113"
+- path: "reaction_upload.transition_state.calculations[].literature"
+  change: "added"
+  from: null
+  to: "LiteratureUploadRequest | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:118"
+- path: "reaction_upload.transition_state.calculations[].literature.doi"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:50"
+- path: "reaction_upload.transition_state.calculations[].literature.institution"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:55"
+- path: "reaction_upload.transition_state.calculations[].literature.isbn"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:51"
+- path: "reaction_upload.transition_state.calculations[].literature.issue"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:47"
+- path: "reaction_upload.transition_state.calculations[].literature.journal"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:44"
+- path: "reaction_upload.transition_state.calculations[].literature.kind"
+  change: "added"
+  from: null
+  to: "LiteratureKind | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:41"
+- path: "reaction_upload.transition_state.calculations[].literature.pages"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:48"
+- path: "reaction_upload.transition_state.calculations[].literature.publisher"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:54"
+- path: "reaction_upload.transition_state.calculations[].literature.title"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:42"
+- path: "reaction_upload.transition_state.calculations[].literature.url"
+  change: "added"
+  from: null
+  to: "HttpUrl | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:52"
+- path: "reaction_upload.transition_state.calculations[].literature.volume"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:46"
+- path: "reaction_upload.transition_state.calculations[].literature.year"
+  change: "added"
+  from: null
+  to: "int | None (optional; ge=1, le=3000)"
+  breaking_for_producer: false
+  commit: "ed5d610c"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/literature.py:45"
+- path: "reaction_upload.transition_state.calculations[].scf_stability"
+  change: "added"
+  from: null
+  to: "SCFStabilityContent | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/shared/calculation_in.py:152"
+- path: "reaction_upload.transition_state.calculations[].scf_stability.instability_count"
+  change: "added"
+  from: null
+  to: "int | None (optional; ge=0)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:429"
+- path: "reaction_upload.transition_state.calculations[].scf_stability.instability_type"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:430"
+- path: "reaction_upload.transition_state.calculations[].scf_stability.lowest_eigenvalue"
+  change: "added"
+  from: null
+  to: "float | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:428"
+- path: "reaction_upload.transition_state.calculations[].scf_stability.note"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:432"
+- path: "reaction_upload.transition_state.calculations[].scf_stability.reoptimized_wavefunction"
+  change: "added"
+  from: null
+  to: "bool | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:431"
+- path: "reaction_upload.transition_state.calculations[].scf_stability.status"
+  change: "added"
+  from: null
+  to: "SCFStabilityStatus (required)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:427"
+- path: "species_upload.applied_energy_corrections[].frequency_scale_factor.software.build"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:81"
+- path: "species_upload.applied_energy_corrections[].frequency_scale_factor.software.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:83"
+- path: "species_upload.applied_energy_corrections[].frequency_scale_factor.software.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:82"
+- path: "species_upload.applied_energy_corrections[].frequency_scale_factor.software.revision"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:80"
+- path: "species_upload.applied_energy_corrections[].frequency_scale_factor.software.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:79"
+- path: "species_upload.applied_energy_corrections[].scheme.software"
+  change: "added"
+  from: null
+  to: "SoftwareReleaseRef | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:79"
+- path: "species_upload.applied_energy_corrections[].scheme.software.build"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:81"
+- path: "species_upload.applied_energy_corrections[].scheme.software.name"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:78"
+- path: "species_upload.applied_energy_corrections[].scheme.software.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:83"
+- path: "species_upload.applied_energy_corrections[].scheme.software.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:82"
+- path: "species_upload.applied_energy_corrections[].scheme.software.revision"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:80"
+- path: "species_upload.applied_energy_corrections[].scheme.software.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:79"
+- path: "species_upload.applied_energy_corrections[].scheme.workflow_tool_release"
+  change: "added"
+  from: null
+  to: "WorkflowToolReleaseRef | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:80"
+- path: "species_upload.applied_energy_corrections[].scheme.workflow_tool_release.git_commit"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1, max_length=40)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:315"
+- path: "species_upload.applied_energy_corrections[].scheme.workflow_tool_release.name"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:313"
+- path: "species_upload.applied_energy_corrections[].scheme.workflow_tool_release.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:317"
+- path: "species_upload.applied_energy_corrections[].scheme.workflow_tool_release.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:316"
+- path: "species_upload.applied_energy_corrections[].scheme.workflow_tool_release.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:314"
+- path: "species_upload.conformers[].additional_calculations[].scf_stability"
+  change: "added"
+  from: null
+  to: "SCFStabilityContent | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:164"
+- path: "species_upload.conformers[].additional_calculations[].scf_stability.instability_count"
+  change: "added"
+  from: null
+  to: "int | None (optional; ge=0)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:429"
+- path: "species_upload.conformers[].additional_calculations[].scf_stability.instability_type"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:430"
+- path: "species_upload.conformers[].additional_calculations[].scf_stability.lowest_eigenvalue"
+  change: "added"
+  from: null
+  to: "float | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:428"
+- path: "species_upload.conformers[].additional_calculations[].scf_stability.note"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:432"
+- path: "species_upload.conformers[].additional_calculations[].scf_stability.reoptimized_wavefunction"
+  change: "added"
+  from: null
+  to: "bool | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:431"
+- path: "species_upload.conformers[].additional_calculations[].scf_stability.status"
+  change: "added"
+  from: null
+  to: "SCFStabilityStatus (required)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:427"
+- path: "species_upload.conformers[].primary_calculation.scf_stability"
+  change: "added"
+  from: null
+  to: "SCFStabilityContent | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:164"
+- path: "species_upload.conformers[].primary_calculation.scf_stability.instability_count"
+  change: "added"
+  from: null
+  to: "int | None (optional; ge=0)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:429"
+- path: "species_upload.conformers[].primary_calculation.scf_stability.instability_type"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:430"
+- path: "species_upload.conformers[].primary_calculation.scf_stability.lowest_eigenvalue"
+  change: "added"
+  from: null
+  to: "float | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:428"
+- path: "species_upload.conformers[].primary_calculation.scf_stability.note"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:432"
+- path: "species_upload.conformers[].primary_calculation.scf_stability.reoptimized_wavefunction"
+  change: "added"
+  from: null
+  to: "bool | None (optional)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:431"
+- path: "species_upload.conformers[].primary_calculation.scf_stability.status"
+  change: "added"
+  from: null
+  to: "SCFStabilityStatus (required)"
+  breaking_for_producer: false
+  commit: "61f4b256"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/calculation.py:427"
+- path: "species_upload.rights"
+  change: "added"
+  from: null
+  to: "DepositRights | None (optional)"
+  breaking_for_producer: false
+  commit: "a2c34447"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:663"
+- path: "species_upload.rights.depositor_attests_right_to_license"
+  change: "added"
+  from: null
+  to: "Literal[True] (required)"
+  breaking_for_producer: false
+  commit: "a2c34447"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/rights.py:40"
+- path: "species_upload.rights.license"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1, max_length=64)"
+  breaking_for_producer: false
+  commit: "a2c34447"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/rights.py:39"
+- path: "species_upload.rights.source_terms"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "a2c34447"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/rights.py:41"
+- path: "species_upload.statmech.energy_level_of_theory"
+  change: "added"
+  from: null
+  to: "LevelOfTheoryRef | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:575"
+- path: "species_upload.statmech.energy_level_of_theory.aux_basis"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:337"
+- path: "species_upload.statmech.energy_level_of_theory.basis"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:336"
+- path: "species_upload.statmech.energy_level_of_theory.cabs_basis"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:338"
+- path: "species_upload.statmech.energy_level_of_theory.dispersion"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:339"
+- path: "species_upload.statmech.energy_level_of_theory.keywords"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:342"
+- path: "species_upload.statmech.energy_level_of_theory.method"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:335"
+- path: "species_upload.statmech.energy_level_of_theory.solvent"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:340"
+- path: "species_upload.statmech.energy_level_of_theory.solvent_model"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:341"
+- path: "species_upload.statmech.energy_level_of_theory.spin_treatment"
+  change: "added"
+  from: null
+  to: "SpinTreatment | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:343"
+- path: "species_upload.statmech.freq_scale_factor.software.build"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:81"
+- path: "species_upload.statmech.freq_scale_factor.software.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:83"
+- path: "species_upload.statmech.freq_scale_factor.software.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:82"
+- path: "species_upload.statmech.freq_scale_factor.software.revision"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:80"
+- path: "species_upload.statmech.freq_scale_factor.software.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:79"
+- path: "species_upload.thermo.applied_energy_corrections[].frequency_scale_factor.software.build"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:81"
+- path: "species_upload.thermo.applied_energy_corrections[].frequency_scale_factor.software.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:83"
+- path: "species_upload.thermo.applied_energy_corrections[].frequency_scale_factor.software.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:82"
+- path: "species_upload.thermo.applied_energy_corrections[].frequency_scale_factor.software.revision"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:80"
+- path: "species_upload.thermo.applied_energy_corrections[].frequency_scale_factor.software.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "76f47241"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:79"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.software"
+  change: "added"
+  from: null
+  to: "SoftwareReleaseRef | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:79"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.software.build"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:81"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.software.name"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:78"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.software.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:83"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.software.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:82"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.software.revision"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:80"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.software.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:79"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.workflow_tool_release"
+  change: "added"
+  from: null
+  to: "WorkflowToolReleaseRef | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/energy_correction.py:80"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.workflow_tool_release.git_commit"
+  change: "added"
+  from: null
+  to: "str | None (optional; min_length=1, max_length=40)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:315"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.workflow_tool_release.name"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:313"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.workflow_tool_release.notes"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:317"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.workflow_tool_release.release_date"
+  change: "added"
+  from: null
+  to: "date | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:316"
+- path: "species_upload.thermo.applied_energy_corrections[].scheme.workflow_tool_release.version"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "318a76e1"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:314"
+- path: "species_upload.thermo.energy_level_of_theory"
+  change: "added"
+  from: null
+  to: "LevelOfTheoryRef | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/workflows/computed_species_upload.py:392"
+- path: "species_upload.thermo.energy_level_of_theory.aux_basis"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:337"
+- path: "species_upload.thermo.energy_level_of_theory.basis"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:336"
+- path: "species_upload.thermo.energy_level_of_theory.cabs_basis"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:338"
+- path: "species_upload.thermo.energy_level_of_theory.dispersion"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:339"
+- path: "species_upload.thermo.energy_level_of_theory.keywords"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:342"
+- path: "species_upload.thermo.energy_level_of_theory.method"
+  change: "added"
+  from: null
+  to: "str (required; min_length=1)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:335"
+- path: "species_upload.thermo.energy_level_of_theory.solvent"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:340"
+- path: "species_upload.thermo.energy_level_of_theory.solvent_model"
+  change: "added"
+  from: null
+  to: "str | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:341"
+- path: "species_upload.thermo.energy_level_of_theory.spin_treatment"
+  change: "added"
+  from: null
+  to: "SpinTreatment | None (optional)"
+  breaking_for_producer: false
+  commit: "8e0ffeb5"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/fragments/refs.py:343"
+- path: "species_upload.thermo.enthalpy_formation_0k_kj_mol"
+  change: "added"
+  from: null
+  to: "float | None (optional)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:245"
+- path: "species_upload.thermo.enthalpy_formation_0k_uncertainty_kj_mol"
+  change: "added"
+  from: null
+  to: "float | None (optional; ge=0)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:246"
+- path: "species_upload.thermo.enthalpy_reference_kind"
+  change: "added"
+  from: null
+  to: "EnthalpyReferenceKind | str | None (optional)"
+  breaking_for_producer: false
+  commit: "b338025a"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:243"
+- path: "species_upload.thermo.phase"
+  change: "added"
+  from: null
+  to: "PhaseKind | None (optional)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:241"
+- path: "species_upload.thermo.reference_pressure_bar"
+  change: "added"
+  from: null
+  to: "float | None (optional; gt=0)"
+  breaking_for_producer: false
+  commit: "fd68f1ba"
+  source: "schemas/python/tckdb-schemas/tckdb_schemas/thermo.py:244"
