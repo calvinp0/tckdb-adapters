@@ -1,0 +1,159 @@
+name: tckdb-drift
+
+# Tracks tckdb-schemas / tckdb-client releases in TCKDB. When the mirror's main
+# ships a newer minor line than the adapter pins, the `test` job bumps the pins in
+# its runner and runs the suite with a read-only token; the `publish` job (the only
+# one with write access) opens a PR (tests pass) or an issue (tests fail).
+# See "Tracking TCKDB releases" in README.md.
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: tckdb-drift
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      drift: ${{ steps.check.outputs.drift }}
+      sha: ${{ steps.check.outputs.sha }}
+      schemas: ${{ steps.check.outputs.schemas }}
+      client: ${{ steps.check.outputs.client }}
+      schemas_line: ${{ steps.check.outputs.schemas_line }}
+      client_line: ${{ steps.check.outputs.client_line }}
+      old_schemas: ${{ steps.check.outputs.old_schemas }}
+      result: ${{ steps.test.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check for drift
+        id: check
+        run: |
+          rc=0
+          python tools/tckdb_drift.py --check > "$RUNNER_TEMP/drift.json" || rc=$?
+          cat "$RUNNER_TEMP/drift.json"
+          case "$rc" in
+            0)  echo "drift=false" >> "$GITHUB_OUTPUT" ;;
+            10) echo "drift=true" >> "$GITHUB_OUTPUT" ;;
+            *)  echo "::error::tckdb_drift.py --check failed (exit $rc)"; exit "$rc" ;;
+          esac
+          {
+            echo "sha=$(jq -r .available_sha "$RUNNER_TEMP/drift.json")"
+            echo "schemas=$(jq -r .schemas.available_version "$RUNNER_TEMP/drift.json")"
+            echo "client=$(jq -r .client.available_version "$RUNNER_TEMP/drift.json")"
+            echo "schemas_line=$(jq -r .schemas.available_line "$RUNNER_TEMP/drift.json")"
+            echo "client_line=$(jq -r .client.available_line "$RUNNER_TEMP/drift.json")"
+            echo "old_schemas=$(jq -r .schemas.pinned_line "$RUNNER_TEMP/drift.json").0"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Bump the pins in this runner
+        if: steps.check.outputs.drift == 'true'
+        run: |
+          python tools/tckdb_drift.py --bump \
+            --sha "${{ steps.check.outputs.sha }}" \
+            --schemas "${{ steps.check.outputs.schemas }}" \
+            --client "${{ steps.check.outputs.client }}"
+          git diff --stat
+
+      - name: Install the new TCKDB packages and run the suite
+        id: test
+        if: steps.check.outputs.drift == 'true'
+        run: |
+          result=pass
+          {
+            python tools/tckdb_drift.py --install-specs > "$RUNNER_TEMP/specs" &&
+            python -m pip install --upgrade pip &&
+            pip install "$(sed -n 's/^TCKDB_CLIENT_SPEC=//p' "$RUNNER_TEMP/specs")" \
+                        "$(sed -n 's/^TCKDB_SCHEMAS_SPEC=//p' "$RUNNER_TEMP/specs")" &&
+            pip install -e "./tckdb_arc[test]"
+          } > "$RUNNER_TEMP/install.log" 2>&1 || result=install-failed
+
+          # The contract changelog from the PRE-bump schemas line.
+          python tools/tckdb_drift.py --since-output \
+            --from "${{ steps.check.outputs.old_schemas }}" > "$RUNNER_TEMP/since.md" 2>&1 \
+            || echo "(could not produce the --since output; see the run log)" >> "$RUNNER_TEMP/since.md"
+
+          if [ "$result" = pass ]; then
+            (cd tckdb_arc && pytest -q -rfE -p no:cacheprovider) > "$RUNNER_TEMP/pytest.log" 2>&1 || result=fail
+            {
+              echo '```'
+              grep -E '^(FAILED|ERROR) ' "$RUNNER_TEMP/pytest.log" | head -40 | cut -c1-300
+              tail -n 1 "$RUNNER_TEMP/pytest.log"
+              echo '```'
+            } > "$RUNNER_TEMP/summary.md"
+          else
+            {
+              echo 'Installing the new packages with the bumped pins failed:'
+              echo '```'
+              tail -n 30 "$RUNNER_TEMP/install.log" | cut -c1-300
+              echo '```'
+            } > "$RUNNER_TEMP/summary.md"
+          fi
+          tail -n 5 "$RUNNER_TEMP/pytest.log" 2>/dev/null || true
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the changelog and test summary for the publish job
+        if: steps.check.outputs.drift == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tckdb-drift
+          path: |
+            ${{ runner.temp }}/since.md
+            ${{ runner.temp }}/summary.md
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch the changelog and test summary
+        if: needs.test.outputs.drift == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: tckdb-drift
+          path: ${{ runner.temp }}/drift
+
+      - name: Open or update the PR or issue, or close stale ones
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DRIFT: ${{ needs.test.outputs.drift }}
+          RESULT: ${{ needs.test.outputs.result }}
+          SHA: ${{ needs.test.outputs.sha }}
+          SCHEMAS: ${{ needs.test.outputs.schemas }}
+          CLIENT: ${{ needs.test.outputs.client }}
+          SCHEMAS_LINE: ${{ needs.test.outputs.schemas_line }}
+          CLIENT_LINE: ${{ needs.test.outputs.client_line }}
+          OLD_SCHEMAS: ${{ needs.test.outputs.old_schemas }}
+          SINCE_FILE: ${{ runner.temp }}/drift/since.md
+          SUMMARY_FILE: ${{ runner.temp }}/drift/summary.md
+        run: bash tools/tckdb_drift_publish.sh

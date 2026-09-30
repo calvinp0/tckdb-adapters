@@ -163,6 +163,10 @@ Adapter 0.6.7:
 Upgrading changes the payload hash, and so the idempotency key, of reaction uploads that
 had a repeated species or gained conformer labels or scan logs.
 
+Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
+
+<!-- tckdb-drift:changelog -->
+
 Thermo blocks with enthalpy content declare `enthalpy_reference_kind:
 formation_298k` (Arkane's H298 and NASA are formation enthalpies at
 298.15 K) only when that holds. Blocks with entropy content carry
