@@ -138,6 +138,9 @@ def _scan_entries_from_record(record: Mapping[str, Any]) -> list[Mapping[str, An
             "type": _CALC_KEY_SCAN,
             "scan_result": scan_result,
             "constraints": scan.get("constraints") or [],
+            # ARC's ``rotor_scans[].source_log``: the scan's own ESS log, the
+            # output_log artifact of this scan calculation.
+            "source_log": scan.get("source_log"),
         })
     return translated
 
@@ -280,8 +283,24 @@ def _atom_params_from_reference_atom_energies(
     return params, str(unit)
 
 
-def _correction_records_from_record(record: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Translate neutral ARC correction facts to the legacy adapter boundary."""
+def _is_output_schema_1_0(output_doc: Mapping[str, Any]) -> bool:
+    """Whether the document is ARC output schema 1.0 (keyed on the version alone).
+
+    1.0 wrote thermo Cp points as ``thermo.cp_data`` and the atom-energy table
+    as ``parameter_table``; 1.1 renamed them ``thermo_points`` and
+    ``reference_atom_energies``. The old names are read only for 1.0 documents.
+    """
+    return output_doc.get("schema_version") == "1.0"
+
+
+def _correction_records_from_record(
+    record: Mapping[str, Any], *, legacy_1_0: bool = False,
+) -> list[dict[str, Any]]:
+    """Translate neutral ARC correction facts to the legacy adapter boundary.
+
+    ``legacy_1_0`` (an output.yml 1.0 document) also reads an atom-energy
+    ``parameter_table``, the 1.0 name of what 1.1 calls
+    ``reference_atom_energies``."""
     legacy = record.get("applied_energy_corrections")
     if isinstance(legacy, list):
         return [dict(entry) for entry in legacy if isinstance(entry, Mapping)]
@@ -348,6 +367,18 @@ def _correction_records_from_record(record: Mapping[str, Any]) -> list[dict[str,
             atom_params, params_unit = _atom_params_from_reference_atom_energies(
                 reference
             )
+            legacy_table = correction.get("parameter_table") if legacy_1_0 else None
+            if (
+                not atom_params
+                and isinstance(legacy_table, Mapping)
+                and isinstance(legacy_table.get("values"), Mapping)
+            ):
+                # output.yml 1.0: the table carried no unit of its own; the
+                # correction's unit is what the scheme's values are in.
+                scheme["atom_params"] = [
+                    {"element": str(key), "value": float(value)}
+                    for key, value in sorted(legacy_table["values"].items())
+                ]
             if atom_params:
                 scheme["atom_params"] = atom_params
                 if reference.get("applied_as") == "subtracted":
@@ -784,8 +815,10 @@ class UploadOutcome:
     """
 
     status: str  # pending | uploaded | failed | skipped
-    payload_path: Path
-    sidecar_path: Path
+    # ``None`` for a species skipped before any payload was built
+    # (``irc_endpoint_species_skipped``).
+    payload_path: Path | None
+    sidecar_path: Path | None
     idempotency_key: str
     error: str | None = None
     response: Any = None
@@ -806,6 +839,24 @@ class ArtifactUploadOutcome:
     error: str | None = None
     response: Any = None
     skip_reason: str | None = None
+    # The server's per-item findings from the artifact response body
+    # (e.g. ``software_release_version_filled_from_artifact``,
+    # ``multiplicity_mismatch``), the same list the sidecar records.
+    warnings: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _ArtifactBatchResult:
+    """One server response to one calculation's artifact batch POST.
+
+    ``response`` is the client's full ``TCKDBResponse`` (status, headers, body),
+    which ``TCKDBClient.upload_artifacts`` discards in favour of the body.
+    """
+
+    calculation_id: int
+    calculation_keys: tuple[str, ...]
+    artifact_count: int
+    response: Any
 
 
 @dataclass(frozen=True)
@@ -840,6 +891,92 @@ class TCKDBReadinessError(RuntimeError):
         self.response_json = response_json
         self.response_text = response_text
         self.headers = dict(headers) if headers is not None else None
+
+
+_W_MONATOMIC_PLACEHOLDER_OPT = "monatomic_species_primary_opt_placeholder"
+
+
+def _warn_monatomic_placeholder_opt(
+    species_record: Mapping[str, Any],
+    warnings: list[dict[str, Any]] | None,
+    *,
+    field: str,
+) -> None:
+    """Warn that a single-atom species' primary opt is a placeholder.
+
+    TCKDB's computed-species and computed-reaction routes require every
+    conformer's primary calculation to be an ``opt``
+    (``ConformerInBundle.validate_primary_is_opt`` and the reaction
+    ``ConformerIn`` equivalent), but ARC runs no optimisation for a single atom
+    (BRIDGE_ROADMAP A6). The atom is still deposited, with the primary opt the
+    routes require and ``converged`` as ARC reports it, and this warning says so.
+    The calculation model has no ``note`` field to carry the statement.
+    TCKDB issue #600 asks the route to accept an sp primary for an atom.
+    """
+    symbols = _species_element_symbols(species_record)
+    if symbols is None or len(symbols) != 1:
+        return
+    label = species_record.get("label") or "<unlabeled>"
+    message = (
+        f"{label!r} is a single atom ({symbols[0]}). TCKDB requires a primary "
+        "opt calculation, but ARC runs no optimisation for a single atom, so "
+        "the primary opt filed for it is a placeholder (its convergence is "
+        "whatever ARC reports for the species). The atom's real calculations "
+        "are its sp and freq. See https://github.com/TCKDB/TCKDB/issues/600."
+    )
+    logger.warning("TCKDB %s: %s", _W_MONATOMIC_PLACEHOLDER_OPT, message)
+    if warnings is not None:
+        warnings.append({
+            "code": _W_MONATOMIC_PLACEHOLDER_OPT,
+            "message": message,
+            "field": field,
+            "context": {"source": "tckdb_arc_self_check",
+                        "action": "placeholder_primary_opt_filed",
+                        "element": symbols[0]},
+        })
+
+
+_W_IRC_ENDPOINT_SPECIES_SKIPPED = "irc_endpoint_species_skipped"
+
+
+def _irc_endpoint_skip(
+    output_doc: Mapping[str, Any], species_record: Mapping[str, Any],
+) -> "UploadOutcome | None":
+    """A ``skipped`` outcome when the species is one of ARC's IRC endpoints.
+
+    ARC writes no marker for them in ``output.yml`` (BRIDGE_ROADMAP B6), but
+    ``restart.yml`` records ``irc_label`` (see ``RestartInfo.irc_endpoint_ts``).
+    Without ``restart.yml`` or the species' entry there is no answer and the
+    species is treated as an ordinary one. These species only ever get an opt
+    (ARC skips their freq and sp and computes no thermo), and are not wells.
+    """
+    restart = _restart_levels(output_doc)
+    if restart is None:
+        return None
+    ts_labels = {
+        str(r.get("label")) for r in (output_doc.get("transition_states") or [])
+        if isinstance(r, Mapping) and r.get("label")
+    }
+    ts_label = restart.irc_endpoint_ts(species_record.get("label"), ts_labels)
+    if ts_label is None:
+        return None
+    label = species_record.get("label")
+    message = (
+        f"{label!r} is an IRC endpoint of {ts_label!r} (restart.yml irc_label), "
+        "not a stationary species of the run, and ARC's output.yml does not mark "
+        "such species (BRIDGE_ROADMAP B6), so it is not uploaded."
+    )
+    logger.warning("TCKDB %s: %s", _W_IRC_ENDPOINT_SPECIES_SKIPPED, message)
+    return UploadOutcome(
+        status="skipped", payload_path=None, sidecar_path=None, idempotency_key="",
+        warnings=[{
+            "code": _W_IRC_ENDPOINT_SPECIES_SKIPPED,
+            "message": message,
+            "field": "species",
+            "context": {"source": "tckdb_arc_self_check",
+                        "action": "species_skipped", "ts_label": ts_label},
+        }],
+    )
 
 
 class TCKDBAdapter:
@@ -957,6 +1094,9 @@ class TCKDBAdapter:
 
         build_warnings: list[dict[str, Any]] = []
         output_doc = self._with_adaptive_levels(output_doc, build_warnings)
+        skipped = _irc_endpoint_skip(output_doc, species_record)
+        if skipped is not None:
+            return skipped
         payload = self._build_payload(
             output_doc=output_doc,
             species_record=species_record,
@@ -1127,6 +1267,9 @@ class TCKDBAdapter:
 
         build_warnings: list[dict[str, Any]] = []
         output_doc = self._with_adaptive_levels(output_doc, build_warnings)
+        skipped = _irc_endpoint_skip(output_doc, species_record)
+        if skipped is not None:
+            return skipped
         payload = self._build_computed_species_payload(
             output_doc=output_doc,
             species_record=species_record,
@@ -1181,6 +1324,7 @@ class TCKDBAdapter:
         optional thermo block. Producer-side omissions (a thermo block the
         producer self-check refuses) are appended to ``warnings``.
         """
+        _warn_monatomic_placeholder_opt(species_record, warnings, field="conformers[0].primary_calculation")
         # Scans ARC exported that could not be built, key -> reason; the
         # statmech builder drops torsion links to them (``torsion_scan_not_built``).
         unbuilt_scans: dict[str, str] = {}
@@ -1214,7 +1358,8 @@ class TCKDBAdapter:
 
         omitted_bacs: list[str] = []
         applied_corrections = _build_applied_energy_corrections(
-            _correction_records_from_record(species_record),
+            _correction_records_from_record(
+                species_record, legacy_1_0=_is_output_schema_1_0(output_doc)),
             source_calculation_key=(
                 _CALC_KEY_SP if _CALC_KEY_SP in included_keys else None
             ),
@@ -1258,6 +1403,7 @@ class TCKDBAdapter:
             element_symbols=_species_element_symbols(species_record),
             energy_level_unattributable=_energy_level_unattributable(output_doc, energy_level),
             energy_declaration=energy_declaration,
+            legacy_cp_data=_is_output_schema_1_0(output_doc),
         )
         # This route has no bundle-level analysis_software_release (the
         # reaction bundle does, and its thermo/statmech inherit it), so the
@@ -1469,6 +1615,7 @@ class TCKDBAdapter:
                     conformer_xyz_text=conformer_xyz_text,
                     calc_role=_CALC_KEY_SCAN,
                     source_constraints=scan_entry.get("constraints"),
+                    output_log_path=scan_entry.get("source_log"),
                     level_job_type=_scan_job_type(output_doc, species_record, scan_key),
                 ))
                 included.append(scan_key)
@@ -1644,8 +1791,14 @@ class TCKDBAdapter:
         include_artifacts: bool = True,
         level_job_type: str | None = None,
         level_override: Mapping[str, Any] | None = None,
+        output_log_path: str | None = None,
     ) -> dict[str, Any]:
         """Build one CalculationInBundle dict.
+
+        ``output_log_path`` names the calculation's own output log when it is
+        not a field of the species record (a rotor scan's
+        ``rotor_scans[].source_log``); it is used for the ``output_log``
+        artifact of a ``scan`` calculation and ignored for other roles.
 
         ``calc_key`` is the bundle-local identity (e.g. ``"opt"`` for a
         single-species bundle, ``"r0_opt"`` for a reaction bundle).
@@ -1729,7 +1882,8 @@ class TCKDBAdapter:
         # ``_ts_calc_to_standalone``). We skip the work entirely rather
         # than build-then-drop.
         if include_artifacts:
-            artifacts = self._inline_artifacts_for_calc(species_record, calc_role=role)
+            artifacts = self._inline_artifacts_for_calc(
+                species_record, calc_role=role, output_log_path=output_log_path)
             # Schema defaults `artifacts: []`. Emit explicitly only when we
             # have bytes to send (or when artifact upload is enabled and we
             # want to signal "no log available" with an empty list); omit
@@ -1918,6 +2072,7 @@ class TCKDBAdapter:
         species_record: Mapping[str, Any],
         *,
         calc_role: str,
+        output_log_path: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return the inline artifact list for one calc within a bundle.
 
@@ -1950,8 +2105,13 @@ class TCKDBAdapter:
             # ``output_log`` for ``ts_guess`` is method-dispatched
             # (NEB → ``neb_log``, GSM → ``gsm_log``); other (kind, role)
             # combinations look up in the static map.
+            path_value = None
             if kind == "output_log":
                 record_field = _resolve_log_field(calc_role, species_record)
+                if calc_role == _CALC_KEY_SCAN:
+                    # A scan's log is per rotor, so it is carried on the scan
+                    # entry rather than in a species-record field.
+                    path_value = output_log_path
             else:
                 record_field = field_map.get(calc_role)
             artifact = self._read_inline_artifact(
@@ -1959,6 +2119,7 @@ class TCKDBAdapter:
                 calc_role=calc_role,
                 kind=kind,
                 record_field=record_field,
+                path_value=path_value,
             )
             if artifact is not None:
                 artifacts.append(artifact)
@@ -1971,17 +2132,22 @@ class TCKDBAdapter:
         calc_role: str,
         kind: str,
         record_field: str | None,
+        path_value: str | None = None,
     ) -> dict[str, Any] | None:
         """Resolve, read, hash, and base64-encode one artifact for the bundle.
+
+        ``path_value`` supplies the path directly (a rotor scan's log);
+        otherwise it is read from ``record_field`` on the species record.
 
         Returns ``None`` (with a debug or warning log) on any of:
         unknown calc_key, missing/null record path, file not on disk, or
         file exceeding ``max_size_mb``. Otherwise returns the
         ``ArtifactIn``-shaped dict ready to drop into ``calc.artifacts``.
         """
-        if record_field is None:
-            return None
-        path_value = species_record.get(record_field)
+        if path_value is None:
+            if record_field is None:
+                return None
+            path_value = species_record.get(record_field)
         if not path_value:
             return None
         resolved = self._resolve_local_path(path_value)
@@ -2406,45 +2572,45 @@ class TCKDBAdapter:
         # local keys the species blocks declared.
         actor_calc_keys: dict[str, dict[str, str]] = {}
 
-        for i, label in enumerate(reactant_labels):
-            actor_key = _local_key_for_actor("r", i, label)
-            calc_prefix = _calc_prefix_for_actor("r", i)
-            record = species_index.get(label)
-            if record is None:
-                raise ValueError(
-                    f"reaction {reaction_record.get('label')!r}: reactant "
-                    f"label {label!r} not found in output_doc.species."
+        # One species block per distinct ARC species label. A species that
+        # appears on both sides (degenerate H2 + H <=> H + H2) or twice on
+        # one side (H + H <=> H2) is declared once and *referenced* from
+        # every slot: ComputedReactionUploadRequest allows the same key in
+        # reactant_keys / product_keys (the schema's own example is
+        # ``reactant_keys: ["h", "h"]``) and the server resolves
+        # participants by position. Re-declaring it would deposit the
+        # species' calculations, conformer observation and thermo twice.
+        # The first slot to see a label names the block (r0_H2), so
+        # non-degenerate reactions keep their existing keys.
+        key_by_label: dict[str, str] = {}
+        for side, prefix, labels, keys_out in (
+            ("reactant", "r", reactant_labels, reactant_keys),
+            ("product", "p", product_labels, product_keys),
+        ):
+            for i, label in enumerate(labels):
+                existing_key = key_by_label.get(label)
+                if existing_key is not None:
+                    keys_out.append(existing_key)
+                    continue
+                actor_key = _local_key_for_actor(prefix, i, label)
+                calc_prefix = _calc_prefix_for_actor(prefix, i)
+                record = species_index.get(label)
+                if record is None:
+                    raise ValueError(
+                        f"reaction {reaction_record.get('label')!r}: {side} "
+                        f"label {label!r} not found in output_doc.species."
+                    )
+                block, calc_keys = self._build_reaction_species_block(
+                    output_doc=output_doc,
+                    species_record=record,
+                    actor_key=actor_key,
+                    calc_prefix=calc_prefix,
+                    warnings=warnings,
                 )
-            block, calc_keys = self._build_reaction_species_block(
-                output_doc=output_doc,
-                species_record=record,
-                actor_key=actor_key,
-                calc_prefix=calc_prefix,
-                warnings=warnings,
-            )
-            species_blocks.append(block)
-            reactant_keys.append(actor_key)
-            actor_calc_keys[actor_key] = calc_keys
-
-        for j, label in enumerate(product_labels):
-            actor_key = _local_key_for_actor("p", j, label)
-            calc_prefix = _calc_prefix_for_actor("p", j)
-            record = species_index.get(label)
-            if record is None:
-                raise ValueError(
-                    f"reaction {reaction_record.get('label')!r}: product "
-                    f"label {label!r} not found in output_doc.species."
-                )
-            block, calc_keys = self._build_reaction_species_block(
-                output_doc=output_doc,
-                species_record=record,
-                actor_key=actor_key,
-                calc_prefix=calc_prefix,
-                warnings=warnings,
-            )
-            species_blocks.append(block)
-            product_keys.append(actor_key)
-            actor_calc_keys[actor_key] = calc_keys
+                species_blocks.append(block)
+                keys_out.append(actor_key)
+                key_by_label[label] = actor_key
+                actor_calc_keys[actor_key] = calc_keys
 
         # TS block (inline). Optional — a reaction with no TS still
         # carries kinetics but server-side it's a thinner record.
@@ -2493,15 +2659,9 @@ class TCKDBAdapter:
             "reactant_keys": reactant_keys,
             "product_keys": product_keys,
         }
-        # Emit ``reversible`` only when the producer set it explicitly.
-        # ARCReaction has no first-class ``reversible`` attribute yet,
-        # so this is normally ``None`` and we fall back to the schema's
-        # default of True. The pass-through is here so a future ARC
-        # change that sets ``reversible`` on the reaction (e.g., from an
-        # RMG import) lands on the wire without a second adapter edit.
-        reversible = reaction_record.get("reversible")
-        if reversible is not None:
-            bundle["reversible"] = bool(reversible)
+        # ``reversible`` is omitted, so the schema's default (True) applies:
+        # ARC's output.yml reaction record has no ``reversible`` key
+        # (arc/output.py::_rxn_to_dict), and the adapter does not read one.
         if ts_block is not None:
             bundle["transition_state"] = ts_block
         if kinetics_blocks:
@@ -2562,6 +2722,9 @@ class TCKDBAdapter:
         It only contains the roles whose calculation actually made it
         into the bundle.
         """
+        _warn_monatomic_placeholder_opt(
+            species_record, warnings,
+            field=f"species[{actor_key}].conformers[0].calculation")
         conformer_xyz_text = _require_xyz_text(species_record)
         opt_key = f"{calc_prefix}_{_CALC_KEY_OPT}"
         opt_coarse_key = f"{calc_prefix}_{_CALC_KEY_OPT_COARSE}"
@@ -2716,6 +2879,7 @@ class TCKDBAdapter:
                     tckdb_origin=None,
                     conformer_xyz_text=conformer_xyz_text,
                     source_constraints=scan_entry.get("constraints"),
+                    output_log_path=scan_entry.get("source_log"),
                     level_job_type=_scan_job_type(
                         output_doc, species_record, original_scan_key),
                 )
@@ -2741,6 +2905,11 @@ class TCKDBAdapter:
             ],
             "calculations": additional,
         }
+        # ``ConformerIn.label`` (computed-reaction) is the same optional
+        # conformer label the computed-species route already sends.
+        conformer_label = species_record.get("label")
+        if conformer_label:
+            species_block["conformers"][0]["label"] = str(conformer_label)[:64]
         energy_level = (
             _thermo_energy_level(output_doc, species_record)
             if isinstance(species_record.get("thermo"), Mapping) else None
@@ -2763,6 +2932,7 @@ class TCKDBAdapter:
             element_symbols=_species_element_symbols(species_record),
             energy_level_unattributable=_energy_level_unattributable(output_doc, energy_level),
             energy_declaration=energy_declaration,
+            legacy_cp_data=_is_output_schema_1_0(output_doc),
         )
         if thermo_block is not None:
             species_block["thermo"] = thermo_block
@@ -2775,7 +2945,8 @@ class TCKDBAdapter:
         # cross-species reference.
         omitted_bacs: list[str] = []
         applied_corrections = _build_applied_energy_corrections(
-            _correction_records_from_record(species_record),
+            _correction_records_from_record(
+                species_record, legacy_1_0=_is_output_schema_1_0(output_doc)),
             source_calculation_key=calc_keys.get(_CALC_KEY_SP),
             warnings=warnings,
             warning_field=f"species[{actor_key}].applied_energy_corrections",
@@ -3195,6 +3366,7 @@ class TCKDBAdapter:
                     tckdb_origin=None,
                     conformer_xyz_text=conformer_xyz_text,
                     source_constraints=scan_entry.get("constraints"),
+                    output_log_path=scan_entry.get("source_log"),
                     include_artifacts=include_artifacts,
                     level_job_type=_scan_job_type(output_doc, ts_record, scan_key),
                 )
@@ -3249,7 +3421,8 @@ class TCKDBAdapter:
         # keys (r0_sp / p1_sp) belong to other species and a cross-owner
         # reference would 422.
         applied_corrections = _build_applied_energy_corrections(
-            _correction_records_from_record(ts_record),
+            _correction_records_from_record(
+                ts_record, legacy_1_0=_is_output_schema_1_0(output_doc)),
             source_calculation_key=calc_keys.get(_CALC_KEY_SP),
             warnings=warnings,
             warning_field="transition_state.applied_energy_corrections",
@@ -3517,10 +3690,9 @@ class TCKDBAdapter:
         loud failure the computed-reaction path uses — so a TS is never
         uploaded with an incomplete reaction description.
 
-        ``reversible`` is required by the schema (no default): ARC has no
-        first-class per-reaction ``reversible`` attribute yet, so this
-        falls back to True (the same default the computed-reaction schema
-        applies) unless the record carries an explicit value. Kept by
+        ``reversible`` is required by the schema (no default): ARC's
+        output.yml has no per-reaction ``reversible`` key, so this sends True
+        (the same default the computed-reaction schema applies). Kept by
         maintainer decision (adapter 0.6.0): refusing would block every
         standalone TS upload, since ARC never states it. TCKDB issue
         https://github.com/TCKDB/TCKDB/issues/583 asks the transition-state
@@ -3553,9 +3725,8 @@ class TCKDBAdapter:
                 )
             return participants
 
-        reversible = reaction_record.get("reversible")
         reaction: dict[str, Any] = {
-            "reversible": bool(reversible) if reversible is not None else True,
+            "reversible": True,
             "reactants": _participants(reactant_labels, "reactant"),
             "products": _participants(product_labels, "product"),
         }
@@ -3640,21 +3811,9 @@ class TCKDBAdapter:
             # any is_ts=True record before this point.
             "species_entry_kind": "minimum",
         }
-        # Optional ``unmapped_smiles``: TCKDB carries a free-form
-        # alternate identity string for cases where the primary
-        # ``smiles`` is something special (e.g. an atom-mapped form
-        # from a future producer path). The adapter only forwards an
-        # explicit value the producer surfaces — it never derives by
-        # string manipulation, never strips atom maps from arbitrary
-        # strings. Omitted when missing/empty/whitespace, and also
-        # omitted when identical to the main ``smiles`` (the schema
-        # would accept the duplicate but storing the same string twice
-        # adds no identity information).
-        unmapped_raw = record.get("unmapped_smiles")
-        if isinstance(unmapped_raw, str):
-            unmapped_text = unmapped_raw.strip()
-            if unmapped_text and unmapped_text != smiles_text:
-                entry["unmapped_smiles"] = unmapped_text
+        # ``unmapped_smiles`` is not sent for a species: ARC's output.yml
+        # writes no such key, and the adapter never derives one by string
+        # manipulation of the SMILES (atom-map stripping is not attempted).
         return entry
 
     def _build_payload(
@@ -4056,13 +4215,7 @@ class TCKDBAdapter:
         # Keep the server's structured scientific findings independently of
         # the response summary so callers need not inspect an HTTP envelope.
         # They follow any producer-side warnings recorded at write time.
-        response_warnings = (
-            response_data.get("warnings", []) if isinstance(response_data, dict) else []
-        )
-        server_warnings = (
-            [dict(item) for item in response_warnings if isinstance(item, dict)]
-            if isinstance(response_warnings, list) else []
-        )
+        server_warnings = _server_warnings(response_data)
         for warning in server_warnings:
             logger.warning("TCKDB upload warning: %s", warning)
         sc.warnings = [*sc.warnings, *server_warnings]
@@ -4382,19 +4535,9 @@ class TCKDBAdapter:
             self._ensure_ready(client)
             for item in prepared:
                 _attach_preflight(item.written.sidecar, self._preflight_metadata)
-            batch_results = client.upload_artifacts(
-                prepared,
-                idempotency_key_prefix=idempotency_key_prefix,
-                batch_by_calculation=True,
+            batch_results = self._post_artifact_batches(
+                client, prepared, idempotency_key_prefix=idempotency_key_prefix,
             )
-        except (AttributeError, TypeError) as exc:
-            _close_quietly(client, "after artifact upload failure")
-            msg = (
-                "Installed tckdb-client does not support "
-                "batch_by_calculation artifact uploads. Upgrade tckdb-client "
-                "to the version expected by this ARC branch."
-            )
-            return self._record_artifact_batch_failure(prepared, msg, exc)
         except Exception as exc:
             _close_quietly(client, "after artifact upload failure")
             return self._record_artifact_batch_failure(prepared, str(exc), exc)
@@ -4402,17 +4545,26 @@ class TCKDBAdapter:
             _close_quietly(client, "after artifact upload success")
 
         batch_summary = _summarize_artifact_batch_results(batch_results)
+        result_by_calculation = {result.calculation_id: result for result in batch_results}
         outcomes: list[ArtifactUploadOutcome] = []
         for item in prepared:
             sc = item.written.sidecar
+            # Each item takes the transport metadata and findings of the
+            # response to *its own* calculation's batch.
+            result = result_by_calculation[item.calculation_id]
+            response = result.response
+            response_data = getattr(response, "data", None)
             sc.status = "uploaded"
             sc.uploaded_at = _utcnow_iso()
-            sc.response_status_code = _artifact_batch_status_code(batch_results)
+            sc.response_status_code = getattr(response, "status_code", None)
             sc.response_body = _summarize_response_body(batch_summary)
             sc.public_refs = _extract_tckdb_public_refs(batch_summary)
-            for result in _artifact_batch_result_items(batch_results):
-                _append_request_id(sc, "artifact_upload", result)
-            sc.idempotency_replayed = _artifact_batch_replayed(batch_results)
+            server_warnings = _server_warnings(response_data)
+            for warning in server_warnings:
+                logger.warning("TCKDB artifact upload warning: %s", warning)
+            sc.warnings = [*sc.warnings, *server_warnings]
+            _append_request_id(sc, "artifact_upload", result)
+            sc.idempotency_replayed = bool(getattr(response, "idempotency_replayed", False))
             sc.last_error = None
             self._writer.update_artifact_sidecar(item.written.sidecar_path, sc)
             logger.info(
@@ -4426,8 +4578,49 @@ class TCKDBAdapter:
                 calculation_id=sc.calculation_id,
                 kind=sc.kind,
                 response=sc.response_body,
+                warnings=list(sc.warnings),
             ))
         return outcomes
+
+    @staticmethod
+    def _post_artifact_batches(
+        client: Any,
+        prepared: list[_PreparedArtifactUpload],
+        *,
+        idempotency_key_prefix: str,
+    ) -> list[_ArtifactBatchResult]:
+        """POST one artifact batch per calculation through ``client.request_json``.
+
+        ``TCKDBClient.upload_artifacts`` (tckdb-client 0.93 to 0.95) does the
+        same grouping and POSTs, but returns only each response's parsed body,
+        dropping the status code, the request-id and replay headers. The public
+        ``request_json`` returns the full ``TCKDBResponse``, so the batches are
+        composed here and sent through it, the way every bundle upload already
+        is. The bodies and idempotency keys follow ``upload_artifacts`` exactly
+        (one POST per ``calculation_id`` in first-seen order, key
+        ``<prefix>:<first calculation key>:artifact-batch``), so a replay of a
+        batch stored by an earlier adapter still matches.
+        """
+        from tckdb_client.idempotency import validate_idempotency_key
+
+        results: list[_ArtifactBatchResult] = []
+        for calculation_id, group, body in _artifact_batch_bodies(prepared):
+            first_key = group[0].calculation_key if group else str(calculation_id)
+            response = client.request_json(
+                "POST",
+                ARTIFACTS_ENDPOINT_TEMPLATE.format(calculation_id=calculation_id),
+                json=body,
+                idempotency_key=validate_idempotency_key(
+                    f"{idempotency_key_prefix}:{first_key}:artifact-batch"
+                ),
+            )
+            results.append(_ArtifactBatchResult(
+                calculation_id=calculation_id,
+                calculation_keys=tuple(item.calculation_key for item in group),
+                artifact_count=len(group),
+                response=response,
+            ))
+        return results
 
     def _record_artifact_batch_failure(
         self,
@@ -4541,36 +4734,42 @@ def _summarize_artifact_batch_results(batch_results: Any) -> Any:
     return batch_results
 
 
-def _artifact_batch_status_code(batch_results: Any) -> int | None:
-    if not isinstance(batch_results, list):
-        return getattr(batch_results, "status_code", None)
-    for result in batch_results:
-        response = getattr(result, "response", None)
-        status_code = getattr(result, "status_code", None)
-        if status_code is None:
-            status_code = getattr(response, "status_code", None)
-        if status_code is not None:
-            return status_code
-    return None
+def _artifact_batch_bodies(
+    prepared: list[_PreparedArtifactUpload],
+) -> list[tuple[int, list[_PreparedArtifactUpload], dict[str, Any]]]:
+    """Group a plan by calculation and build each ``ArtifactsUploadRequest`` body.
+
+    Groups keep first-seen order; each artifact carries its kind, filename,
+    base64 content and the declared sha256 and byte count.
+    """
+    groups: dict[int, list[_PreparedArtifactUpload]] = {}
+    for item in prepared:
+        groups.setdefault(item.calculation_id, []).append(item)
+    return [
+        (
+            calculation_id,
+            group,
+            {"artifacts": [
+                {
+                    "kind": item.kind,
+                    "filename": item.filename,
+                    "content_base64": base64.b64encode(item.path.read_bytes()).decode("ascii"),
+                    "sha256": item.sha256,
+                    "bytes": item.bytes,
+                }
+                for item in group
+            ]},
+        )
+        for calculation_id, group in groups.items()
+    ]
 
 
-def _artifact_batch_replayed(batch_results: Any) -> bool | None:
-    if not isinstance(batch_results, list):
-        replayed = getattr(batch_results, "idempotency_replayed", None)
-        return bool(replayed) if replayed is not None else None
-    replay_values: list[bool] = []
-    for result in batch_results:
-        response = getattr(result, "response", None)
-        replayed = getattr(result, "idempotency_replayed", None)
-        if replayed is None:
-            replayed = getattr(response, "idempotency_replayed", None)
-        if replayed is not None:
-            replay_values.append(bool(replayed))
-    return any(replay_values) if replay_values else None
-
-
-def _artifact_batch_result_items(batch_results: Any) -> list[Any]:
-    return batch_results if isinstance(batch_results, list) else [batch_results]
+def _server_warnings(response_data: Any) -> list[dict[str, Any]]:
+    """The structured ``warnings`` list of an upload response body."""
+    warnings = response_data.get("warnings", []) if isinstance(response_data, dict) else []
+    if not isinstance(warnings, list):
+        return []
+    return [dict(item) for item in warnings if isinstance(item, dict)]
 
 
 def _headers_from(obj: Any) -> Mapping[str, str] | None:
@@ -4745,14 +4944,15 @@ def _reused_origin(reused_from_calc_type: str) -> dict[str, Any]:
 
 # Per-calc-role mapping to the ``<role>_final_settings`` field name on the
 # species record. Roles not in the map have no current producer-side
-# source of final-settings data; the helper returns ``None`` for them
-# and the adapter omits ``parameters_json.final_settings`` from the calc.
+# source of final-settings data (ARC's ``output.yml`` writes only the opt,
+# coarse-opt, freq and sp fields; there is no ``irc_final_settings``); the
+# helper returns ``None`` for them and the adapter omits
+# ``parameters_json.final_settings`` from the calc.
 _FINAL_SETTINGS_FIELD_BY_CALC_ROLE: Mapping[str, str] = {
     "opt": "opt_final_settings",
     "opt_coarse": "coarse_opt_final_settings",
     "freq": "freq_final_settings",
     "sp": "sp_final_settings",
-    "irc": "irc_final_settings",
 }
 
 
@@ -5410,10 +5610,10 @@ def _freq_result_payload(record: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _sp_result_payload(record: Mapping[str, Any]) -> dict[str, Any] | None:
-    # ``sp_energy_hartree`` is ARC's record key; ``electronic_energy_hartree``
-    # is the TCKDB-side field name (some records may carry it directly).
-    record_key = "sp_energy_hartree" if record.get("sp_energy_hartree") is not None \
-        else "electronic_energy_hartree"
+    # ``sp_energy_hartree`` is the only key ARC's output.yml writes for a
+    # species' single-point energy; the TCKDB-side name
+    # ``electronic_energy_hartree`` is not an ARC key and is not read.
+    record_key = "sp_energy_hartree"
     energy = record.get(record_key)
     if energy is None:
         return None
@@ -5468,9 +5668,6 @@ def _spin_diagnostic_payload(record: Mapping[str, Any]) -> dict[str, Any] | None
         if value < 0:
             continue
         payload[optional] = value
-    note = block.get("note")
-    if isinstance(note, str) and note:
-        payload["note"] = note
     return payload
 
 
@@ -6515,6 +6712,7 @@ def _build_thermo_block(
     element_symbols: Any = None,
     energy_level_unattributable: bool = False,
     energy_declaration: tuple[str, Mapping[str, Any]] | None = None,
+    legacy_cp_data: bool = False,
 ) -> dict[str, Any] | None:
     """Build a ``target_model``-shaped thermo dict from ``output.yml`` thermo data.
 
@@ -6607,7 +6805,9 @@ def _build_thermo_block(
     if nasa is not None:
         block["nasa"] = nasa
 
-    points = _build_thermo_points(thermo_record.get("thermo_points") or thermo_record.get("cp_data"))
+    points = _build_thermo_points(
+        thermo_record.get("thermo_points")
+        or (thermo_record.get("cp_data") if legacy_cp_data else None))
     if points:
         block["points"] = points
 
@@ -8482,42 +8682,15 @@ def _build_kinetics_block(
     if tunneling_label:
         block["tunneling_model"] = tunneling_label
 
-    # Reaction-path degeneracy. TCKDB's ``BundleKineticsIn.degeneracy``
-    # is ``float | None`` with ``gt=0``; the server rejects zero and
-    # negative values. We mirror that constraint locally so the
-    # producer never ships a value the server would 422 — and so the
-    # absence of degeneracy on the wire stays distinct from a "zero"
-    # value (the schema treats missing as NULL, *not* 1.0, and the
-    # producer must too: don't default to 1, don't infer from
-    # stoichiometry). Non-numeric / None / non-positive → omit.
+    # ``degeneracy`` is not sent: ARC's kinetics record has no degeneracy key
+    # (arc/output.py::_rxn_to_dict), TCKDB reads a missing value as NULL, and
+    # the producer must not default it to 1 or infer it from stoichiometry.
     #
-    # This field is guarded, not unreachable: ``output.yml``'s JSON
-    # schema (output_yml_schema.json) sets ``additionalProperties: false``
-    # on ``kinetics``, but that schema is never enforced at runtime — the
-    # adapter ``yaml.load``s the file directly (``_vendor.py``) and only
-    # checks ``schema_version`` (``evidence.py::validate_output_schema``),
-    # and ARC itself doesn't validate against it on write either (it's
-    # referenced only from ``arc/output_schema_test.py``). A hand-written,
-    # older, or third-party ``output.yml`` can carry a ``degeneracy`` key
-    # this branch reads. ``degeneracy > 0`` rejects NaN and -inf (both
-    # compare False against 0), but ``float('inf') > 0`` is True, so
-    # ``math.isfinite`` closes that one remaining hole.
-    degeneracy = _coerce_optional_float(kinetics_record.get("degeneracy"))
-    if degeneracy is not None and math.isfinite(degeneracy) and degeneracy > 0:
-        block["degeneracy"] = degeneracy
-
-    # Free-form note. Prefer an explicit ``note`` on the kinetics record
-    # (future-proofing) over the reaction-level
-    # ``long_kinetic_description`` ARC carries today. Both routes feed
-    # the same TCKDB ``KineticsCreate.note`` slot.
-    note_candidates = (
-        kinetics_record.get("note"),
-        long_kinetic_description,
-    )
-    for candidate in note_candidates:
-        if isinstance(candidate, str) and candidate.strip():
-            block["note"] = candidate.strip()
-            break
+    # Free-form note: the reaction-level ``long_kinetic_description`` is what
+    # ARC writes (there is no ``kinetics.note``); it feeds TCKDB's
+    # ``KineticsCreate.note`` slot.
+    if isinstance(long_kinetic_description, str) and long_kinetic_description.strip():
+        block["note"] = long_kinetic_description.strip()
 
     sources = _build_kinetics_source_calculations(
         reactant_keys=reactant_keys,
@@ -8554,14 +8727,20 @@ def _build_kinetics_source_calculations(
     source link is preferable to a fabricated one.
     """
     links: list[dict[str, Any]] = []
-    for actor_key in reactant_keys:
-        sp_key = actor_calc_keys.get(actor_key, {}).get(_CALC_KEY_SP)
-        if sp_key:
-            links.append({"calculation_key": sp_key, "role": _KINETICS_ROLE_REACTANT_ENERGY})
-    for actor_key in product_keys:
-        sp_key = actor_calc_keys.get(actor_key, {}).get(_CALC_KEY_SP)
-        if sp_key:
-            links.append({"calculation_key": sp_key, "role": _KINETICS_ROLE_PRODUCT_ENERGY})
+    # A species may fill several slots (H + H, or one species on both
+    # sides); its sp is linked once per role because the schema refuses a
+    # repeated (calculation_key, role) pair. Reactant and product roles
+    # differ, so a species on both sides keeps both links.
+    seen_links: set[tuple[str, str]] = set()
+    for role, keys in (
+        (_KINETICS_ROLE_REACTANT_ENERGY, reactant_keys),
+        (_KINETICS_ROLE_PRODUCT_ENERGY, product_keys),
+    ):
+        for actor_key in keys:
+            sp_key = actor_calc_keys.get(actor_key, {}).get(_CALC_KEY_SP)
+            if sp_key and (sp_key, role) not in seen_links:
+                seen_links.add((sp_key, role))
+                links.append({"calculation_key": sp_key, "role": role})
     ts_sp = ts_calc_keys.get(_CALC_KEY_SP)
     if ts_sp:
         links.append({"calculation_key": ts_sp, "role": _KINETICS_ROLE_TS_ENERGY})

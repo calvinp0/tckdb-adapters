@@ -31,6 +31,8 @@ and schema versions; their percentages are not current coverage measurements.
 - **Adapter 0.6.6:** roadmap A10, A11 and A13 (see "Energy level, SCF stability and
   conformer statmech (adapter 0.6.6)" below). The computed-species and reaction golden
   hashes change only by the declared `energy_level_of_theory`, proved by strip-and-restore.
+- **Adapter 0.6.7:** roadmap A6, A8, A15, A16, A17 (via restart.yml) and A19. See
+  [Reaction species, atoms and artifacts (adapter 0.6.7)](#reaction-species-atoms-and-artifacts-adapter-067).
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
@@ -115,7 +117,7 @@ here: transport, `wavefunction_stability` and `ts_checks`.
 | Deposit rights | Requires explicit depositor information/configuration; no license or consent is inferred. Silent at upload, but a dataset release refuses records without a rights basis | D2 |
 | Whether Arkane applied atom-energy corrections | Exported by ARC output.yml 1.2 (`thermo.atom_corrections_applied` / `atom_corrections_level`, PR #1059 branch `feature_export_atom_corrections_applied`, not yet on ARC main) and consumed by the adapter. Pre-1.2 output (`db0934d5`, ARC main today) cannot say so. An `energy_corrections[]` `atom_energy` row does **not** prove the corrections were applied: it is keyed on the energy level alone, and Arkane's model chemistry can be `None` when the freq level is not found and no `freq_scale_factor` was given (`arc/statmech/arkane.py:1138-1157`). The row's absence proves nothing either. At `0913124`, such output gets only the ±2.0e4 kJ/mol magnitude guard, which misses H, H2, He and Li. **Decided (option d); committed as `84b1b05` on `fix_unverifiable_enthalpy_without_flags` (adapter 0.5.0), pending merge:** when the flag is absent, strip the enthalpy for light species by composition, taken from the species' xyz or else its `formula` (hydrogen-only species, He, He2, HeH, the Li atom), when the header `arkane_level_of_theory` does not match the energy level, and when either level sets a separate `dispersion` or `solvation_method`. Composition uses the xyz, else the record's `formula`, because ARC 1.0 writes `xyz: null` for monoatomics. The header `arkane_level_of_theory` is written by ARC `db0934d5` as a required, nullable level dict; a null header, or one without a method, is not checked. These interim rules are superseded by output.yml 1.2's switch (ARC PR #1059) for new runs. Residual risk: a stand-in with the same method and basis that differs by a year refit or by ARC's fuzzy key match. In the golden corpus only H2 loses its enthalpy. The `feature_tckdb_integration_gate` test `test_golden_species_calculations_thermo_and_hessian` asserts golden H2's `formation_298k` and NASA fit, so whichever branch merges second must update it | A2, B1, D1 |
 | Per-species energy level | ARC must export the level each species' energies were computed at. Under `adaptive_levels` every calculation is attributed to the run-level level (**wrong data**), and the adapter's comparison with `atom_corrections_level` can pass wrongly. `output.yml` does not record adaptive runs, but the adapter can detect them from the project's `input.yml` (which the CLI already reads) or `restart.yml` (ARC saves `adaptive_levels` there, `arc/main.py:439`). The interim (adapter 0.6.4) attributes exactly from `restart.yml` where it can and otherwise refuses or strips affected calculations, until ARC exports per-species levels | A2b, B2 |
-| Atom-energy matching ignores dispersion and solvation | ARC bug. Its Arkane key match and `data/AEC.yml` lookup ignore `dispersion` and `solvation_method`: B3LYP + GD3BJ gets plain B3LYP atom energies and SMD gets gas-phase ones, yet `atom_corrections_level` equals `sp_level`. Fix: make the match refuse, or warn, when the level has dispersion or solvation the matched key lacks. ARC `1977e53b` warns at run time. Until the match is fixed, the adapter strips enthalpy when either level sets either field (`enthalpy_atom_corrections_level_unverifiable`) | B1 |
+| Atom-energy matching ignores dispersion and solvation | **Fixed in PR #1059 (`16eec7af`), pending merge.** ARC's Arkane key match and `data/AEC.yml` lookup used to ignore `dispersion` and `solvation_method`: B3LYP + GD3BJ got plain B3LYP atom energies and SMD got gas-phase ones, yet `atom_corrections_level` equalled `sp_level`. The PR (rebased onto ARC `d9f47ab9`) fixes the match. Until it merges, and for output from an ARC without it, the adapter strips enthalpy when either level sets either field (`enthalpy_atom_corrections_level_unverifiable`). Follow-up, not done: for 1.2 output from an ARC that has the fix, that rule could be relaxed | B1 |
 | TCKDB commits writes after the 201 is sent (`backend/app/api/deps.py:123-150`, T4) | TCKDB. Until fixed, a 201 does not prove persistence, so the adapter's sidecar and idempotency record can describe a deposit that does not exist | C1 |
 
 TCKDB workflow checks extend beyond schema validation: source calculations
@@ -476,3 +478,35 @@ with a GSM guess and of species uploads whose screened-conformer or level attrib
 Upgrading changes the payload hash, and so the idempotency key, of every conformer upload
 with statmech or corrections, and of computed-species and reaction uploads with thermo or
 statmech.
+## Reaction species, atoms and artifacts (adapter 0.6.7)
+
+- **A species on both sides is deposited once (A16).** The computed-reaction bundle
+  declares one species block per distinct ARC species label; a repeated label (`H + H`, or
+  `H2 + H <=> H + H2`) repeats the key in `reactant_keys` / `product_keys`. The
+  kinetics links `reactant_energy` / `product_energy` point at that species' sp, once per
+  role. The golden `computed_reaction` hash changes; restoring the duplicate blocks
+  reproduces the previous one.
+- **Single-atom species keep a placeholder opt and warn (A6).** ARC never optimises an
+  atom, but the computed-species and computed-reaction routes need an opt primary, so the
+  atom is uploaded with that opt (`converged` as ARC reports it) and
+  `monatomic_species_primary_opt_placeholder` is reported, pending TCKDB #600 (an sp
+  primary). No route refuses atoms.
+- **Artifact batch keeps the response (A8).** Each calculation's artifact batch is sent
+  through `request_json`, so the artifact sidecar and `ArtifactUploadOutcome` carry the
+  server's `warnings`, the status code, the `artifact_upload` request id and the replay
+  flag.
+- **Smaller gaps (A15).** A scan calculation carries its log (`rotor_scans[].source_log`);
+  a reaction conformer carries `label`. Skipped: Melius tables (needs an ARC export),
+  `climbing_image_index` (ARC does not state it), bundle-level ESS release (needs a rule),
+  thermo-level corrections (low value), scan constraints (the contract puts a scan's
+  frozen coordinates at calculation level).
+- **Dead reads removed (A19).** `unmapped_smiles`, `reactions[].reversible`,
+  `kinetics.degeneracy`, `kinetics.note`, `sp_spin_diagnostic.note`, `irc_final_settings`,
+  `thermo.cp_data` and the `electronic_energy_hartree` sp fallback are not exported by ARC
+  and are no longer read.
+- **IRC endpoint species are skipped via restart.yml (A17).** ARC writes `irc_label` to
+  `restart.yml` only. A species whose restart entry is not a TS and names an `output.yml`
+  TS (which lists it back) is not uploaded, with `irc_endpoint_species_skipped`. Without
+  `restart.yml` nothing is skipped. B6 (an `output.yml` marker) is still wanted.
+- **1.0 documents (A19).** `thermo.cp_data` and the atom-energy `parameter_table` are
+  still read when `schema_version` is `1.0`.

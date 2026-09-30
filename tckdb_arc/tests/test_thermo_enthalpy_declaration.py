@@ -284,11 +284,12 @@ def _corpus_payloads(tmp_path):
 def test_shared_rule_accepts_every_thermo_block_in_the_corpus(tmp_path):
     payloads = _corpus_payloads(tmp_path)
     blocks = [block for _model, payload in payloads for block in _thermo_blocks(payload)]
-    # Non-vacuous: golden H2 (species + both reaction slots), the synthetic
-    # species, and all four synthetic reaction participants.
-    assert len(blocks) == 8
+    # Non-vacuous: golden H2 (species bundle + its one reaction block: the
+    # degenerate reaction declares H2 once, BRIDGE_ROADMAP A16), the
+    # synthetic species, and all four synthetic reaction participants.
+    assert len(blocks) == 7
     # Golden H2 (schema 1.1, no atom-correction flag) is a light species
-    # whose enthalpy cannot be verified: its three blocks keep only S/Cp.
+    # whose enthalpy cannot be verified: its two blocks keep only S/Cp.
     declared = [block for block in blocks if "h298_kj_mol" in block]
     assert len(declared) == 5
     for block in blocks:

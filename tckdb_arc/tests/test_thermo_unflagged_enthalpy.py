@@ -404,6 +404,9 @@ def test_reaction_route_reads_the_header_level_and_composition(tmp_path):
     doc = _reaction_doc_1_1()
     doc["species"][0]["xyz"] = XYZ["H"]
     payload, warnings = _submit_reaction(tmp_path / "light", doc)
+    # The atom also draws the placeholder-opt warning (A6); this test is about thermo.
+    assert [w["code"] for w in warnings].count("monatomic_species_primary_opt_placeholder") == 1
+    warnings = [w for w in warnings if w["code"] != "monatomic_species_primary_opt_placeholder"]
     light = [sp for sp in payload["species"] if "h298_kj_mol" not in sp["thermo"]]
     assert light and len(light) < len(payload["species"])
     assert {w["code"] for w in warnings} == {"enthalpy_formation_unverifiable_light_species"}

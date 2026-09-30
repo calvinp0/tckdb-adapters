@@ -279,3 +279,24 @@ class TestSweepAccountsFreqNImagContradictionAsFailed(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_sweep_itself_does_not_skip_irc_named_species():
+    """The sweep never guesses from a label; skipping is the adapter's, from restart.yml.
+
+    See ``test_irc_endpoint_species.py``. ``output.yml`` carries no marker
+    (BRIDGE_ROADMAP B6), so the sweep passes every converged species on.
+    """
+    from tckdb_arc.sweep import _run_species_sweep
+
+    doc = {'species': [
+        {'label': 'CH4', 'converged': True},
+        {'label': 'IRC_TS0_1', 'converged': True},
+        {'label': 'IRC_TS0_2', 'converged': True},
+    ]}
+    stub = _StubAdapter()
+    config = _StubConfig()
+    config.upload_mode = 'computed_species'
+    with redirect_stdout(io.StringIO()):
+        _run_species_sweep(adapter=stub, output_doc=doc, tckdb_config=config)
+    assert stub.species_calls == ['CH4', 'IRC_TS0_1', 'IRC_TS0_2']

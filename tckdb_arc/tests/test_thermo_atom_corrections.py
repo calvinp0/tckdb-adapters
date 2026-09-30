@@ -57,7 +57,9 @@ def _submit(tmp_path, doc, record):
     payload = json.loads(outcome.payload_path.read_text())
     contract_validate(ComputedSpeciesUploadRequest, payload)
     assert json.loads(outcome.sidecar_path.read_text())["warnings"] == outcome.warnings
-    return payload.get("thermo"), outcome.warnings
+    # An atom also draws the placeholder-opt warning (A6); these tests are about thermo.
+    return payload.get("thermo"), [
+        w for w in outcome.warnings if w["code"] != "monatomic_species_primary_opt_placeholder"]
 
 
 def _expected_stripped(thermo):

@@ -82,6 +82,30 @@ class RestartInfo:
         value = entry.get("adaptive_lot_n_heavy") if entry else None
         return value if isinstance(value, int) and not isinstance(value, bool) else None
 
+    def irc_endpoint_ts(self, label: Any, ts_labels: Any) -> str | None:
+        """The TS label ``label`` is an IRC endpoint of, per ``restart.yml``; else ``None``.
+
+        ARC creates each endpoint as ``ARCSpecies(label='IRC_<ts>_<n>',
+        irc_label=<ts>)`` and appends the endpoint's label to the TS's own
+        ``irc_label`` (``ARC:arc/scheduler.py:4167-4178``); ``irc_label`` reaches
+        ``restart.yml`` through ``ARCSpecies.as_dict``. A species is an endpoint
+        when its entry is not a TS, names a TS in ``ts_labels`` (output.yml's
+        transition states), and, when that TS's entry is present, appears in the
+        TS's ``irc_label``. No entry means no answer.
+        """
+        entry = self.species.get(label) if isinstance(label, str) else None
+        if not entry or entry.get("is_ts") is not False:
+            return None
+        ts = entry.get("irc_label")
+        if not isinstance(ts, str) or not ts or ts not in ts_labels:
+            return None
+        ts_entry = self.species.get(ts)
+        if ts_entry is not None:
+            endpoints = ts_entry.get("irc_label")
+            if not isinstance(endpoints, str) or label not in endpoints.split():
+                return None
+        return ts
+
     def scan_job_type(self, label: Any, rotor_index: int) -> str | None:
         """``'scan'`` (ESS) or ``'directed_scan'`` for a species' rotor; ``None`` if unknown."""
         entry = self.species.get(label) if isinstance(label, str) else None
@@ -224,6 +248,8 @@ def read_restart_info(project_directory: str | Path | None) -> RestartInfo | Non
         species[record["label"]] = {
             "adaptive_lot_n_heavy": record.get("adaptive_lot_n_heavy"),
             "scan_types": scan_types,
+            "irc_label": record.get("irc_label"),
+            "is_ts": record.get("is_ts"),
         }
     job_types = document.get("job_types")
     return RestartInfo(
