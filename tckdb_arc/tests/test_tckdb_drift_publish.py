@@ -14,17 +14,10 @@ from pathlib import Path
 
 import pytest
 
+import _drift_fixture as fx
+
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools" / "tckdb_drift_publish.sh"
-TRACKED = [
-    "tools/tckdb_drift.py",
-    "tckdb_arc/pyproject.toml",
-    "tckdb_arc/tests/_contract.py",
-    "tckdb_arc/README.md",
-    "tckdb-pin.toml",
-    "README.md",
-    ".github/workflows/ci.yml",
-]
 BRANCH = "chore/tckdb-drift-schemas-0.58-client-0.98"
 SHA_1 = "1" * 40
 SHA_2 = "2" * 40
@@ -64,7 +57,8 @@ class Env:
         self.bin = bin_dir
         seed = tmp / "seed"
         seed.mkdir()
-        for rel in TRACKED + ["tools/tckdb_drift_publish.sh"]:
+        fx.build(seed)  # synthetic pins (0.54 / 0.95): the suite never depends on the real ones
+        for rel in ("tools/tckdb_drift.py", "tools/tckdb_drift_publish.sh"):  # code under test, not data
             dest = seed / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(REPO / rel, dest)

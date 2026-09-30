@@ -3,10 +3,11 @@
 import importlib.util
 import json
 import re
-import shutil
 from pathlib import Path
 
 import pytest
+
+import _drift_fixture as fx
 
 REPO = Path(__file__).resolve().parents[2]
 _spec = importlib.util.spec_from_file_location("tckdb_drift", REPO / "tools" / "tckdb_drift.py")
@@ -14,17 +15,14 @@ drift = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(drift)
 
 NEW_SHA = "74aae9a2" + "0" * 32
-FILES = [drift.ADAPTER_PYPROJECT, drift.CONTRACT_PY, drift.PIN_FILE, drift.README, drift.PKG_README]
-UNTOUCHED = [".github/workflows/ci.yml", ".github/workflows/tckdb-drift.yml", "CLAUDE.md"]
+FILES = fx.BUMPED
+UNTOUCHED = [rel for rel in fx.FILES if rel not in fx.BUMPED]
 
 
 @pytest.fixture
 def root(tmp_path):
-    for rel in FILES + UNTOUCHED:
-        dest = tmp_path / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(REPO / rel, dest)
-    return tmp_path
+    """A synthetic repo with fixed pins (0.54 / 0.95); never the checkout's real files."""
+    return fx.build(tmp_path)
 
 
 def _snapshot(root):
@@ -38,10 +36,10 @@ def test_line_and_bound_helpers():
         drift.parse_version("0.58")
 
 
-def test_read_pins_from_the_real_files(root):
-    pins = drift.read_pins(root)
-    assert set(pins) == {"schemas_line", "client_line", "sha"}
-    assert drift.SHA_RE.match(pins["sha"])
+def test_read_pins_from_the_synthetic_repo(root):
+    assert drift.read_pins(root) == {
+        "schemas_line": fx.PINNED_SCHEMAS, "client_line": fx.PINNED_CLIENT, "sha": fx.OLD_SHA,
+    }
 
 
 @pytest.mark.parametrize("spec", ["tckdb-schemas>=0.54", "tckdb-schemas>=0.54,<0.56", "tckdb-schemas==0.54.0"])
@@ -51,7 +49,8 @@ def test_pinned_line_refuses_anything_but_one_minor_line(spec):
         drift.pinned_line(text, "tckdb-schemas")
 
 
-def test_pin_file_parses_and_ci_yml_has_no_literal_sha():
+# The one deliberate read of the real files: a structural check that holds for any pin value.
+def test_real_pin_file_parses_and_no_workflow_has_a_literal_sha():
     pin = drift.read_pin_file((REPO / drift.PIN_FILE).read_text())
     assert drift.SHA_RE.match(pin["sha"])
     assert pin["repo"].startswith("https://") and pin["schemas_subdir"] and pin["client_subdir"]
