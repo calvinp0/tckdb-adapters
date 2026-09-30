@@ -1,0 +1,8 @@
+# The TCKDB source revision CI installs tckdb-schemas and tckdb-client from.
+# Read by .github/workflows/ci.yml and moved by tools/tckdb_drift.py --bump (kept
+# out of the workflow files so an automated bump never edits .github/workflows/).
+[tckdb]
+repo = "https://github.com/calvinp0/tckdbv2.git"
+sha = "fd447fa09c11d12ab88a18a1d2d5ccaf09cf5a0e"
+schemas_subdir = "schemas/python/tckdb-schemas"
+client_subdir = "clients/python"

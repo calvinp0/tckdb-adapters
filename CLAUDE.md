@@ -36,6 +36,9 @@ If the source does not state a convention the contract requires (for example
 `enthalpy_reference_kind` or `reference_pressure_bar`), refuse to build that block
 rather than filling a plausible default.
 
+A scheduled workflow proposes these bumps as a PR or issue; see "Tracking TCKDB
+releases" in `README.md`. The reading rule above still applies to that PR.
+
 ## ARC-specific decisions
 
 - **Pre-1.2 enthalpies (maintainer-approved option (d)).** Without output.yml 1.2's
