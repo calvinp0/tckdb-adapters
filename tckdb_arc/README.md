@@ -123,6 +123,16 @@ verdict, never `irc_converged`; the rationale is `ARC ts_checks['IRC'] = <verdic
 verdict sends none. Upgrading changes the payload hash, and so the idempotency key, of TS
 uploads with a GSM guess and of species uploads whose level attribution changed.
 
+Adapter 0.6.6: thermo and statmech declare `energy_level_of_theory`, the linked sp's own
+level with its `spin_treatment` (TCKDB hashes it into the level identity, so ARC's bare level
+would be refused); it is omitted when ARC's energy level is not that calculation's (a composite
+method, an unattributable adaptive level). ARC's `wavefunction_stability` becomes the
+primary opt's `scf_stability`, the job ARC's analysis tests (not when ARC re-optimized at a
+derived reference; `stable` only for ARC's `stable` verdict; never on freq/sp). Conformer mode now also sends `statmech` and
+`applied_energy_corrections`, built by the computed-species builders, with ARC's rejected
+rotors as torsions carrying `invalidated_reason`; it sends no rotor scan (the route accepts
+only freq and sp as additional calculations). See `docs/contract/CURRENT_ARC_INTEGRATION.md`.
+
 Adapter 0.6.5 targets tckdb-schemas 0.54 (no wire model change; only the
 bundles dry-run route, which the adapter never calls, gained rules) and states
 Arkane's full atom-energy convention in the `atom_energy` scheme note: the atomic

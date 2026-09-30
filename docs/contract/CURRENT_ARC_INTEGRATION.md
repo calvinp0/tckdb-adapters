@@ -28,6 +28,9 @@ and schema versions; their percentages are not current coverage measurements.
   (#577), and `dry_run_contended` (503) is a new code on that route only. The
   adapter never calls the bundles routes. The atom-energy scheme note is
   corrected to state Arkane's full formula.
+- **Adapter 0.6.6:** roadmap A10, A11 and A13 (see "Energy level, SCF stability and
+  conformer statmech (adapter 0.6.6)" below). The computed-species and reaction golden
+  hashes change only by the declared `energy_level_of_theory`, proved by strip-and-restore.
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
@@ -66,7 +69,8 @@ and `git diff --check` pass.
 | Thermo enthalpy basis and standard-state pressure | `enthalpy_reference_kind`, `reference_pressure_bar` on every thermo block | Enthalpy content (H298, NASA, point H or G) declares `formation_298k` (TCKDB #520). Entropy content (S298, NASA, point S or G) carries `thermo.standard_state_pressure_pa` / 1e5 when ARC recorded it as a number within 0.5–2 bar; otherwise, since adapter 0.6.0, `reference_pressure_bar` is omitted (never defaulted; TCKDB #529 and the 0.52 producer contract) and `thermo_reference_pressure_not_stated` is reported with action `reference_pressure_omitted` (0.5.0 filled RMG's 1 atm, 1.01325 bar). Cp-only blocks carry neither. Enthalpy is declared only when it is a formation enthalpy; for pre-1.2 output without the correction flags this is the maintainer-approved option (d) interpretation (Arkane's corrected H298 is a formation enthalpy by construction; the magnitude, header-level, dispersion/solvation and light-species checks below are heuristics that make an uncorrected enthalpy very unlikely to pass, not proof): from output.yml 1.2, `thermo.atom_corrections_applied` must be true and `thermo.atom_corrections_level` must equal the energy level (`composite_method`, else `sp_level`; effective method with dispersion folded in, and basis, normalized by a port of ARC `1977e53b`'s `_normalized_method_and_basis`, checked by a parity test against that ARC), and neither level may set `dispersion` or `solvation_method`. Non-finite values and enthalpies beyond ±2.0e4 kJ/mol always fail. For a null or absent switch (output.yml 1.0/1.1, YAML-loaded species) adapter 0.5.0 then also strips when the header `arkane_level_of_theory` is not the energy level (`enthalpy_atom_corrections_level_mismatch`; a null header or one without a method is not checked), when the energy level or that header sets `dispersion` or `solvation_method` (`enthalpy_atom_corrections_level_unverifiable`), and when the species' composition (xyz, else the record's `formula`, since ARC 1.0 writes `xyz: null` for monoatomics) puts its raw total energy (H 0.50, He 2.90, Li 7.43 hartree per atom) inside the magnitude bound (`enthalpy_formation_unverifiable_light_species`: hydrogen-only species, He, He2, HeH, the Li atom), in that order; their context adds `atom_corrections_applied: not_recorded` and `corrections_level_source`. These interim rules are superseded by output.yml 1.2's switch (ARC PR #1059) for new runs. Failing enthalpy (H298, NASA, point H and G) is stripped, S298 and point S/Cp kept, with warning action `thermo_enthalpy_omitted` (`thermo_omitted` if nothing remains). A block the shared `tckdb_schemas.enthalpy_reference.enthalpy_reference_error` rule refuses is omitted whole. All refusals are producer warnings in the sidecar and outcome |
 | Correction scheme metadata | Applied energy corrections | Removed obsolete `scheme.version`; nonempty legacy version preserved in scheme note |
 | `ess_software` / `ess_versions` | Calculation software release | Observed software used per job; no borrowing another program's version. Since 0.6.1 the banner is split into `version` and `revision` exactly as TCKDB's shared `SoftwareReleaseRef` would (roadmap A7) |
-| `scf_reference` | Level-of-theory spin treatment | Actual freq/SP references retained only on their respective jobs |
+| `scf_reference` | Level-of-theory spin treatment | Actual freq/SP references retained only on their respective jobs. Since 0.6.6 the declared thermo/statmech energy level carries the sp's `spin_treatment` too (A11) |
+| `wavefunction_stability` | Calculation `scf_stability` | Since 0.6.6, on the primary opt, the job ARC's analysis tests (A10) |
 | `freq_hessian_method` | Typed calculation parameter | Known analytic/finite-difference method retained |
 | `rotor_scans` | Scan calculations | TS reaction-bundle mapping added; explicit scan provenance required rather than assuming optimization method |
 | Arrhenius `A`, `T0_k`, `n` | Modified Arrhenius prefactor | Normalize `a = A / T0_k**n`; rate-equivalence tests span temperatures and exponents |
@@ -104,7 +108,7 @@ here: transport, `wavefunction_stability` and `ts_checks`.
 | TS statmech has no bundle field | Extend TCKDB `BundleTransitionStateIn` before wiring ARC's TS statmech (still true at 0.51) | C8 |
 | Full tunneling and partition-function provenance | TCKDB `BundleKineticsIn` still lacks `tunneling_application`, `interpretation_assignments` and `network_kinetics_ref` at 0.51. The existing tunneling label is not replayable evidence | C8 |
 | Transport | **Corrected.** ARC has no working transport path to export: no `onedmin` job adapter is registered, the processor's transport step is a `# todo` (`arc/processor.py:237`), and `transport_data` is not persisted. TCKDB *does* have homes at 0.51 (`conformer_upload.transport` and `POST /uploads/transport`). So this is new ARC capability first; the adapter follows | B11 |
-| `wavefunction_stability` | **Corrected:** ARC exports it (`arc/output.py:1841-1842`, tested). The gap is the adapter's: map it to `scf_stability` on the sp/freq calculation whose reference was tested, never on the final opt | A10 |
+| `wavefunction_stability` | **Corrected:** ARC exports it (`arc/output.py:1841-1842`, tested). **Done in 0.6.6:** mapped to `scf_stability` on the primary opt (the wavefunction ARC tests), never on freq/sp | A10 |
 | `ts_checks` | **Corrected:** ARC exports the verdicts since output 1.1 (`arc/output.py:1986`, `:2779-2805`). The gaps are in the adapter and TCKDB. The adapter maps `ts_checks.IRC` (never `irc_converged`, which only means the IRC jobs finished) to `validation_evidence` (done in 0.6.4). TCKDB accepts only `kind: 'irc'`, so the E0, e_elect, freq and NMD verdicts have no home. No real-ARC fixture sets `ts_checks.IRC` | A14, C7 |
 | Execution environment and effective calculation settings | ARC export is incomplete, especially beyond coarse/fine optimization settings. Do not invent runtime metadata from requested input settings | B11 |
 | NEB portable evidence, alternative TS guesses, multidimensional rotor scans | Producer evidence/export work; the current portable sidecar covers Hessian/IRC/GSM, successful 1D rotors and the chosen guess | B11 |
@@ -215,8 +219,8 @@ provenance warnings for data output.yml already held. Status by roadmap item:
   `revision` ← `arkane_git_commit`, each when recorded), as the reaction bundle's
   `analysis_software_release` does (and now also with the version). Arkane is
   post-processing software; it never goes on a calculation, which TCKDB refuses
-  (`calculation_software_is_workflow_tool`). Conformer mode emits no statmech
-  (roadmap A2 row 7), so it has no slot to fill.
+  (`calculation_software_is_workflow_tool`). Conformer mode names Arkane on its
+  statmech too since 0.6.6 (A13); it has no thermo slot.
 - **C10 / MR-2, done for the program name.** Each applied correction's
   `scheme.software` is `{name: <software>}` parsed from the record's
   `matched_arkane_key` (Arkane's database entry, e.g.
@@ -416,3 +420,59 @@ which job types the adaptive levels name.
 
 Upgrading changes the payload hash, and so the idempotency key, of every TS upload
 with a GSM guess and of species uploads whose screened-conformer or level attribution changed.
+
+## Energy level, SCF stability and conformer statmech (adapter 0.6.6)
+
+- **A11, the declared energy level.** Thermo and statmech (computed-species, reaction
+  participants and, for statmech, conformer mode) send `energy_level_of_theory`. It is the
+  `level_of_theory` of the linked energy calculation exactly as the adapter sends it (the
+  sp, or the opt when no sp was built), `spin_treatment` included, and only when ARC's
+  stated energy level (`_thermo_energy_level`: composite method, else `sp_level`, else
+  `opt_level`, attributed per species under `adaptive_levels`) is that calculation's level
+  apart from `spin_treatment`. TCKDB hashes every `LevelOfTheoryRef` field into the level
+  identity, with a NULL `spin_treatment` folding to `unknown`
+  (`calculation_resolution._level_of_theory_hash`), and checks a declared level against the
+  linked sp, else the linked opts (`calculation_levels.assert_role_consistency`); the adapter
+  stamps `spin_treatment` on the freq/sp level from `scf_reference`, so declaring ARC's bare
+  level would be `thermo_/statmech_energy_level_contradiction`, a 422. Nothing is declared
+  for a composite method (no composite calculation is sent), when the level ARC states is
+  another than the linked calculation's, when an adaptive run left it unattributable, or when
+  no sp/opt is linked. The unit tests replay the backend's identity hash and link rule
+  (`tests/_backend_level_rules.py`, checked against the backend when `TCKDB_BACKEND_PATH`
+  names its `backend/`); the live gate has a case, not run here.
+- **A10, `scf_stability`.** ARC runs the stability analysis once per species, from the
+  optimization job: at the opt level, on the converged geometry, with the opt's own orbitals so
+  its SCF reproduces the wavefunction under test (`arc/scheduler.py::run_stability_job`). The
+  block therefore goes on the primary opt calculation, and only there: a freq or sp job runs
+  its own SCF, which may land on another solution, so the analysis is not an observation of
+  theirs (nor of a coarse opt, scan or IRC). It is not sent when ARC's record shows the opt
+  sent is not the tested one: `scf_reference.source == 'derived'` (ARC re-optimized at another
+  reference) or `measured_on_ts_guess`. `stable` needs ARC's `stable` verdict;
+  `internal_instability`, `external_instability` and `unattributed_instability` are
+  `unstable` (the first two with `instability_type` `internal` / `external`); `unknown` (an
+  analysis ran, no readable verdict) is `inconclusive`. ARC's `lowest_eigenvalue` is sent when
+  numeric. Not sent: an instability count (ARC exports none), `stabilized` for ORCA's
+  `followed_to_stable` (the tested wavefunction stayed unstable; unconfirmed with ARC) and
+  `reoptimized_wavefunction`.
+- **A13, conformer mode.** `ConformerUploadRequest` now carries `statmech` and
+  `applied_energy_corrections`, built by the computed-species route's builders: Hessian-gated
+  `statmech_treatment` and torsion `treatment_kind`, BAC omission, `atom_params`, the Arkane
+  release on the statmech and the schemes, the declared energy level, and ARC as the
+  statmech's `workflow_tool_release` (the bundle names ARC once at its root; this request has
+  no such slot). The calculations get local keys `opt`, `freq`, `sp`, which the statmech links
+  and the corrections' `source_calculation_key` name. Rotor scans are not sent: the route
+  accepts only `freq` and `sp` as additional calculations, so each torsion drops its scan link
+  (`torsion_scan_not_built`). The conformer route's `StatmechTorsionIn` refuses a torsion
+  without dihedral coordinates, so a treated rotor without usable `atom_indices` is not sent
+  (`torsion_not_sent`); the bundle routes, which accept one, now report it (`torsion_without_coordinates`). ARC's `statmech.rejected_torsions` (`success is False` rotors only)
+  become torsions with `invalidated_reason` (ARC's text verbatim, or "ARC rejected this rotor
+  and recorded no reason" for an empty one), the coordinates, `dimension`, ARC's `rotor_index`
+  in `note`, and a `torsion_index` after the treated rotors'; no treatment or symmetry number
+  (ARC states none), and a rejected rotor without usable atoms is not sent
+  (`rejected_torsion_not_sent`). Only conformer mode has a home for them (the bundle torsion
+  models have no `invalidated_reason`), and a rejected rotor never counts toward
+  `statmech_treatment`. There is no thermo slot on this route.
+
+Upgrading changes the payload hash, and so the idempotency key, of every conformer upload
+with statmech or corrections, and of computed-species and reaction uploads with thermo or
+statmech.

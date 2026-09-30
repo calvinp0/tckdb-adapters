@@ -37,6 +37,7 @@ from tckdb_schemas.fragments.calculation import (
     OptResultPayload,
     SPResultPayload,
 )
+from tckdb_schemas.workflows.conformer_upload import ConformerUploadStatmechPayload
 from tckdb_schemas.workflows.computed_species_upload import (
     StatmechInBundle,
     StatmechTorsionInBundle,
@@ -121,6 +122,9 @@ def _statmech_output_doc():
     return doc
 
 
+_ENERGY_LEVEL = {"method": "wb97xd", "basis": "def2-tzvp"}
+
+
 class TestDeclaredFieldSetsAreSubsetsOfRealModels(unittest.TestCase):
     """Static check: the adapter's own allow-lists never claim more than
     the real, currently-installed TCKDB schema actually accepts.
@@ -153,6 +157,12 @@ class TestDeclaredFieldSetsAreSubsetsOfRealModels(unittest.TestCase):
         self.assertLessEqual(
             _STATMECH_FIELDS_BY_TARGET["BundleStatmechIn"],
             set(BundleStatmechIn.model_fields),
+        )
+
+    def test_statmech_conformer_allowlist_subset_of_ConformerUploadStatmechPayload(self):
+        self.assertLessEqual(
+            _STATMECH_FIELDS_BY_TARGET["ConformerUploadStatmechPayload"],
+            set(ConformerUploadStatmechPayload.model_fields),
         )
 
 
@@ -205,6 +215,7 @@ class TestBuilderOutputValidatesAgainstItsOwnTargetModel(unittest.TestCase):
             workflow_tool_release=None,
             target_model=target_model,
             freq_hessian_available=True,
+            energy_declaration=("sp", _ENERGY_LEVEL),
         )
 
     def test_statmech_builder_for_species_root_validates_as_StatmechInBundle(self):
@@ -223,11 +234,19 @@ class TestBuilderOutputValidatesAgainstItsOwnTargetModel(unittest.TestCase):
             workflow_tool_release=None,
             target_model="BundleStatmechIn",
             freq_hessian_available=True,
+            energy_declaration=("sp", _ENERGY_LEVEL),
         )
         self.assertIsNotNone(block)
         for field in _STATMECH_FIELDS_BY_TARGET["BundleStatmechIn"]:
             self.assertIn(field, block, f"fixture should exercise {field!r}")
         contract_validate(BundleStatmechIn, block)  # must not raise
+
+    def test_statmech_builder_for_conformer_root_validates_as_ConformerUploadStatmechPayload(self):
+        block = self._species_statmech_block("ConformerUploadStatmechPayload")
+        self.assertIsNotNone(block)
+        for field in _STATMECH_FIELDS_BY_TARGET["ConformerUploadStatmechPayload"]:
+            self.assertIn(field, block, f"fixture should exercise {field!r}")
+        contract_validate(ConformerUploadStatmechPayload, block)  # must not raise
 
 
 class TestCurrentThermoRootParity(unittest.TestCase):

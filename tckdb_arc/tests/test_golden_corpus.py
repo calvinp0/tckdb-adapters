@@ -305,16 +305,62 @@ class TestGoldenCorpus(unittest.TestCase):
         # the TS's calculations (the 0.6.2 payload, kept as a fixture), and the
         # edge on the reaction route's ts_opt, reproduces the previous
         # snapshots checked next, so no other leaf changed.
+        #
+        # computed_species / computed_reaction changed again (transition_state
+        # did not) for adapter 0.6.6: thermo and statmech now declare
+        # ``energy_level_of_theory``, the linked sp's own level. Removing
+        # exactly those declarations (and any calculation ``scf_stability``,
+        # none in this corpus) reproduces the previous snapshots checked next,
+        # so no other leaf changed.
         self.assertEqual(
             {
-                "computed_species": "51313aab968f6693d4feaea32087029fab8aef4135cb72f223dd2957408d48e9",
-                "computed_reaction": "de228c19393b31714c36dbb3321ee2839d883967fd3cc1a4bfb2df116ab54f90",
+                "computed_species": "9e0749f3fe9d6476c63006e029401618edaabce8e14e919f720bd4adc793b908",
+                "computed_reaction": "6a338f5b4473db8f1506662746aa4084be9c092ed0abdc221492c010d74c1d74",
                 "transition_state": "9bc66ae3b6894e9776df427601f8d8377f72c94c50abc4a8042aee092d7bd679",
             },
             {
                 "computed_species": self._canonical_sha256(species),
                 "computed_reaction": self._canonical_sha256(reaction),
                 "transition_state": self._canonical_sha256(transition_state),
+            },
+        )
+
+        def without_energy_level_declarations(payload):
+            stripped = copy.deepcopy(payload)
+            removed = {"declarations": 0, "scf_stability": 0}
+
+            def strip(obj, parent_key=None):
+                if isinstance(obj, dict):
+                    if parent_key in ("thermo", "statmech") and "energy_level_of_theory" in obj:
+                        del obj["energy_level_of_theory"]
+                        removed["declarations"] += 1
+                    if "scf_stability" in obj:
+                        del obj["scf_stability"]
+                        removed["scf_stability"] += 1
+                    for key, value in obj.items():
+                        strip(value, key)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        strip(item, parent_key)
+
+            strip(stripped)
+            return stripped, removed
+
+        species, removed_species = without_energy_level_declarations(species)
+        reaction, removed_reaction = without_energy_level_declarations(reaction)
+        # The corpus species has a thermo block and no statmech; the reaction
+        # participants have thermo blocks.
+        self.assertEqual(removed_species, {"declarations": 1, "scf_stability": 0})
+        self.assertGreaterEqual(removed_reaction["declarations"], 1)
+        self.assertEqual(removed_reaction["scf_stability"], 0)
+        self.assertEqual(
+            {
+                "computed_species": "51313aab968f6693d4feaea32087029fab8aef4135cb72f223dd2957408d48e9",
+                "computed_reaction": "de228c19393b31714c36dbb3321ee2839d883967fd3cc1a4bfb2df116ab54f90",
+            },
+            {
+                "computed_species": self._canonical_sha256(species),
+                "computed_reaction": self._canonical_sha256(reaction),
             },
         )
         removed = json.loads(

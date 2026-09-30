@@ -555,6 +555,27 @@ def test_computed_species_thermo_names_arkane(live_tckdb, tmp_path):
     assert "missing_software_release_provenance" not in _codes(outcome.warnings)
 
 
+@pytest.mark.parametrize("mode", ["computed_species", "conformer"])
+def test_declared_energy_level_agrees_with_the_sp_it_links(live_tckdb, tmp_path, mode):
+    # Adapter 0.6.6 declares thermo/statmech energy_level_of_theory. TCKDB
+    # hashes spin_treatment into a level's identity, and the adapter stamps it
+    # on the sp from scf_reference, so a declaration built from the bare level
+    # would be refused (thermo_/statmech_energy_level_contradiction, 422) and
+    # the upload would not reach "uploaded". Not run offline: it needs the
+    # live backend.
+    project, doc = materialize(tmp_path, "arc_1_2_corrections")
+    record = next(s for s in doc["species"] if s["label"] == "CH4")
+    record["scf_reference"] = {"freq_reference": "restricted", "sp_reference": "restricted"}
+    record["statmech"] = {"external_symmetry": 12, "optical_isomers": 1, "is_linear": False,
+                          "rigid_rotor_kind": "asymmetric_top", "torsions": []}
+    adapter = make_adapter(live_tckdb.url, project, "arc_1_2_corrections", mode)
+    submit = (adapter.submit_computed_species_from_output if mode == "computed_species"
+              else adapter.submit_from_output)
+    outcome = submit(output_doc=doc, species_record=record)
+    _uploaded(live_tckdb, outcome)
+    assert not [c for c in _codes(outcome.warnings) if c and "energy_level" in c]
+
+
 # ---------------------------------------------------------------------------
 # Replay: the whole sweep, twice, per corpus and mode
 # ---------------------------------------------------------------------------
