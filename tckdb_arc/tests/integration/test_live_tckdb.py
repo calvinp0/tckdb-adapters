@@ -237,6 +237,11 @@ def test_golden_species_calculations_thermo_and_hessian(live_tckdb, tmp_path):
         record["label"]: adapter.submit_computed_species_from_output(output_doc=doc, species_record=record)
         for record in doc["species"] if record.get("converged")
     }
+    # The golden H is a single atom: ARC never optimises it, TCKDB needs a
+    # primary opt (issue #600), so the atom is uploaded with a placeholder opt
+    # and this warning (A6).
+    assert "monatomic_species_primary_opt_placeholder" in _codes(outcomes["H"].warnings)
+    _uploaded(live_tckdb, outcomes["H"])
     response = _uploaded(live_tckdb, outcomes["H2"])
     calcs = _species_calcs(response)
     assert set(calcs) == {"opt", "freq", "sp"}
@@ -494,9 +499,6 @@ def test_conformer_mode_artifacts_are_stored_and_replay(live_tckdb, tmp_path):
     assert len(stored) == 2  # the second batch replayed; nothing was added
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "adapter gap: _upload_artifact_batch never copies the artifact response's "
-    "'warnings' into the sidecar"))
 def test_artifact_sidecars_capture_server_warnings(live_tckdb, tmp_path):
     project, *_ = _conformer_with_artifacts(live_tckdb, tmp_path)
     sidecars = [sc for name, sc in read_sidecars(project).items() if ".artifact." in name]
@@ -507,8 +509,9 @@ def test_artifact_sidecars_capture_server_warnings(live_tckdb, tmp_path):
     assert all(sc.get("warnings") for sc in sidecars), [sc.get("warnings") for sc in sidecars]
 
 
-# tckdb-client's (0.93–0.95) upload_artifacts keeps only the response body, so the
-# adapter's status/request-id/replay helpers always read None.
+# tckdb-client's (0.93-0.95) upload_artifacts keeps only the response body, so the
+# adapter (0.6.7) sends each calculation's batch through request_json instead and
+# reads the status, request id and replay header off the full response.
 _TRANSPORT_FIELDS = {  # field -> (sidecar value, is it right)
     "status_code": (lambda sc: sc.get("response_status_code"), lambda v: v in (200, 201)),
     "request_id": (lambda sc: [r.get("operation") for r in sc.get("request_ids") or []],
@@ -517,9 +520,6 @@ _TRANSPORT_FIELDS = {  # field -> (sidecar value, is it right)
 }
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "adapter/client gap: artifact batch results carry only the response body, "
-    "so the sidecar's status code, upload request id and replay flag are lost"))
 @pytest.mark.parametrize("field", sorted(_TRANSPORT_FIELDS))
 def test_artifact_sidecars_capture_transport_metadata(live_tckdb, tmp_path, field):
     # Two uploads, so the second is a replay and the replay flag must be True.

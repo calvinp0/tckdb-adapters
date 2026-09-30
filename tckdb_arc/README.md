@@ -139,6 +139,30 @@ Arkane's full atom-energy convention in the `atom_energy` scheme note: the atomi
 energies are subtracted and each atom's gas-phase formation enthalpy less its
 thermal correction is added.
 
+Adapter 0.6.7:
+
+- A species on both sides of a reaction (or repeated on one side) is deposited once; the
+  computed-reaction bundle repeats its key in `reactant_keys` / `product_keys`, and the
+  kinetics `reactant_energy` / `product_energy` links point at its sp once per role.
+- A single-atom species is uploaded with the placeholder primary opt both routes require
+  and a `monatomic_species_primary_opt_placeholder` warning (ARC runs no optimisation for
+  an atom; TCKDB #600 asks for an sp primary).
+- Each calculation's artifact batch is sent through `TCKDBClient.request_json`, so the
+  artifact sidecar (and `ArtifactUploadOutcome.warnings`) carries the server's warnings,
+  the HTTP status, the request id and the replay flag.
+- A rotor scan calculation carries its log (`rotor_scans[].source_log`) as an
+  `output_log` artifact, and a reaction species' conformer carries `label`.
+- IRC endpoint species (`IRC_<ts>_<n>`) are skipped, with `irc_endpoint_species_skipped`,
+  when the project's `restart.yml` records them (`irc_label`); without `restart.yml` they
+  are uploaded as before.
+- The adapter no longer reads keys ARC does not export (`unmapped_smiles`,
+  `reactions[].reversible`, `kinetics.degeneracy`, `kinetics.note`, `irc_final_settings`,
+  `sp_spin_diagnostic.note`, `electronic_energy_hartree`), except that for output.yml 1.0
+  documents `thermo.cp_data` and the atom-energy `parameter_table` are still read.
+
+Upgrading changes the payload hash, and so the idempotency key, of reaction uploads that
+had a repeated species or gained conformer labels or scan logs.
+
 Thermo blocks with enthalpy content declare `enthalpy_reference_kind:
 formation_298k` (Arkane's H298 and NASA are formation enthalpies at
 298.15 K) only when that holds. Blocks with entropy content carry

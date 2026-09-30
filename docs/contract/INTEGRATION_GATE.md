@@ -143,10 +143,10 @@ Adapter gaps are pinned as strict xfails with `raises=AssertionError`, so
 fixing one makes the gate fail until the marker is removed, and a setup
 failure (which raises `RuntimeError`) fails the test instead of satisfying it:
 
-- artifact-batch sidecars drop the server's warnings;
-- artifact-batch sidecars lose the status code, the upload request ID and the
-  replay flag, because tckdb-client (0.93–0.95) keeps only the response body (one
-  xfail per field);
+- (none of the artifact-batch gaps remain: adapter 0.6.7 sends each batch through
+  `request_json` and records the server's warnings, status code, upload request ID and
+  replay flag, so those four xfails were removed. They have not been run against a live
+  backend.)
 
 
 `test_computed_species_thermo_names_arkane` was such an xfail until adapter

@@ -306,6 +306,22 @@ class TestGoldenCorpus(unittest.TestCase):
         # edge on the reaction route's ts_opt, reproduces the previous
         # snapshots checked next, so no other leaf changed.
         #
+        # computed_reaction changed (computed_species and transition_state
+        # did not) for adapter 0.6.7, for two reasons (A15 and A16). First,
+        # each reaction species' conformer now carries ``label`` (the species
+        # label, as the computed-species route already sends); removing that
+        # one key from every reaction conformer reproduces the intermediate
+        # snapshot checked next. Second (A16): this reaction is
+        # the degenerate ``H2 + H <=> H + H2``, and each side used to declare
+        # its own species blocks, so H2 and H were each deposited twice (two
+        # conformer observations, two sp calculations, two identical thermo
+        # rows). One block per ARC species label is declared now and the
+        # second side references it: species[] is [r0_H2, r1_H] and
+        # product_keys is [r1_H, r0_H2]. Re-declaring the second occurrence
+        # of each (a deep copy of the kept block with its ``r0``/``r1`` key
+        # prefix renamed to ``p1``/``p0``) and pointing product_keys at the
+        # copies reproduces the previous snapshot checked right after.
+        #
         # computed_species / computed_reaction changed again (transition_state
         # did not) for adapter 0.6.6: thermo and statmech now declare
         # ``energy_level_of_theory``, the linked sp's own level. Removing
@@ -315,13 +331,54 @@ class TestGoldenCorpus(unittest.TestCase):
         self.assertEqual(
             {
                 "computed_species": "9e0749f3fe9d6476c63006e029401618edaabce8e14e919f720bd4adc793b908",
-                "computed_reaction": "6a338f5b4473db8f1506662746aa4084be9c092ed0abdc221492c010d74c1d74",
+                "computed_reaction": "a0a566b2dcbbc6d911d5f341f8745d101bc38fff1fa3b8b5211b2abd43e8927d",
                 "transition_state": "9bc66ae3b6894e9776df427601f8d8377f72c94c50abc4a8042aee092d7bd679",
             },
             {
                 "computed_species": self._canonical_sha256(species),
                 "computed_reaction": self._canonical_sha256(reaction),
                 "transition_state": self._canonical_sha256(transition_state),
+            },
+        )
+        def without_reaction_conformer_labels(payload):
+            stripped = copy.deepcopy(payload)
+            for block in stripped["species"]:
+                for conformer in block["conformers"]:
+                    self.assertEqual(conformer.pop("label"), block["key"].split("_", 1)[1])
+            return stripped
+
+        def with_duplicate_species_restored(payload):
+            restored = copy.deepcopy(payload)
+            blocks = {block["key"]: block for block in restored["species"]}
+            self.assertEqual(list(blocks), ["r0_H2", "r1_H"])
+            self.assertEqual(restored["reactant_keys"], ["r0_H2", "r1_H"])
+            self.assertEqual(restored["product_keys"], ["r1_H", "r0_H2"])
+
+            def renamed(obj, old, new):
+                if isinstance(obj, dict):
+                    return {k: renamed(v, old, new) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [renamed(v, old, new) for v in obj]
+                if isinstance(obj, str) and obj.startswith(old + "_"):
+                    return new + obj[len(old):]
+                return obj
+
+            restored["species"] = restored["species"] + [
+                renamed(blocks["r1_H"], "r1", "p0"),
+                renamed(blocks["r0_H2"], "r0", "p1"),
+            ]
+            restored["product_keys"] = ["p0_H", "p1_H2"]
+            return restored
+
+        reaction = with_duplicate_species_restored(without_reaction_conformer_labels(reaction))
+        self.assertEqual(
+            {
+                "computed_species": "9e0749f3fe9d6476c63006e029401618edaabce8e14e919f720bd4adc793b908",
+                "computed_reaction": "6a338f5b4473db8f1506662746aa4084be9c092ed0abdc221492c010d74c1d74",
+            },
+            {
+                "computed_species": self._canonical_sha256(species),
+                "computed_reaction": self._canonical_sha256(reaction),
             },
         )
 

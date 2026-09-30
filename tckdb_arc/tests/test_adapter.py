@@ -7,6 +7,7 @@ These tests do not require a live TCKDB server. The TCKDBClient is
 replaced by a stub via the adapter's ``client_factory`` parameter.
 """
 
+import base64
 import copy
 import json
 import math
@@ -89,27 +90,6 @@ class _StubResponse:
         self.headers = headers or {}
 
 
-class _StubBatchResult:
-    def __init__(
-        self,
-        *,
-        calculation_id,
-        calculation_keys,
-        artifact_count,
-        response,
-        status_code=None,
-        replayed=None,
-        headers=None,
-    ):
-        self.calculation_id = calculation_id
-        self.calculation_keys = tuple(calculation_keys)
-        self.artifact_count = artifact_count
-        self.response = response
-        self.status_code = status_code
-        self.idempotency_replayed = replayed
-        self.headers = headers or {}
-
-
 class _StubClient:
     """Minimal TCKDBClient lookalike for adapter tests."""
 
@@ -149,42 +129,6 @@ class _StubClient:
         if self._raise_exc is not None:
             raise self._raise_exc
         return self._response
-
-    def upload_artifacts(
-        self,
-        plan,
-        *,
-        idempotency_key_prefix=None,
-        batch_by_calculation=False,
-    ):
-        items = list(plan)
-        self.calls.append(dict(
-            method="upload_artifacts",
-            plan=items,
-            idempotency_key_prefix=idempotency_key_prefix,
-            batch_by_calculation=batch_by_calculation,
-        ))
-        if self._raise_exc is not None:
-            raise self._raise_exc
-        data = getattr(self._response, "data", self._response)
-        status_code = getattr(self._response, "status_code", None)
-        replayed = getattr(self._response, "idempotency_replayed", None)
-        headers = getattr(self._response, "headers", None)
-        groups = {}
-        for item in items:
-            groups.setdefault(item.calculation_id, []).append(item)
-        return [
-            _StubBatchResult(
-                calculation_id=calc_id,
-                calculation_keys=[item.calculation_key for item in group],
-                artifact_count=len(group),
-                response=data,
-                status_code=status_code,
-                replayed=replayed,
-                headers=headers,
-            )
-            for calc_id, group in groups.items()
-        ]
 
     def close(self):
         self.closed = True
@@ -865,18 +809,20 @@ class TestArtifactUpload(unittest.TestCase):
         calls = _upload_calls(client)
         self.assertEqual(len(calls), 1)
         call = calls[0]
-        self.assertEqual(call["method"], "upload_artifacts")
-        self.assertTrue(call["batch_by_calculation"])
-        self.assertTrue(call["idempotency_key_prefix"].startswith("arc:proj-A:ethanol:artifact"))
-        # Plan shape passed to tckdb-client.
-        plan = call["plan"]
-        self.assertEqual(len(plan), 1)
-        a = plan[0]
-        self.assertEqual(a.kind, "output_log")
-        self.assertEqual(a.filename, "output.log")
-        self.assertEqual(a.bytes, len(_GAUSSIAN_LOG_HEADER))
-        self.assertEqual(len(a.sha256), 64)
-        self.assertRegex(a.sha256, r"^[0-9a-f]{64}$")
+        # One POST to the calculation's artifacts route, sent through the
+        # client's request_json (which returns status, headers and body).
+        self.assertEqual(call["method"], "POST")
+        self.assertEqual(call["path"], "/calculations/42/artifacts")
+        self.assertTrue(call["idempotency_key"].startswith("arc:proj-A:ethanol:artifact:"))
+        self.assertTrue(call["idempotency_key"].endswith(":artifact-batch"))
+        artifacts = call["json"]["artifacts"]
+        self.assertEqual(len(artifacts), 1)
+        a = artifacts[0]
+        self.assertEqual(a["kind"], "output_log")
+        self.assertEqual(a["filename"], "output.log")
+        self.assertEqual(a["bytes"], len(_GAUSSIAN_LOG_HEADER))
+        self.assertRegex(a["sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(base64.b64decode(a["content_base64"]), _GAUSSIAN_LOG_HEADER)
         # Sidecar
         sc = json.loads(outcome.sidecar_path.read_text())
         self.assertEqual(sc["status"], "uploaded")
@@ -915,7 +861,7 @@ class TestArtifactUpload(unittest.TestCase):
         sc = json.loads(outcome.sidecar_path.read_text())
         self.assertEqual(sc["status"], "failed")
 
-    def test_old_client_without_batch_artifacts_fails_clearly(self):
+    def test_client_without_request_json_fails_recorded_not_raised(self):
         class _OldClient:
             calls = []
             closed = False
@@ -927,9 +873,9 @@ class TestArtifactUpload(unittest.TestCase):
         adapter = self._adapter(_OldClient(), cfg=cfg)
         outcome = self._submit(adapter)
         self.assertEqual(outcome.status, "failed")
-        self.assertIn("does not support batch_by_calculation", outcome.error)
+        self.assertIn("request_json", outcome.error)
         sc = json.loads(outcome.sidecar_path.read_text())
-        self.assertIn("Upgrade tckdb-client", sc["last_error"])
+        self.assertEqual(sc["status"], "failed")
 
     def test_idempotency_replay_recorded(self):
         client = _StubClient(response=_StubResponse(
@@ -960,10 +906,8 @@ class TestArtifactUpload(unittest.TestCase):
         o2 = self._submit(adapter)
         self.assertEqual(o1.idempotency_key, o2.idempotency_key)
         calls = _upload_calls(client)
-        prefixes = {c["idempotency_key_prefix"] for c in calls}
-        self.assertEqual(len(prefixes), 1)
-        plan_keys = {c["plan"][0].calculation_key for c in calls}
-        self.assertEqual(len(plan_keys), 1)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len({c["idempotency_key"] for c in calls}), 1)
 
     def test_idempotency_key_distinct_for_different_calc(self):
         client = _StubClient(response=_StubResponse(
@@ -1004,8 +948,8 @@ class TestArtifactUpload(unittest.TestCase):
         self.assertEqual(outcome.status, "uploaded")
         self.assertEqual(outcome.kind, "input")
         call = _upload_calls(client)[0]
-        self.assertEqual(call["plan"][0].kind, "input")
-        self.assertEqual(call["plan"][0].filename, "input.gjf")
+        self.assertEqual(call["json"]["artifacts"][0]["kind"], "input")
+        self.assertEqual(call["json"]["artifacts"][0]["filename"], "input.gjf")
 
     def test_batch_upload_groups_artifacts_for_one_calculation(self):
         cfg = self._cfg(
@@ -1045,9 +989,8 @@ class TestArtifactUpload(unittest.TestCase):
         calls = _upload_calls(client)
         self.assertEqual(len(calls), 1)
         call = calls[0]
-        self.assertTrue(call["batch_by_calculation"])
-        self.assertEqual([item.kind for item in call["plan"]], ["output_log", "input"])
-        self.assertEqual({item.calculation_id for item in call["plan"]}, {42})
+        self.assertEqual(call["path"], "/calculations/42/artifacts")
+        self.assertEqual([a["kind"] for a in call["json"]["artifacts"]], ["output_log", "input"])
         sidecars = [json.loads(o.sidecar_path.read_text()) for o in outcomes]
         self.assertEqual({sc["kind"] for sc in sidecars}, {"output_log", "input"})
         for sc in sidecars:
@@ -1893,18 +1836,18 @@ class TestComputedSpeciesBundle(unittest.TestCase):
             self.assertNotIn(absent, entry)
 
     # ---------------- unmapped_smiles passthrough on species_entry
-    def test_species_entry_emits_unmapped_smiles_when_distinct(self):
-        # When a producer surfaces an explicit ``unmapped_smiles`` that
-        # differs from the main ``smiles`` (e.g. main is an atom-mapped
-        # form, unmapped is the canonical), forward both. Adapter does
-        # NOT derive — it only passes through what's already present.
+    def test_species_entry_ignores_an_unmapped_smiles_key(self):
+        # ARC's output.yml writes no ``unmapped_smiles`` for a species
+        # (BRIDGE_ROADMAP A19), so the adapter does not read one: a key from a
+        # hand-edited or third-party record is not forwarded and nothing is
+        # derived from ``smiles``.
         record = _full_record()
         record["smiles"] = "[CH3:1][CH2:2][OH:3]"  # mapped
         record["unmapped_smiles"] = "CCO"           # canonical
         _, _, payload = self._submit(record=record)
         entry = payload["species_entry"]
         self.assertEqual(entry["smiles"], "[CH3:1][CH2:2][OH:3]")
-        self.assertEqual(entry["unmapped_smiles"], "CCO")
+        self.assertNotIn("unmapped_smiles", entry)
 
     def test_species_entry_omits_unmapped_smiles_when_absent(self):
         # Default fixture has no unmapped_smiles → field omitted.
@@ -1944,14 +1887,6 @@ class TestComputedSpeciesBundle(unittest.TestCase):
                 _, _, payload = self._submit(record=record)
                 self.assertNotIn("unmapped_smiles", payload["species_entry"])
 
-    def test_species_entry_unmapped_smiles_strips_whitespace(self):
-        # Light normalization only — ``strip()``. No regex, no atom-map
-        # stripping, no canonicalization.
-        record = _full_record()
-        record["smiles"] = "[CH3:1][CH2:2][OH:3]"
-        record["unmapped_smiles"] = "  CCO  "
-        _, _, payload = self._submit(record=record)
-        self.assertEqual(payload["species_entry"]["unmapped_smiles"], "CCO")
 
     # ---------------- 2: primary opt maps correctly
     def test_primary_opt_calculation_maps_correctly(self):
@@ -5973,95 +5908,21 @@ class TestComputedReactionBundle(unittest.TestCase):
         _, _, payload = self._submit(reaction=rxn)
         self.assertNotIn("tunneling_model", payload["kinetics"][0])
 
-    # ---------------- degeneracy: ``BundleKineticsIn.degeneracy``
-    # TCKDB now accepts ``degeneracy: float | None`` with ``gt=0`` on
-    # the bundle-context kinetics schema. The adapter forwards an
-    # explicit positive source value and otherwise omits — never
-    # defaults to 1, never infers from stoichiometry, never re-routes
-    # into note/parameters_json.
-    def test_kinetics_degeneracy_emitted_when_positive(self):
-        rxn = _reaction_record()
-        rxn["kinetics"]["degeneracy"] = 2
-        _, _, payload = self._submit(reaction=rxn)
-        self.assertEqual(payload["kinetics"][0]["degeneracy"], 2.0)
-
-    def test_kinetics_degeneracy_emitted_as_float(self):
-        # Source values may arrive as int, float, or numeric string.
-        # Adapter coerces to float for the wire.
-        for raw in (2, 2.0, "2.0", "2"):
-            with self.subTest(raw=raw):
-                rxn = _reaction_record()
-                rxn["kinetics"]["degeneracy"] = raw
-                _, _, payload = self._submit(reaction=rxn)
-                self.assertEqual(payload["kinetics"][0]["degeneracy"], 2.0)
-                self.assertIsInstance(
-                    payload["kinetics"][0]["degeneracy"], float,
-                )
-
-    def test_kinetics_degeneracy_omitted_when_absent(self):
-        # Default fixture has no degeneracy; payload must too. Schema
-        # treats missing as NULL — *not* a defaulted 1.0.
+    # ---------------- degeneracy: never sent (BRIDGE_ROADMAP A19)
+    # ARC's kinetics record has no degeneracy key (arc/output.py::_rxn_to_dict),
+    # and TCKDB reads a missing value as NULL, not 1. The adapter does not read
+    # a ``degeneracy`` key, so nothing from a hand-edited record reaches the
+    # wire, and nothing is defaulted or inferred from stoichiometry.
+    def test_kinetics_degeneracy_is_never_sent(self):
         _, _, payload = self._submit()
         self.assertNotIn("degeneracy", payload["kinetics"][0])
-
-    def test_kinetics_degeneracy_omitted_when_none_or_empty(self):
-        # Explicit None / empty-string from a hand-edited output.yml
-        # must NOT default to a number — omit and let the server
-        # column stay NULL.
-        for raw in (None, "", "   "):
-            with self.subTest(raw=repr(raw)):
-                rxn = _reaction_record()
-                rxn["kinetics"]["degeneracy"] = raw
-                _, _, payload = self._submit(reaction=rxn)
-                self.assertNotIn("degeneracy", payload["kinetics"][0])
-
-    def test_kinetics_degeneracy_omitted_when_uncoercible(self):
-        # Non-numeric strings / mappings / lists → omit rather than
-        # crash. Don't crash the whole upload over a malformed
-        # qualifier.
-        for raw in ("not-a-number", [2.0], {"value": 2.0}):
+        for raw in (2, 2.0, "2", 0, None, float("inf")):
             with self.subTest(raw=raw):
                 rxn = _reaction_record()
                 rxn["kinetics"]["degeneracy"] = raw
                 _, _, payload = self._submit(reaction=rxn)
                 self.assertNotIn("degeneracy", payload["kinetics"][0])
-
-    def test_kinetics_degeneracy_omitted_when_zero_or_negative(self):
-        # ``BundleKineticsIn.degeneracy`` is ``gt=0`` — zero is
-        # physically meaningless for reaction-path degeneracy and the
-        # server rejects it. Producer must omit instead of shipping.
-        for raw in (0, 0.0, -1, -2.5):
-            with self.subTest(raw=raw):
-                rxn = _reaction_record()
-                rxn["kinetics"]["degeneracy"] = raw
-                _, _, payload = self._submit(reaction=rxn)
-                self.assertNotIn("degeneracy", payload["kinetics"][0])
-
-    def test_kinetics_degeneracy_omitted_when_non_finite(self):
-        # ``output.yml``'s JSON schema forbids unknown ``kinetics`` keys,
-        # but that schema is never enforced at runtime (the adapter
-        # ``yaml.load``s the file directly and only checks
-        # ``schema_version`` — see evidence.py), and ARC doesn't validate
-        # against it on write either. A hand-written/older/third-party
-        # output.yml can carry a non-finite degeneracy. ``> 0`` alone
-        # already rejects NaN and -inf (both compare False against 0);
-        # +inf is the one value that used to slip through ``> 0`` and
-        # would otherwise round-trip into invalid ``Infinity`` JSON.
-        for raw in (float("nan"), float("-inf"), float("inf")):
-            with self.subTest(raw=raw):
-                rxn = _reaction_record()
-                rxn["kinetics"]["degeneracy"] = raw
-                _, _, payload = self._submit(reaction=rxn)
-                self.assertNotIn("degeneracy", payload["kinetics"][0])
-
-    def test_kinetics_degeneracy_validates_against_live_schema(self):
-        # End-to-end: a positive degeneracy lands on the wire and the
-        # full computed-reaction payload satisfies the live validator.
-        rxn = _reaction_record()
-        rxn["kinetics"]["degeneracy"] = 2.0
-        _, _, payload = self._submit(reaction=rxn)
-        self.assertEqual(payload["kinetics"][0]["degeneracy"], 2.0)
-        contract_validate(ComputedReactionUploadRequest, payload)
+                contract_validate(ComputedReactionUploadRequest, payload)
 
     # ---------------- note from long_kinetic_description
     def test_kinetics_note_from_long_kinetic_description(self):
@@ -6075,22 +5936,16 @@ class TestComputedReactionBundle(unittest.TestCase):
             "Refit at CCSD(T)-F12/cc-pVTZ-F12",
         )
 
-    def test_kinetics_note_from_kinetics_record_note(self):
-        # An explicit ``note`` on the kinetics record (future-proofing)
-        # is also accepted and surfaces verbatim.
+    def test_kinetics_record_note_is_not_read(self):
+        # ARC's kinetics record has no ``note`` key (BRIDGE_ROADMAP A19); the
+        # reaction-level ``long_kinetic_description`` is the only source.
         rxn = _reaction_record()
         rxn["kinetics"]["note"] = "Hand-tuned barrier"
         _, _, payload = self._submit(reaction=rxn)
-        self.assertEqual(payload["kinetics"][0]["note"], "Hand-tuned barrier")
-
-    def test_kinetics_note_kinetics_record_wins_over_long_description(self):
-        # If both sources are present, the explicit kinetics-level note
-        # takes precedence — it's the more direct signal.
-        rxn = _reaction_record()
-        rxn["kinetics"]["note"] = "explicit"
-        rxn["long_kinetic_description"] = "fallback"
+        self.assertNotIn("note", payload["kinetics"][0])
+        rxn["long_kinetic_description"] = "from the reaction"
         _, _, payload = self._submit(reaction=rxn)
-        self.assertEqual(payload["kinetics"][0]["note"], "explicit")
+        self.assertEqual(payload["kinetics"][0]["note"], "from the reaction")
 
     def test_kinetics_note_omitted_when_absent(self):
         _, _, payload = self._submit()
@@ -7514,19 +7369,17 @@ class TestComputedReactionProvenanceFields(unittest.TestCase):
 
     # -- reversible ----------------------------------------------------------
 
-    def test_reversible_true_emitted_explicitly(self):
-        rxn = _reaction_record()
-        rxn["reversible"] = True
-        payload = self._submit(reaction=rxn)
-        self.assertIs(payload["reversible"], True)
-        contract_validate(ComputedReactionUploadRequest, payload)
-
-    def test_reversible_false_emitted_explicitly(self):
-        rxn = _reaction_record()
-        rxn["reversible"] = False
-        payload = self._submit(reaction=rxn)
-        self.assertIs(payload["reversible"], False)
-        contract_validate(ComputedReactionUploadRequest, payload)
+    def test_reversible_key_on_the_record_is_not_read(self):
+        # ARC's output.yml reaction record has no ``reversible`` key
+        # (arc/output.py::_rxn_to_dict, BRIDGE_ROADMAP A19), so the adapter
+        # does not read one: the schema default (True) applies whatever a
+        # hand-edited record says.
+        for value in (True, False):
+            rxn = _reaction_record()
+            rxn["reversible"] = value
+            payload = self._submit(reaction=rxn)
+            self.assertNotIn("reversible", payload)
+            contract_validate(ComputedReactionUploadRequest, payload)
 
     def test_reversible_omitted_when_absent(self):
         # ARCReaction has no .reversible attribute today, so the producer
@@ -8896,10 +8749,9 @@ class TestComputedReactionDependencyEdges(unittest.TestCase):
                              f"workflow-narrative substring {needle!r} leaked")
 
     # ---------------- unmapped_smiles on reaction participant species
-    def test_reaction_participant_emits_unmapped_smiles_when_distinct(self):
-        # Same passthrough behavior as standalone species: when a
-        # reactant/product record has unmapped_smiles distinct from
-        # smiles, it lands on the bundle's species[*].species_entry.
+    def test_reaction_participant_ignores_an_unmapped_smiles_key(self):
+        # ARC's output.yml writes no ``unmapped_smiles`` for a species
+        # (BRIDGE_ROADMAP A19), so a key on a participant record is not read.
         doc = _reaction_output_doc()
         target = next(s for s in doc["species"] if s["label"] == "CHO")
         target["smiles"] = "[CH:1]=[O:2]"           # mapped
@@ -8909,8 +8761,7 @@ class TestComputedReactionDependencyEdges(unittest.TestCase):
                          if s["key"].startswith("r0"))
         self.assertEqual(cho_block["species_entry"]["smiles"],
                          "[CH:1]=[O:2]")
-        self.assertEqual(cho_block["species_entry"]["unmapped_smiles"],
-                         "[CH]=O")
+        self.assertNotIn("unmapped_smiles", cho_block["species_entry"])
 
     def test_reaction_participant_omits_unmapped_smiles_when_absent(self):
         # Default reaction fixture has no unmapped_smiles on
@@ -8966,21 +8817,6 @@ class TestComputedReactionDependencyEdges(unittest.TestCase):
         for needle in forbidden_substrings:
             self.assertNotIn(needle, text,
                              f"forbidden substring {needle!r} leaked")
-
-    def test_unmapped_smiles_payload_validates_against_live_schema(self):
-        # End-to-end: unmapped_smiles on both a reactant and the TS
-        # block lands cleanly through the live bundle validator.
-        doc = _reaction_output_doc()
-        target = next(s for s in doc["species"] if s["label"] == "CHO")
-        target["smiles"] = "[CH:1]=[O:2]"
-        target["unmapped_smiles"] = "[CH]=O"
-        _, _, payload = self._submit(output_doc=doc)
-        contract_validate(ComputedReactionUploadRequest, payload)
-        # Sanity: confirm the field actually surfaces on the right
-        # block, not just that the payload validates without it.
-        cho = next(s for s in payload["species"]
-                   if s["key"].startswith("r0"))
-        self.assertEqual(cho["species_entry"]["unmapped_smiles"], "[CH]=O")
 
     def test_workflow_tool_release_still_identifies_arc(self):
         # Generalized provenance is fine: TCKDB should still see
@@ -10334,7 +10170,7 @@ class TestPhase3EvidenceParity(unittest.TestCase):
                 calc for species in sidecar_payload["species"]
                 for calc in species["calculations"] if "hessian" in calc
             ]
-            self.assertEqual(len(species_hessians), 2)  # H2 as reactant and as product
+            self.assertEqual(len(species_hessians), 1)  # H2 is declared once; both sides reference it (A16)
             self.assertEqual(sidecar_payload, fallback_payload)
             self.assertEqual(self._canonical(sidecar_payload), self._canonical(fallback_payload))
             contract_validate(ComputedReactionUploadRequest, sidecar_payload)

@@ -210,11 +210,13 @@ strips H298, the NASA fit, and point H and G, keeping S298 and Cp, in three case
   `formula`.
 - **Level mismatch:** the header `arkane_level_of_theory` does not match the energy level.
 - **Unverifiable level:** either level sets a separate `dispersion` or `solvation_method`
-  field, which ARC's atom-energy matching ignores.
+  field, which ARC's atom-energy matching ignores. PR #1059's `16eec7af` fixes that
+  matching (fixed pending merge). For 1.2 output from an ARC that has the fix, this rule
+  could be relaxed; that is a follow-up, and no adapter code changed for it.
 
 **Residual risk.** A stand-in that matches on method and basis but differs by a year
 refit, or through ARC's fuzzy key match, still passes. Only ARC's 1.2 flags
-(B1, PR #1059) close that.
+(B1, PR #1059, now rebased onto ARC `d9f47ab9`) close that.
 
 **Why it matters to TCKDB.**
 
@@ -402,6 +404,18 @@ atom through this root (C6).
 **What to change.** Skip atoms in computed-species mode with a sidecar reason until C6
 provides a form without an opt.
 
+**Status (adapter 0.6.7): atoms uploaded with a placeholder opt + warning, pending TCKDB
+#600.** Atoms are needed for reactions and have real sp (often freq) calculations, so no
+route refuses them. A single-atom species (exactly one atom in its xyz, else its
+`formula`) keeps the primary opt the computed-species and computed-reaction routes
+require, `converged` as ARC reports it, and the adapter adds the warning
+`monatomic_species_primary_opt_placeholder` (once per declared atom species): TCKDB
+requires a primary opt, ARC runs no optimisation for a single atom, so that opt is a
+placeholder (https://github.com/TCKDB/TCKDB/issues/600 asks for an sp primary). The
+calculation model has no `note` field, so the warning is the only place the statement
+lives. The standalone TS route names atoms as participants only and needs no opt. Tests:
+`test_monatomic_placeholder_opt.py`.
+
 **Effort.** S to skip; M with C6.
 
 ### A7. Send the ESS version and revision separately; use `arkane_version` ([gate])
@@ -437,6 +451,20 @@ warnings, the HTTP status, the request ID and the replay flag are lost
 **Why it matters.** The depositor cannot see
 `software_release_version_filled_from_artifact` or `…identity_corrected_from_artifact`,
 the warnings that report TCKDB repairing the adapter's provenance from the log.
+
+**Status (adapter 0.6.7): done, without a client change.** tckdb-client 0.95.1's public
+`TCKDBClient.request_json` returns the full `TCKDBResponse` (status, headers, body), and
+the adapter already uses it for every bundle upload. `upload_artifacts` is the only call
+that discards the envelope, so the adapter now composes the per-calculation batches
+itself (`_artifact_batch_bodies`, `_post_artifact_batches`) and sends each through
+`request_json`. Bodies and idempotency keys (`<prefix>:<first calc key>:artifact-batch`)
+are identical to `upload_artifacts`'s, checked against the real client in
+`test_artifact_batch_response.py`, so a replay of an earlier batch still matches. Each
+artifact sidecar and `ArtifactUploadOutcome` now carries the response's `warnings`, the
+HTTP status, the `artifact_upload` request id and the replay flag, from the response to
+its own calculation. The four strict xfails for this in the live gate are removed; they
+have not been run against a live backend. If tckdb-client later returns the envelope from
+`upload_artifacts`, the adapter can go back to it (C3).
 
 **Effort.** S in the adapter once the client exposes the envelope (C3).
 
@@ -579,17 +607,17 @@ home (C7). No real-ARC fixture sets `ts_checks.IRC` (E1).
 
 ### A15. Smaller adapter gaps
 
-Ordered by value.
+Ordered by value. Status at adapter 0.6.7:
 
-| Item | Demand path | Evidence | Effort |
-|---|---|---|---|
-| Scan calculations never carry their log | `…additional_calculations[].artifacts[]` on scans | `_LOG_FIELD_BY_CALC_KEY` has no scan role (`adapter.py:388`); ARC exports `rotor_scans[].source_log` | S |
-| Melius BAC tables not carried | `…scheme.component_params[]` (15 `ADAPTER_GAP`) | ARC's run-level Melius table (`ARC:arc/output.py:193`) | S |
-| Reaction conformers lack `label` | `reaction_upload.species[].conformers[].label` | Set for species (`adapter.py:1287`), not for reactions | S |
-| `path_search_result.climbing_image_index` never set | same | The adapter already flags `points[].is_climbing_image` | S |
-| Bundle-level ESS `reaction_upload.software_release` | same (3 `ADAPTER_GAP`) | One release per bundle; needs a rule when several programs ran | S |
-| Thermo-level applied corrections | `species_upload.thermo.applied_energy_corrections[]` (20 confirmed + 9 unconfirmed) | TCKDB intends this mainly for the FSF used for ZPE; low value | S |
-| Scan constraints written at calculation level, not in `scan_result.constraints[]` | both | `adapter.py:1526-1533`; harmless today | S |
+| Item | Demand path | Evidence | Effort | Status (0.6.7) |
+|---|---|---|---|---|
+| Scan calculations never carry their log | `…additional_calculations[].artifacts[]` on scans | ARC exports `rotor_scans[].source_log` (`ARC:arc/output.py:2381`) | S | **Done** on the computed-species and reaction routes: the scan calculation's `output_log` artifact is that log, gated like every artifact (`artifacts.upload`, `kinds`, size cap, file on disk) |
+| Melius BAC tables not carried | `…scheme.component_params[]` (15 `ADAPTER_GAP`) | ARC's per-species record carries a `parameter_table` for Petersson only; the Melius table is nested and ARC deliberately does not export it per species (`ARC:arc/output.py:1508-1521`, `1593-1601`) | S | **Skipped: needs an ARC export.** The run-level `bond_additivity_corrections` is unverified for Melius, and the Petersson table is emitted only when `bac_key == aec_key` (the model chemistry Arkane used); a run-level read would lose that guard. The TCKDB kinds (`atom_corr`, `bond_corr_length`, `bond_corr_neighbor`, `mol_corr`) map one to one once ARC exports a per-species, key-gated table |
+| Reaction conformers lack `label` | `reaction_upload.species[].conformers[].label` | Set for species, not for reactions | S | **Done**: the species label, capped at 64 characters like the species route |
+| `path_search_result.climbing_image_index` never set | same | The roadmap said the adapter already flags `points[].is_climbing_image`; it does not (no such write exists), and ARC exports no climbing-image index | S | **Skipped: ARC does not state it.** The highest node of a string or a band is not evidence a climbing image ran |
+| Bundle-level ESS `reaction_upload.software_release` | same (3 `ADAPTER_GAP`) | One release per bundle; needs a rule when several programs ran | S | **Skipped: needs a decision** (which program's release when species, TS and scans ran in different programs) |
+| Thermo-level applied corrections | `species_upload.thermo.applied_energy_corrections[]` (20 confirmed + 9 unconfirmed) | TCKDB intends this mainly for the FSF used for ZPE; low value | S | **Skipped: low value, no ARC datum beyond the run-level `freq_scale_factor`** |
+| Scan constraints written at calculation level, not in `scan_result.constraints[]` | both | The contract says top-level `constraints` is where a scan's frozen coordinates go ("frozen coordinates may be declared here while the stepped coordinate is declared on scan_result.coordinates"); the two lists share one table and must not repeat a `constraint_index` | S | **Not a defect: left as is.** Both placements are valid; moving them would only change the hash |
 
 ### A16. A species on both sides is deposited twice ([gate])
 
@@ -600,6 +628,16 @@ calculations.
 
 **What to change.** Deposit one entry and reference it from both key lists.
 
+**Status (adapter 0.6.7): done.** One species block per distinct ARC species label. The
+first slot to see a label names the block (`r0_H2`), so non-degenerate reactions keep
+their keys; a later slot, on either side, repeats the key in `reactant_keys` /
+`product_keys` (the schema allows it: its own example is `reactant_keys: ["h", "h"]`, and
+the server resolves participants by position). Kinetics `source_calculations` links each
+species' sp once per role, because the schema refuses a repeated `(calculation_key, role)`
+pair (`H + H` would otherwise repeat `reactant_energy`); a species on both sides keeps
+both its `reactant_energy` and `product_energy` links. The golden `computed_reaction`
+hash changes; the test restores the duplicate blocks to reproduce the previous hash.
+
 **Effort.** M.
 
 ### A17. IRC endpoint species are uploaded as ordinary species
@@ -609,6 +647,20 @@ records with no marker (`ARC:arc/scheduler.py:4167`), and the sweep uploads ever
 converged record (`sweep.py:111-114`).
 
 **What to change.** Needs B6; decision D5 covers the interim.
+
+**Status (adapter 0.6.7): done via `restart.yml`; the B6 export is still wanted for
+output.yml-only consumers.** ARC creates these species in `scheduler.spawn_post_irc_jobs`
+(`ARC:arc/scheduler.py:4167-4178`): label `IRC_<ts>_<n>`, `irc_label=<ts>`, and the TS's
+own `irc_label` gets the endpoint labels appended. `irc_label` is written to `restart.yml`
+(`ARCSpecies.as_dict`, `ARC:arc/species/species.py:766`) but not to `output.yml`
+(`_spc_to_dict`, `ARC:arc/output.py:1696-1712`). `RestartInfo` (adaptive.py) keeps
+`irc_label` and `is_ts` per species. On the computed-species and conformer routes a species
+is skipped, with warning `irc_endpoint_species_skipped` (context `ts_label`), when its
+restart entry has `is_ts: false` and an `irc_label` naming a TS of `output.yml`, and (if
+that TS's entry is present) the TS's `irc_label` lists it. Without `restart.yml` or the
+species' entry the species is uploaded as before; no label pattern is used. These endpoints
+only ever get an opt (ARC skips their freq and sp and computes no thermo). Tests:
+`test_irc_endpoint_species.py`.
 
 **Effort.** S after B6.
 
@@ -639,18 +691,39 @@ of them (A4 §9.3).
 
 **What to change.** Delete them, or mark them legacy.
 
+**Status (adapter 0.6.7): deleted, except the 1.0 names.** Output schema 1.0 wrote Cp points as `thermo.cp_data` and the atom-energy table as `parameter_table`; the adapter still accepts 1.0, so on a document whose `schema_version` is `1.0` (keyed on the version, not on key presence) it still reads both. From 1.1 they are `thermo_points` and `reference_atom_energies`.
+
+**Deleted:** The adapter no longer reads `unmapped_smiles`
+(species; the TS `unmapped_smiles` handle is derived from the reactants' SMILES, not read),
+`reactions[].reversible` (the reaction route omits it so the schema default applies; the
+standalone TS route, which requires the field, sends `True`, TCKDB issue #583),
+`kinetics.degeneracy`, `kinetics.note` (the reaction's `long_kinetic_description` is still
+the note), `sp_spin_diagnostic.note`, `irc_final_settings`, `thermo.cp_data` (points come
+from `thermo_points`), or `electronic_energy_hartree` as an sp fallback (the only key is
+`sp_energy_hartree`). ARC's `_rxn_to_dict`, `_spc_to_dict` and `_thermo_to_dict` write none
+of them. Tests: `test_unexported_keys_not_read.py` and the rewritten cases in
+`test_adapter.py`.
+
 **Effort.** S.
 
 ---
 
 ## B. ARC export work
 
+ARC-side items are being handed to the ARC maintainer's agent; see each item's ARC
+citations.
+
 ### B1. Merge PR #1059 (output 1.2 atom-correction flags)
 
 **What.** `thermo.atom_corrections_applied`, `bond_corrections_applied` and
-`atom_corrections_level` (branch `feature_export_atom_corrections_applied` @ `1977e53b`).
+`atom_corrections_level`. The PR was rebased onto ARC `d9f47ab9` and now has commits
+`b9d01d36`, `6979e165`, `16eec7af` (the dispersion and solvation matching fix) and
+`2c0ed53a` (`tckdb_arc` logging); it was `1977e53b` when this roadmap was first drafted.
 
-**Why.** It closes A2's residual risk, and the adapter already consumes the flags.
+**Why.** It closes A2's residual risk, and the adapter already consumes the flags. With
+`16eec7af`, atom-energy matching no longer ignores dispersion and solvation, so the
+adapter's "unverifiable if dispersion or solvation is set" rule (A2) could be relaxed for
+1.2 output from an ARC that has it (follow-up; no code change made).
 
 **Also.** Extend the flag to `statmech.e0_kj_mol` and to kinetics runs (B5).
 
@@ -696,14 +769,26 @@ rotors. It drops them when there is no force-constant matrix
 
 ### B5. Correction markers on E0 and kinetics
 
-**What.** An atom-correction flag on `statmech.e0_kj_mol` and on the kinetics run.
+**What.** An atom-correction flag on `statmech.e0_kj_mol` and on the kinetics run. The
+marker must be per E0 and include the BAC flag: `statmech.e0_kj_mol` has three writers
+with different correction settings.
+
+- `parse_species_thermo` (`ARC:arc/statmech/arkane.py:1298`): BAC on;
+- `parse_reaction_kinetics` (`ARC:arc/statmech/arkane.py:1325`): BAC off;
+- `copy_e0_values` from the TS-check E0 run (`ARC:arc/reaction.py:1265`, with
+  `ARC:arc/checks/ts.py:81-88`): BAC off.
+
+So a well's E0 can include BAC while its TS's does not.
 
 **Why.** It unblocks `thermo.enthalpy_formation_0k_kj_mol` (`ARC_LATENT`). Kinetics runs
-use `bac_type=None`, so no BAC mismatch enters a barrier.
+use `bac_type=None`, so no BAC mismatch enters a barrier computed within one run, but a
+barrier between a BAC-corrected well E0 and a BAC-free TS E0 would.
 
 **Effort.** S.
 
 ### B6. Mark IRC endpoint species
+
+(The adapter already skips them from `restart.yml`'s `irc_label` (A17); an `output.yml` marker is for consumers without `restart.yml`.)
 
 **What.** Export an `irc_label` or a role on `IRC_<ts>_<n>` records (A17).
 
@@ -746,8 +831,9 @@ mode by a frequency window.
 
 ### B10. IRC endpoint→participant mapping
 
-**What.** `ARC:arc/checks/ts.py:581` and `:670` compute exactly the
-`validation_evidence[]` participant mappings, then discard them.
+**What.** `ARC:arc/checks/ts.py:581` and `:670` do not compute an endpoint→participant
+atom mapping: `_match_fragments_to_species` (`ARC:arc/checks/ts.py:670-710`) returns only
+a bool, so no mapping exists to export. ARC would have to produce one.
 
 **Effort.** M, because the writer cannot reach the value today.
 
@@ -770,9 +856,12 @@ about its runtime; do not export requested resources as runtime facts.
 
 ### B12. Export the RMG-database commit behind Arkane's correction tables
 
-**What.** Export the RMG-database commit that supplied Arkane's correction tables
+**What.** Export what identifies the RMG-database tables Arkane read
 (`RMG_DB_PATH/input/quantum_corrections/data.py`, `ARC:arc/statmech/arkane.py`
-~817-821), for example into `WorkflowToolReleaseRef.notes` or a dedicated field.
+~817-821), for example into `WorkflowToolReleaseRef.notes` or a dedicated field. Here
+`RMG_DB_PATH` is a conda package (`rmg_env/share/rmgdatabase`), not a git checkout, so
+there may be no commit: export the SHA-256 of the `data.py` actually read, plus a commit
+or package version when one is available.
 
 **Why.** `arkane_git_commit` is the RMG-Py HEAD (`ARC:arc/output.py` ~348-366), not the
 database's. The adapter's `scheme.workflow_tool_release` (0.6.3) therefore cannot
@@ -814,6 +903,10 @@ correct kind, including symmetric tops, from the principal moments.
 
 **Why.** The adapter forwards ARC's value, so TCKDB holds a wrong rotor kind for every
 symmetric top.
+
+**Also needs an output.yml schema change (ARC-side, 1.3).** The 1.2 schema enumerates
+`rigid_rotor_kind` as `["linear", "asymmetric_top"]`, so exporting symmetric tops needs
+the 1.3 schema; making a torsion's treatment nullable needs it too.
 
 **Effort.** S.
 
@@ -889,6 +982,8 @@ hint. The adapter should keep sending ARC's string verbatim.
 **Effort.** M, including a backfill of the duplicate rows.
 
 ### C6. Atoms and the computed-species primary opt ([gate])
+
+**Status (adapter 0.6.7): atoms uploaded with placeholder opt + warning, pending TCKDB #600** (see A6).
 
 **What happens.** The primary calculation must be type `opt`
 (`TCKDB:…/computed_species_upload.py:327`).
@@ -976,7 +1071,8 @@ Option (d) is committed as `84b1b05` on `fix_unverifiable_enthalpy_without_flags
 
 **Residual risk accepted.** Stand-ins that agree on method and basis but differ by a year
 refit, or through ARC's fuzzy key match, still pass as `formation_298k` until ARC's 1.2
-flags (B1) are present.
+flags (B1; PR #1059, rebased onto ARC `d9f47ab9`, whose `16eec7af` also fixes the
+dispersion and solvation matching that the third rule works around) are present.
 
 ### D2. Deposit rights
 

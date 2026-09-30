@@ -126,6 +126,9 @@ class ArtifactSidecarMetadata:
     request_ids: list[dict[str, Any]] = field(default_factory=list)
     preflight: dict[str, Any] | None = None
     idempotency_replayed: bool | None = None
+    # The server's structured findings from the artifact response body,
+    # mirroring ``SidecarMetadata.warnings``.
+    warnings: list[dict[str, Any]] = field(default_factory=list)
     last_error: str | None = None
     base_url: str | None = None
 
