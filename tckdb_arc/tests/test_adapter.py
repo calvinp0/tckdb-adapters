@@ -1258,8 +1258,8 @@ class TestAdditionalCalculations(unittest.TestCase):
         self.assertAlmostEqual(sp["spin_diagnostic"]["s_squared_expected"], 2.0)
         self.assertAlmostEqual(sp["spin_diagnostic"]["s_squared_annihilated"], 2.0001)
         # Full-payload validation against the installed tckdb-schemas.
-        from tckdb_schemas.fragments.calculation import CalculationWithResultsPayload
-        model = contract_validate(CalculationWithResultsPayload, sp)
+        from tckdb_schemas.workflows.conformer_upload import ConformerCalculationIn
+        model = contract_validate(ConformerCalculationIn, sp)
         self.assertAlmostEqual(model.spin_diagnostic.s_squared, 2.0153)
 
     def test_sp_spin_diagnostic_minimal_only_s_squared(self):

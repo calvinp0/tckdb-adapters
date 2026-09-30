@@ -459,6 +459,8 @@ their reaction mirrors. The computed-reaction route already sets
 
 ### A10. SCF stability from `wavefunction_stability`
 
+**Status (adapter 0.6.6): done.** See CURRENT_ARC_INTEGRATION.md, "Energy level, SCF stability and conformer statmech". ARC's analysis tests the opt job's wavefunction (`arc/scheduler.py::run_stability_job`), so the block goes on the primary opt (not when `source == 'derived'` or `measured_on_ts_guess`), never on freq/sp; `followed_to_stable` → `stabilized` is not mapped (unconfirmed with ARC).
+
 **What to change.** Map ARC's `wavefunction_stability` onto `scf_stability.*` of the sp or
 freq calculation whose reference was tested. Send `status: stable` only when an analysis
 actually ran, and never attach it to the opt.
@@ -474,6 +476,8 @@ is A2's proposal; confirm it with ARC.
 **Effort.** S–M; no real-ARC fixture covers it (E1).
 
 ### A11. Declare the thermo and statmech energy level (⚠ 422 risk as written)
+
+**Status (adapter 0.6.6): done, without the 422.** The declaration is the linked energy calculation's own level as sent (`spin_treatment` included) and is omitted when ARC's stated energy level is another level than that calculation's. The offline tests replay TCKDB's level hash and link rule; the live gate case exists but has not been run.
 
 **What to change.** Send `energy_level_of_theory` on thermo and statmech. The adapter
 computes it already (`_thermo_energy_level`, `adapter.py:5177`) and discards it.
@@ -519,6 +523,8 @@ TCKDB creates a new scheme. 10 `ADAPTER_GAP` rows (mapping review MR-1).
 **Effort.** S.
 
 ### A13. Conformer mode drops statmech, corrections, scans and rejected rotors
+
+**Status (adapter 0.6.6): done except scans.** Statmech, applied corrections and rejected rotors (`torsions[].invalidated_reason`) are sent through the computed-species builders. Scans cannot be: `ConformerUploadRequest` accepts only `freq` and `sp` as additional calculations, so torsions drop their scan link (`torsion_scan_not_built`). A treated rotor without usable `atom_indices` is not sent in this mode (the conformer torsion model refuses it).
 
 **What happens.** `_build_payload` (`adapter.py:3277-3298`) emits only identity, geometry
 and opt/freq/sp. The 0.51 conformer root also accepts `statmech` (including `torsions[]`

@@ -421,6 +421,7 @@ def test_uncorrected_species_thermo_enthalpy_is_stripped_and_surfaced(tmp_path):
                    for p in thermo["thermo_points"]],
         "source_calculations": payload["thermo"]["source_calculations"],
         "reference_pressure_bar": 1.01325,
+        "energy_level_of_theory": {"method": "wb97xd", "basis": "def2-tzvp"},
     }
     assert payload["thermo"]["source_calculations"]
     assert enthalpy_reference_error(payload["thermo"]) is None

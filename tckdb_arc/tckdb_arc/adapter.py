@@ -960,6 +960,7 @@ class TCKDBAdapter:
         payload = self._build_payload(
             output_doc=output_doc,
             species_record=species_record,
+            warnings=build_warnings,
         )
         self._report_adaptive_omissions(output_doc, build_warnings)
 
@@ -1231,6 +1232,16 @@ class TCKDBAdapter:
             _thermo_energy_level(output_doc, species_record)
             if isinstance(species_record.get("thermo"), Mapping) else None
         )
+        # The level TCKDB checks the thermo and statmech energy declarations
+        # against is that of the sp calculation they link (A11), so it is read
+        # off the calculations just built, not from ARC's bare level.
+        energy_declaration = _energy_level_declaration(
+            _thermo_energy_level(output_doc, species_record),
+            calc_keys_by_role={key: key for key in included_keys},
+            calculations=_calculations_by_key(
+                conformer_block["primary_calculation"],
+                conformer_block["additional_calculations"]),
+        )
         thermo_block = _build_thermo_block(
             species_record.get("thermo"),
             # Computed-species has a single, unscoped calc namespace, so
@@ -1246,6 +1257,7 @@ class TCKDBAdapter:
             header_corrections_level=output_doc.get("arkane_level_of_theory"),
             element_symbols=_species_element_symbols(species_record),
             energy_level_unattributable=_energy_level_unattributable(output_doc, energy_level),
+            energy_declaration=energy_declaration,
         )
         # This route has no bundle-level analysis_software_release (the
         # reaction bundle does, and its thermo/statmech inherit it), so the
@@ -1292,6 +1304,7 @@ class TCKDBAdapter:
             ),
             warnings=warnings,
             warning_field="statmech",
+            energy_declaration=energy_declaration,
         )
         if statmech_block is not None:
             if arkane_release is not None:
@@ -1679,6 +1692,7 @@ class TCKDBAdapter:
             result_payload=result_payload,
             tckdb_origin=tckdb_origin,
             final_settings=final_settings,
+            scf_stability_target=(role == _CALC_KEY_OPT),
         )
         calc["key"] = calc_key
         if depends_on:
@@ -2731,6 +2745,12 @@ class TCKDBAdapter:
             _thermo_energy_level(output_doc, species_record)
             if isinstance(species_record.get("thermo"), Mapping) else None
         )
+        # See the computed-species route: declared from the linked sp's own level.
+        energy_declaration = _energy_level_declaration(
+            _thermo_energy_level(output_doc, species_record),
+            calc_keys_by_role=calc_keys,
+            calculations=_calculations_by_key(primary_calc, additional),
+        )
         thermo_block = _build_thermo_block(
             species_record.get("thermo"),
             # The current reaction root accepts species-scoped thermo provenance.
@@ -2742,6 +2762,7 @@ class TCKDBAdapter:
             header_corrections_level=output_doc.get("arkane_level_of_theory"),
             element_symbols=_species_element_symbols(species_record),
             energy_level_unattributable=_energy_level_unattributable(output_doc, energy_level),
+            energy_declaration=energy_declaration,
         )
         if thermo_block is not None:
             species_block["thermo"] = thermo_block
@@ -2803,6 +2824,7 @@ class TCKDBAdapter:
             unbuilt_scans=unbuilt_scans,
             warnings=warnings,
             warning_field=f"species[{actor_key}].statmech",
+            energy_declaration=energy_declaration,
         )
         if species_statmech is not None:
             species_block["statmech"] = species_statmech
@@ -3640,10 +3662,31 @@ class TCKDBAdapter:
         *,
         output_doc: Mapping[str, Any],
         species_record: Mapping[str, Any],
+        warnings: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        """Compose one ConformerUploadRequest dict.
+
+        Besides the opt (primary) and freq/sp (additional) calculations, it
+        carries the statmech block and the applied energy corrections, built by
+        the same builders as the computed-species route (Hessian-gated
+        treatments, BAC omission, ``atom_params``, the Arkane release, the
+        declared energy level). The conformer route accepts only freq and sp as
+        additional calculations, so no rotor scan is sent and each torsion drops
+        its scan link (``torsion_scan_not_built``); ARC's rejected rotors go to
+        ``statmech.torsions[].invalidated_reason``. There is no thermo slot.
+        Producer-side omissions are appended to ``warnings``.
+        """
         species_entry = self._species_entry_payload(species_record)
         geometry_payload = {"xyz_text": _require_xyz_text(species_record)}
         primary, additional = self._build_calculations(output_doc, species_record)
+
+        # Local keys, so the statmech links and the corrections' source name
+        # the calculations of this request (as computed-species' role keys do).
+        primary["key"] = _CALC_KEY_OPT
+        for calc in additional:
+            calc["key"] = calc["type"]
+        calc_keys_by_role = {
+            calc["key"]: calc["key"] for calc in (primary, *additional)}
 
         payload: dict[str, Any] = {
             "species_entry": species_entry,
@@ -3653,6 +3696,62 @@ class TCKDBAdapter:
         }
         if additional:
             payload["additional_calculations"] = additional
+
+        omitted_bacs: list[str] = []
+        applied_corrections = _build_applied_energy_corrections(
+            _correction_records_from_record(species_record),
+            source_calculation_key=(
+                _CALC_KEY_SP if _CALC_KEY_SP in calc_keys_by_role else None
+            ),
+            warnings=warnings,
+            target_kind="species",
+            element_symbols=_species_element_symbols(species_record),
+            target_label=str(species_record.get("label") or "") or None,
+            arkane_release=_arkane_workflow_tool_release(output_doc),
+            omitted_bac_reasons=omitted_bacs,
+        )
+        if applied_corrections:
+            payload["applied_energy_corrections"] = applied_corrections
+
+        arc_wt = _arc_workflow_tool_release(output_doc)
+        # The route accepts no scan calculations: every scan ARC exported is
+        # one this request cannot carry.
+        unbuilt_scans = {
+            entry["key"]: "the conformer upload accepts only freq and sp as "
+                          "additional calculations"
+            for entry in _scan_entries_from_record(species_record)
+            if entry.get("type") == _CALC_KEY_SCAN
+            and isinstance(entry.get("key"), str) and entry["key"]
+            and isinstance(entry.get("scan_result"), Mapping)
+        }
+        statmech_block = _build_statmech_block_for_species(
+            output_doc=output_doc,
+            species_record=species_record,
+            calc_keys_by_role=calc_keys_by_role,
+            workflow_tool_release=arc_wt,
+            target_model="ConformerUploadStatmechPayload",
+            unbuilt_scans=unbuilt_scans,
+            freq_hessian_available=self._freq_hessian_available(
+                output_doc=output_doc, species_record=species_record,
+            ),
+            warnings=warnings,
+            warning_field="statmech",
+            energy_declaration=_energy_level_declaration(
+                _thermo_energy_level(output_doc, species_record),
+                calc_keys_by_role=calc_keys_by_role,
+                calculations=_calculations_by_key(primary, additional),
+            ),
+        )
+        if statmech_block is not None:
+            arkane_release = _arc_analysis_software_release(output_doc)
+            if arkane_release is not None:
+                statmech_block["software_release"] = dict(arkane_release)
+            # The computed-species route names ARC once, at bundle level, and
+            # its statmech inherits it; this request has no such slot.
+            if arc_wt is not None:
+                statmech_block["workflow_tool_release"] = dict(arc_wt)
+            payload["statmech"] = statmech_block
+
         label = species_record.get("label")
         if label:
             payload["label"] = str(label)[:64]
@@ -3678,6 +3777,7 @@ class TCKDBAdapter:
             ess_job_key="opt",
             result_field="opt_result",
             result_payload=_opt_result_payload(record),
+            scf_stability_target=True,
         )
 
         additional: list[dict[str, Any]] = []
@@ -3739,6 +3839,7 @@ class TCKDBAdapter:
         result_payload: Mapping[str, Any] | None = None,
         tckdb_origin: Mapping[str, Any] | None = None,
         final_settings: Mapping[str, Any] | None = None,
+        scf_stability_target: bool = False,
     ) -> dict[str, Any]:
         if not isinstance(level, Mapping):
             adaptive = (
@@ -3781,13 +3882,17 @@ class TCKDBAdapter:
             )
 
         # These are the references recorded from the actual freq/SP inputs.
-        # A species-level stability verdict does not prove the reference of
-        # its other jobs, so do not propagate it to opt, scans, or IRC.
+        # ARC's stability verdict describes the opt job's wavefunction, so it
+        # goes on the primary opt only (``scf_stability_target``), never on
+        # freq/sp (their own SCF may land on another solution), scans or IRC.
         scf_reference = record.get("scf_reference")
+        scf_stability: dict[str, Any] | None = None
         if calc_type in {_CALC_KEY_FREQ, _CALC_KEY_SP} and isinstance(scf_reference, Mapping):
             reference = scf_reference.get(f"{calc_type}_reference")
             if reference in {"restricted", "unrestricted", "restricted_open"}:
                 level_of_theory["spin_treatment"] = reference
+        if scf_stability_target:
+            scf_stability = _scf_stability_payload(record)
 
         software_release: dict[str, Any] = {"name": str(software_name)}
         ess_versions = record.get("ess_versions")
@@ -3855,6 +3960,9 @@ class TCKDBAdapter:
             spin_diagnostic = _spin_diagnostic_payload(record)
             if spin_diagnostic is not None:
                 calc["spin_diagnostic"] = spin_diagnostic
+
+        if scf_stability is not None:
+            calc["scf_stability"] = scf_stability
 
         # ``parameters_json`` is the single per-calc slot for free-form
         # qualifier metadata. Two writers feed it: ``tckdb_origin``
@@ -5366,6 +5474,74 @@ def _spin_diagnostic_payload(record: Mapping[str, Any]) -> dict[str, Any] | None
     return payload
 
 
+# ARC's ``wavefunction_stability.verdict`` (arc/parser/adapters gaussian.py and
+# orca.py, documented at arc/output.py ``_parse_wavefunction_stability``) onto
+# the contract's ``scf_stability.status``. ``'unknown'`` means an analysis ran
+# whose verdict ARC could not read, which is the contract's ``inconclusive``
+# ("clearly attempted but its result could not be parsed"). Any verdict not
+# listed here is not sent: the adapter never guesses a status.
+_ARC_STABILITY_VERDICT_TO_STATUS = {
+    "stable": "stable",
+    "internal_instability": "unstable",
+    "external_instability": "unstable",
+    "unattributed_instability": "unstable",
+    "unknown": "inconclusive",
+}
+_ARC_STABILITY_INSTABILITY_TYPE = {
+    "internal_instability": "internal",
+    "external_instability": "external",
+}
+
+
+def _scf_stability_payload(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return the primary opt's ``scf_stability``, or ``None``.
+
+    ARC runs its wavefunction stability analysis once per species, from the
+    optimization job: at the optimization level, on the geometry that
+    optimization converged to, with the orbitals it wrote
+    (``arc/scheduler.py::run_stability_job``), so that its SCF reproduces the
+    wavefunction under test. ``wavefunction_stability`` describes that
+    wavefunction, the opt's, and the block goes on the opt calculation only.
+    A freq or sp job runs its own SCF, which may land on another solution, so
+    the analysis is not an observation of theirs.
+
+    Nothing is sent when ARC's own record shows the opt sent is not the one
+    tested: ``scf_reference.source == 'derived'`` (ARC adopted the verdict and
+    re-optimized at another reference, ``arc/output.py::_scf_reference_block``)
+    or ``measured_on_ts_guess`` (the verdict was measured on an abandoned TS
+    guess).
+
+    ``stable`` is sent only for ARC's ``'stable'`` verdict, and not when the ORCA
+    reader reports it followed an instability to a stable solution
+    (``followed_to_stable``), which contradicts a stable verdict.
+    ``lowest_eigenvalue`` is ARC's own (the tested wavefunction's). ARC exports
+    no instability count, and ``followed_to_stable`` is not mapped to
+    ``stabilized``: the tested wavefunction stayed unstable and no
+    re-optimization on its solution is recorded.
+    """
+    stability = record.get("wavefunction_stability")
+    scf_reference = record.get("scf_reference")
+    if not isinstance(stability, Mapping) or not isinstance(scf_reference, Mapping):
+        return None
+    status = _ARC_STABILITY_VERDICT_TO_STATUS.get(stability.get("verdict"))
+    if status is None:
+        return None
+    if scf_reference.get("measured_on_ts_guess") is not None:
+        return None
+    if scf_reference.get("source") == "derived":
+        return None
+    if status == "stable" and stability.get("followed_to_stable") is True:
+        return None
+    out: dict[str, Any] = {"status": status}
+    lowest = stability.get("lowest_eigenvalue")
+    if isinstance(lowest, (int, float)) and not isinstance(lowest, bool) and math.isfinite(lowest):
+        out["lowest_eigenvalue"] = float(lowest)
+    instability_type = _ARC_STABILITY_INSTABILITY_TYPE.get(stability.get("verdict"))
+    if instability_type is not None:
+        out["instability_type"] = instability_type
+    return out
+
+
 _APPLIED_CORRECTION_COMPONENT_FIELDS = (
     "component_kind", "key", "multiplicity", "parameter_value", "contribution_value",
 )
@@ -5785,11 +5961,13 @@ _THERMO_FIELDS_BY_TARGET: dict[str, frozenset[str]] = {
         "h298_kj_mol", "s298_j_mol_k", "tmin_k", "tmax_k",
         "nasa", "points", "source_calculations",
         "enthalpy_reference_kind", "reference_pressure_bar",
+        "energy_level_of_theory",
     }),
     "BundleThermoIn": frozenset({
         "h298_kj_mol", "s298_j_mol_k", "tmin_k", "tmax_k",
         "nasa", "points", "source_calculations",
         "enthalpy_reference_kind", "reference_pressure_bar",
+        "energy_level_of_theory",
     }),
 }
 
@@ -5950,6 +6128,66 @@ def _thermo_energy_level(
                 return None
         return composite
     return _resolve_level(output_doc, "sp", record)
+
+
+def _calculations_by_key(*groups: Any) -> dict[str, Mapping[str, Any]]:
+    """Map each built calculation dict's bundle-local ``key`` to the dict."""
+    out: dict[str, Mapping[str, Any]] = {}
+    for group in groups:
+        for calc in ([group] if isinstance(group, Mapping) else group or ()):
+            if isinstance(calc, Mapping) and isinstance(calc.get("key"), str):
+                out[calc["key"]] = calc
+    return out
+
+
+def _energy_level_declaration(
+    energy_level: Mapping[str, Any] | None,
+    *,
+    calc_keys_by_role: Mapping[str, str],
+    calculations: Mapping[str, Mapping[str, Any]],
+) -> tuple[str, dict[str, Any]] | None:
+    """Return ``(role, level)`` to declare as ``energy_level_of_theory``, or ``None``.
+
+    TCKDB checks a declared energy level against the calculations the record
+    links (``app.services.calculation_levels.assert_role_consistency``): the
+    linked sp's level when there is one, else every linked opt's. Levels are
+    compared as resolved rows, and the row identity hashes every field of
+    ``LevelOfTheoryRef`` including ``spin_treatment``, where NULL folds to
+    ``"unknown"`` (``app.services.calculation_resolution._level_of_theory_hash``).
+    The adapter stamps ``spin_treatment`` on the sp's level from
+    ``scf_reference`` (``_calculation_payload``), so the bare level ARC ran at
+    is a different row and a declaration built from it is refused
+    (``thermo_energy_level_contradiction`` / ``statmech_energy_level_contradiction``).
+
+    The declaration is therefore the energy calculation's own ``level_of_theory``
+    as sent, ``spin_treatment`` included, and only when ARC's stated energy level
+    (``energy_level``, see ``_thermo_energy_level``) is that calculation's level
+    apart from ``spin_treatment``. Nothing is declared when no sp (or, without
+    one, no opt) is linked, when ARC's energy level is not stated (adaptive runs
+    it cannot attribute), or when it is another level than the linked
+    calculation's (a composite method, which is not sent as a calculation, or an
+    ``sp_level`` whose sp was not built): TCKDB would refuse it or have nothing
+    to check it against.
+    """
+    if not isinstance(energy_level, Mapping):
+        return None
+    stated = _arc_level_to_tckdb_lot(energy_level)
+    if stated is None:
+        return None
+    role = _CALC_KEY_SP if _CALC_KEY_SP in calc_keys_by_role else (
+        _CALC_KEY_OPT if _CALC_KEY_OPT in calc_keys_by_role else None)
+    if role is None:
+        return None
+    calc = calculations.get(calc_keys_by_role[role])
+    level = calc.get("level_of_theory") if isinstance(calc, Mapping) else None
+    if not isinstance(level, Mapping):
+        return None
+    if {k: v for k, v in level.items() if k != "spin_treatment"} != stated:
+        logger.info(
+            "TCKDB energy level not declared: ARC's energy level %s is not the "
+            "level of the linked %s calculation.", _describe_level(energy_level), role)
+        return None
+    return role, dict(level)
 
 
 def _normalize_level_name(name: Any) -> str | None:
@@ -6276,6 +6514,7 @@ def _build_thermo_block(
     header_corrections_level: Any = None,
     element_symbols: Any = None,
     energy_level_unattributable: bool = False,
+    energy_declaration: tuple[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Build a ``target_model``-shaped thermo dict from ``output.yml`` thermo data.
 
@@ -6326,6 +6565,11 @@ def _build_thermo_block(
     ``calc_keys_by_role`` maps roles to the actual bundle-local keys.
     Both roots accept source links; reaction participants use their own
     scoped keys (for example ``r0_opt``), never another participant's keys.
+
+    ``energy_declaration`` is ``(role, level)`` from
+    ``_energy_level_declaration``: the level of the linked energy calculation,
+    sent as ``energy_level_of_theory`` only when that role is among this
+    block's source links (TCKDB checks the declaration against those links).
     """
     if target_model not in _THERMO_FIELDS_BY_TARGET:
         raise ValueError(
@@ -6431,6 +6675,9 @@ def _build_thermo_block(
             pressure_bar, pressure_unstated = _thermo_reference_pressure_bar(thermo_record)
             if pressure_bar is not None:
                 block["reference_pressure_bar"] = pressure_bar
+        if energy_declaration is not None and any(
+                link["role"] == energy_declaration[0] for link in sources):
+            block["energy_level_of_theory"] = dict(energy_declaration[1])
 
     # Belt-and-suspenders: this is the exact bug class that motivated
     # ``target_model`` in the first place (see
@@ -6936,11 +7183,22 @@ _STATMECH_FIELDS_BY_TARGET: dict[str, frozenset[str]] = {
         "freq_scale_factor", "external_symmetry", "optical_isomers",
         "is_linear", "rigid_rotor_kind", "statmech_treatment",
         "torsions", "point_group", "source_calculations",
+        "energy_level_of_theory",
     }),
     "BundleStatmechIn": frozenset({
         "freq_scale_factor", "external_symmetry", "optical_isomers",
         "is_linear", "rigid_rotor_kind", "statmech_treatment",
         "torsions", "point_group", "source_calculations",
+        "energy_level_of_theory",
+    }),
+    # The conformer upload's nested statmech (ConformerUploadRequest.statmech).
+    # Its torsions (StatmechTorsionIn) are the only ones with
+    # ``invalidated_reason``, the home of ARC's rejected rotors.
+    "ConformerUploadStatmechPayload": frozenset({
+        "freq_scale_factor", "external_symmetry", "optical_isomers",
+        "is_linear", "rigid_rotor_kind", "statmech_treatment",
+        "torsions", "point_group", "source_calculations",
+        "energy_level_of_theory",
     }),
 }
 
@@ -6957,12 +7215,14 @@ def _build_statmech_block_for_species(
     species_record: Mapping[str, Any] | None = None,
     calc_keys_by_role: Mapping[str, str],
     workflow_tool_release: Mapping[str, Any] | None,
-    target_model: Literal["StatmechInBundle", "BundleStatmechIn"],
+    target_model: Literal[
+        "StatmechInBundle", "BundleStatmechIn", "ConformerUploadStatmechPayload"],
     scan_key_renames: Mapping[str, str] | None = None,
     unbuilt_scans: Mapping[str, str] | None = None,
     warnings: list[dict[str, Any]] | None = None,
     warning_field: str = "statmech",
     freq_hessian_available: bool = False,
+    energy_declaration: tuple[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Build a ``target_model``-shaped statmech dict, or ``None``.
 
@@ -6990,6 +7250,16 @@ def _build_statmech_block_for_species(
     ``species_record['statmech']`` (the dict that ``arc/output.py::
     _statmech_to_dict`` writes into ``output.yml``) and projects it onto
     the upload schema. The frequency-scale-factor handling is unchanged.
+
+    ``energy_declaration`` is ``(role, level)`` from
+    ``_energy_level_declaration``; it is sent as ``energy_level_of_theory``
+    only when that role is among the block's source links, which TCKDB checks
+    the declaration against.
+
+    Only the ``ConformerUploadStatmechPayload`` target adds ARC's rejected
+    rotors (``statmech.rejected_torsions``): its torsions alone carry
+    ``invalidated_reason``, which the bundle torsion models lack. See
+    ``_build_rejected_torsions``.
 
     Both bundle endpoints (``StatmechInBundle`` for computed-species,
     ``BundleStatmechIn`` for computed-reaction per-species) currently
@@ -7065,10 +7335,52 @@ def _build_statmech_block_for_species(
             )
         omitted_scan_keys = {k: v for k, v in unbuilt_scans.items() if k in exported_scan_keys}
         dropped_links: list[tuple[int, str]] = []
+        is_conformer_root = target_model == "ConformerUploadStatmechPayload"
+        without_coordinates: list[int] = []
         slim_torsions = _build_slim_torsions(
             torsions_input, scan_key_renames=scan_key_renames,
             omitted_scan_keys=set(omitted_scan_keys), dropped_links=dropped_links,
+            require_coordinates=is_conformer_root,
+            dropped_without_coordinates=without_coordinates,
         )
+        if not is_conformer_root:
+            # The bundle roots accept a torsion without coordinates, but it then
+            # says nothing about which dihedral it is; report it.
+            for torsion in slim_torsions:
+                if "coordinates" in torsion:
+                    continue
+                message = (
+                    f"Torsion #{torsion['torsion_index']} is sent without dihedral "
+                    f"coordinates: ARC's atom_indices for it are missing or unusable."
+                )
+                logger.warning("TCKDB %s: %s: %s", warning_field,
+                               _W_TORSION_WITHOUT_COORDINATES, message)
+                if warnings is not None:
+                    warnings.append({
+                        "code": _W_TORSION_WITHOUT_COORDINATES,
+                        "message": message,
+                        "field": f"{warning_field}.torsions",
+                        "context": {"source": "tckdb_arc_self_check",
+                                    "action": "torsion_sent_without_coordinates",
+                                    "torsion_index": torsion["torsion_index"]},
+                    })
+        for position in without_coordinates:
+            message = (
+                f"Torsion #{position} has no usable atom_indices, and the conformer "
+                f"upload refuses a torsion without its dihedral coordinates, so it "
+                f"is not sent."
+            )
+            logger.warning("TCKDB %s: %s: %s", warning_field, _W_TORSION_NOT_SENT, message)
+            if warnings is not None:
+                warnings.append({
+                    "code": _W_TORSION_NOT_SENT,
+                    "message": message,
+                    "field": f"{warning_field}.torsions",
+                    "context": {"source": "tckdb_arc_self_check",
+                                "action": "torsion_omitted",
+                                "torsion_position": position,
+                                "reason": "atom_indices_unusable"},
+                })
         for position, scan_key in dropped_links:
             reason = omitted_scan_keys[scan_key]
             message = (
@@ -7137,6 +7449,15 @@ def _build_statmech_block_for_species(
                                 "torsion_count": len(slim_torsions)},
                 })
 
+        if is_conformer_root:
+            # After the treatment is classified: a rejected rotor was not
+            # treated, so it never counts toward ``statmech_treatment``.
+            slim_torsions = [*slim_torsions, *_build_rejected_torsions(
+                statmech_input.get("rejected_torsions"),
+                first_index=(len(torsions_input) if isinstance(torsions_input, list) else 0) + 1,
+                warnings=warnings, warning_field=warning_field,
+            )]
+
         if slim_torsions:
             block["torsions"] = slim_torsions
 
@@ -7162,6 +7483,9 @@ def _build_statmech_block_for_species(
         )
         if sources:
             block["source_calculations"] = sources
+            if energy_declaration is not None and any(
+                    link["role"] == energy_declaration[0] for link in sources):
+                block["energy_level_of_theory"] = dict(energy_declaration[1])
 
     if not block:
         return None
@@ -7274,8 +7598,16 @@ def _build_slim_torsions(
     scan_key_renames: Mapping[str, str] | None = None,
     omitted_scan_keys: set[str] | None = None,
     dropped_links: list[tuple[int, str]] | None = None,
+    require_coordinates: bool = False,
+    dropped_without_coordinates: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     """Build ``BundleStatmechTorsionIn`` entries, with coordinate quartets when available.
+
+    ``require_coordinates`` is for the conformer upload's ``StatmechTorsionIn``,
+    which unlike the bundle models refuses a torsion whose coordinate count is
+    not its dimension (a torsion with none included): a rotor without usable
+    ``atom_indices`` is then left out, its position appended to
+    ``dropped_without_coordinates``, rather than sent to be refused.
 
     ARC's per-rotor dict (built by ``_get_torsions`` in ``arc/output.py``)
     carries:
@@ -7367,6 +7699,10 @@ def _build_slim_torsions(
             slim["symmetry_number"] = sym
 
         coordinates = _coerce_torsion_coordinates(entry.get("atom_indices"))
+        if coordinates is None and require_coordinates:
+            if dropped_without_coordinates is not None:
+                dropped_without_coordinates.append(position)
+            continue
         if coordinates is not None:
             slim["dimension"] = len(coordinates)
             slim["coordinates"] = coordinates
@@ -7395,6 +7731,87 @@ def _build_slim_torsions(
                 scan_key = scan_key_renames.get(scan_key, scan_key)
             slim["source_scan_calculation_key"] = scan_key
         out.append(slim)
+    return out
+
+
+_W_TORSION_NOT_SENT = "torsion_not_sent"
+_W_TORSION_WITHOUT_COORDINATES = "torsion_without_coordinates"
+_W_REJECTED_TORSION_NOT_SENT = "rejected_torsion_not_sent"
+_REJECTED_TORSION_NO_REASON = "ARC rejected this rotor and recorded no reason"
+
+
+def _build_rejected_torsions(
+    rejected: Any,
+    *,
+    first_index: int,
+    warnings: list[dict[str, Any]] | None = None,
+    warning_field: str = "statmech",
+) -> list[dict[str, Any]]:
+    """Build ``StatmechTorsionIn`` entries for ARC's ``statmech.rejected_torsions``.
+
+    ARC's ``_get_rejected_torsions`` (``arc/output.py``) lists each rotor it
+    decided against (``success is False``; pending rotors are not rejections)
+    with ``rotor_index``, the free-text ``invalidation_reason`` (verbatim,
+    possibly concatenated over troubleshooting rounds, and ``''`` when ARC
+    recorded none), ``atom_indices``, ``pivot_atoms``, ``dimension`` and, when
+    a scan log exists, ``source_log``. TCKDB's only home for a rejected rotor
+    is ``torsions[].invalidated_reason``.
+
+    Each entry carries the reason, the dihedral coordinates when ``atom_indices``
+    is well-formed, ``dimension`` as their count, and ARC's ``rotor_index`` in
+    ``note``. ARC states no ``treatment_kind`` or ``symmetry_number`` for a
+    rejected rotor, so none is sent, and no scan calculation is linked (the
+    conformer route accepts no scan calculations and ``source_log`` is a file
+    path, not a calculation). An empty reason is sent as the plain statement
+    that ARC recorded none, so the torsion still reads as invalidated; the
+    reason is never invented. TCKDB refuses a torsion whose coordinate count
+    differs from its dimension, so a rotor with unusable ``atom_indices`` is not
+    sent, with a ``rejected_torsion_not_sent`` warning.
+
+    ``first_index`` is the first ``torsion_index`` free after the accepted
+    rotors' (their index is their position in ARC's ``torsions`` list).
+    """
+    if not isinstance(rejected, list):
+        return []
+    out: list[dict[str, Any]] = []
+    next_index = first_index
+    for entry in rejected:
+        if not isinstance(entry, Mapping):
+            continue
+        rotor_index = entry.get("rotor_index")
+        coordinates = _coerce_torsion_coordinates(entry.get("atom_indices"))
+        if coordinates is None:
+            message = (
+                f"ARC rejected rotor {rotor_index!r} but recorded no usable "
+                f"atom_indices ({entry.get('atom_indices')!r}); a torsion needs its "
+                f"dihedral coordinates, so this rejected rotor is not sent."
+            )
+            logger.warning("TCKDB %s: %s: %s", warning_field, _W_REJECTED_TORSION_NOT_SENT, message)
+            if warnings is not None:
+                warnings.append({
+                    "code": _W_REJECTED_TORSION_NOT_SENT,
+                    "message": message,
+                    "field": f"{warning_field}.torsions",
+                    "context": {"source": "tckdb_arc_self_check",
+                                "action": "rejected_torsion_omitted",
+                                "rotor_index": rotor_index,
+                                "reason": "atom_indices_unusable"},
+                })
+            continue
+        reason = entry.get("invalidation_reason")
+        slim: dict[str, Any] = {
+            "torsion_index": next_index,
+            "dimension": len(coordinates),
+            "coordinates": coordinates,
+            "invalidated_reason": (
+                reason if isinstance(reason, str) and reason.strip()
+                else _REJECTED_TORSION_NO_REASON
+            ),
+        }
+        if isinstance(rotor_index, int) and not isinstance(rotor_index, bool):
+            slim["note"] = f"ARC rotor_index {rotor_index}"
+        out.append(slim)
+        next_index += 1
     return out
 
 
