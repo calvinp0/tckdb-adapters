@@ -152,9 +152,10 @@ Adapter 0.8.0 (batch G) reads ARC output schema 1.3's reaction atom map and IRC 
 occurrence), and only when ARC states that the IRC endpoints follow the TS atom order and the
 sides are distinguishable; otherwise neither side is sent
 (`ts_irc_participant_mapping_not_sent`). ARC's reactant-to-product `atom_map` is **not** sent:
-TCKDB's `atom_map` is participant atom to TS atom and ARC states no relation to the TS atom
-order, so the adapter reports `reaction_atom_map_ts_order_not_stated` (TCKDB then warns
-`reaction_atom_map_absent`). See `docs/contract/CURRENT_ARC_INTEGRATION.md`.
+TCKDB's `atom_map` is participant atom to TS atom and the bc731fb4 draft of ARC 1.3 states no relation to the TS atom
+order, so the adapter reports `reaction_atom_map_ts_order_not_stated` for a document without `ts_atom_map` (TCKDB
+then warns `reaction_atom_map_absent`); adapter 0.9.0 sends it from ARC's `ts_atom_map` (below).
+See `docs/contract/CURRENT_ARC_INTEGRATION.md`.
 
 Adapter 0.6.5 targets tckdb-schemas 0.54 (no wire model change; only the
 bundles dry-run route, which the adapter never calls, gained rules) and states
@@ -241,8 +242,8 @@ Adapter 0.8.0 (batch H) uses what tckdb-schemas 0.59 to 0.64 added:
 - **Rejected rotors (0.61).** ARC's rejected rotors go out as torsions with `invalidated_reason` on the bundle
   routes too (they were conformer-route only).
 - **Standalone transition-state route (0.64).** Rotor scans (with `scan_result`) and
-  `applied_energy_corrections` (without source keys) are now sent; its `atom_map` slot stays unset
-  because ARC states no participant-atom to TS-atom relation (`reaction_atom_map_ts_order_not_stated`).
+  `applied_energy_corrections` (without source keys) are now sent; its `atom_map` slot was left unset
+  until ARC stated `ts_atom_map` (adapter 0.9.0 sends it, below).
 - Not built, no source in ARC or a decision needed: statmech `electronic_levels` (ARC 1.3 exports no
   electronic level, term or spin-orbit data), bundle `transport` (ARC's dipole and polarizability keys
   could feed it) and TS `statmech` on the reaction bundle. An IRC result whose
@@ -341,3 +342,23 @@ For 1.2 species whose thermo Arkane loaded from its own YAML (switch `null`),
 the header `arkane_level_of_theory` and the energy level describe this run,
 not where the YAML came from, so the header check cannot detect a foreign
 level.
+
+Adapter 0.9.0 (batch J) consumes ARC output schema 1.3 at PR #1059 head `ebc88ec8` (details in
+`docs/contract/CURRENT_ARC_INTEGRATION.md`, "Output schema 1.3 at ebc88ec8"). Documents from the earlier 1.3 draft
+take the previous paths unchanged.
+
+- **Reaction species labels.** `reactant_species_labels` / `product_species_labels` (one entry per occurrence) are the
+  order and repeats of `reactant_keys` / `product_keys` on both routes; a contradiction with `atom_map_*_labels` or
+  `reactant_labels` refuses the reaction (`reaction_species_labels_contradicted`).
+- **Reaction `atom_map` on both routes.** `ts_atom_map` becomes TCKDB's `atom_map` (`atom_to_ts` per participant,
+  `source: inferred`, a `note` naming ARC's method and its symmetry-equivalent-atom convention) after checking block
+  lengths, TS index coverage, element conservation, `atom_map` consistency and consistency with the IRC participant
+  mapping that is sent; otherwise no map and `reaction_ts_atom_map_not_sent` (with `ts_atom_map_unavailable_reason`
+  in the context when ARC states `null`).
+- **`nmd_forced`.** A forced NMD pass gives `mode_displacement_agrees: False` (the check ran and failed), never `True`; an index stated beside it is
+  reported (`ts_nmd_forced_contradicts_reaction_coordinate_index`) and not used as the NMD designation.
+- **Conformer programs.** `conformer_ess_software` / `conformer_ess_version` give each screened conformer's program
+  and banner; conformers with a null program are still not filed. `conformer_energies` null entries send no energy.
+- **`bac_type`.** `bond_corrections_applied: true` with a null header `bac_type` warns (`bac_type_not_stated`); the
+  BAC scheme is still built from the record's `energy_corrections`. `reference_pressure_bar` is still omitted, never
+  defaulted, when `standard_state_pressure_pa` is null (ARC 1.3 final always states 101325).

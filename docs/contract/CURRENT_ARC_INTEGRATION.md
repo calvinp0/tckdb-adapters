@@ -46,6 +46,9 @@ and schema versions; their percentages are not current coverage measurements.
   [tckdb-schemas 0.59 to 0.64 (adapter 0.8.0, batch H)](#tckdb-schemas-059-to-064-adapter-080-batch-h).
 - **Adapter 0.8.1, batch I:** TS `imaginary_mode` and `energy_ordering` validation evidence (tckdb-schemas 0.64), from ARC's
   `ts_checks['freq']` / `ts_checks['e_elect']` and the stated frequencies and energies. See A14 (below).
+- **Adapter 0.9.0, batch J (ARC output 1.3 at PR #1059 head `ebc88ec8`):** per-occurrence reaction species labels, the TS
+  atom map as TCKDB's `atom_map` on both routes, `nmd_forced`, observed conformer programs, `bac_type` check. See
+  [Output schema 1.3 at ebc88ec8 (adapter 0.9.0, batch J)](#output-schema-13-at-ebc88ec8-adapter-090-batch-j).
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
@@ -447,8 +450,8 @@ which job types the adaptive levels name.
     `reaction_coordinate_mode_index` into `freq_frequencies_cm1_ess_order`, else the single imaginary mode's
     `imag_freq_cm1`; written negative); `mode_displacement_agrees` is `True` only when ARC states
     `reaction_coordinate_mode_index` (ARC sets it only for a genuine, non-forced normal mode displacement
-    pass), `False` only when `ts_checks['NMD']` is `False` and no index is stated, and omitted otherwise (a forced
-    `skip_nmd` pass or an unrun check is not assessed). It is read from the result, not from the raw record,
+    pass), `False` when `ts_checks['NMD']` is `False` and no index is stated or when `nmd_forced` is `true` (ARC forces
+    only a check that ran and failed), and omitted otherwise (an unrun or undecided check). It is read from the result, not from the raw record,
     because TCKDB refuses a count that differs from that result or a frequency more than 1 cm-1 from it, and a
     passing record with several imaginary modes unless the result designates the coordinate: with several modes
     and no designation the record is not sent (`ts_imaginary_mode_evidence_not_sent`, as it is with no freq
@@ -714,7 +717,9 @@ had no gate that assumed otherwise. Before 1.3 ARC kept the record of a correcti
 `atom_energy` / `bond_additivity` record when the same species' `thermo.atom_corrections_applied` /
 `bond_corrections_applied` is false.
 
-**README open questions touching these items** (ARC hand-off notes): (2) a null
+**README open questions touching these items** (ARC hand-off notes; Q2 to Q6 were answered by ARC `ebc88ec8`, see
+[batch J](#output-schema-13-at-ebc88ec8-adapter-090-batch-j), which supersedes the Q2, Q4, Q5 and Q6 rows of this
+paragraph where the new keys are present): (2) a null
 `reaction_coordinate_mode_index` as above; (5) `bond_corrections_applied: true` is not linked to a
 requested `bac_type` by the schema, and the adapter does not use `bac_type`: the switch only words the
 omitted-BAC note; (6) a null `standard_state_pressure_pa` keeps omitting `reference_pressure_bar`
@@ -750,7 +755,8 @@ from ARC's mapper and the IRC mapping from ARC's IRC check.
   cover every TS atom exactly once, or when a participant's atoms are not the elements of
   its species. A `null` or absent mapping (pre-1.3, bond-list fallback, IRC not validated)
   sends nothing and says nothing. Both TS routes.
-- **The reaction atom map is not sent (B8).** TCKDB's `ReactionAtomMapIn` is, per
+- **The reaction atom map is not sent (B8).** *(Documents that carry no `ts_atom_map`, i.e. the bc731fb4 draft. From
+  `ebc88ec8` the map is sent: see batch J.)* TCKDB's `ReactionAtomMapIn` is, per
   participant, `{participant atom: TS atom}`, 1-based, against the TS geometry key
   (`ts_geometry_key`, `participants[].geometry_key`, `participant_index`); ARC's `atom_map` is
   reactant atom to product atom, and its schema says it "says nothing about the atom order
@@ -785,7 +791,8 @@ from ARC's mapper and the IRC mapping from ARC's IRC check.
   validation field, and `BundleKineticsIn.note` carries only ARC's
   `long_kinetic_description`, so it is not sent.
 - **`reversible` (1.3) is not read here.** Out of this batch.
-- **Repeated species (B16).** ARC's `reactant_labels` / `product_labels` are sorted and
+- **Repeated species (B16).** *(From `ebc88ec8` ARC states `reactant_species_labels` / `product_species_labels` and these
+  are the source; the recovery below is the fallback for the draft that lacked them. See batch J.)* ARC's `reactant_labels` / `product_labels` are sorted and
   de-duplicated, so `HO2 + HO2 <=> H2O2 + O2` would upload as `HO2 <=> H2O2 + O2` and TCKDB would
   refuse it as unbalanced. When `atom_map_*_labels` (else the IRC participants) list a repeat the
   collapsed lists lack, the expanded lists define the participants (one species block, the key
@@ -875,11 +882,41 @@ Read first: `python -m tckdb_schemas.contract --since 0.58.0`. Each paragraph qu
 - **Standalone transition-state route (0.64; C9).** "`additional_calculations` now accepts `scan`, and
   `CalculationWithResultsPayload` gains `scan_result` ... The request gains `applied_energy_corrections` (no source
   keys or frequency scale factor, since the payload has no key namespace), and `atom_map`." The adapter now sends the
-  TS's rotor scans and applied corrections there (it dropped both before), minus the source keys. `atom_map` stays
-  unset (`reaction_atom_map_ts_order_not_stated`).
+  TS's rotor scans and applied corrections there (it dropped both before), minus the source keys. `atom_map` stayed
+  unset (`reaction_atom_map_ts_order_not_stated`) until ARC `ebc88ec8` stated `ts_atom_map` (adapter 0.9.0, batch J, which
+  sends it here from the same data as on the bundle).
 - **Not sent, no source in ARC.** Statmech `electronic_levels` (0.60): ARC 1.3's statmech record has no electronic
   level, term symbol or spin-orbit data, so none is sent or derived (an O or Cl atom will draw TCKDB's
   `missing_atomic_electronic_levels`). TS `statmech` on the reaction bundle (0.64): unwired. An IRC result whose
   direction ARC does not state (0.64 made `direction`, `has_forward` and `has_reverse` optional): the adapter still
   withholds the result (`irc_direction_not_stated`) because the contract does not say how TCKDB treats unlabelled
   non-TS points.
+
+## Output schema 1.3 at ebc88ec8 (adapter 0.9.0, batch J)
+
+Consumed ARC head: PR #1059 `ebc88ec8` (schema still `1.3`; the adapter consumed the draft `bc731fb4` before). Read first:
+`python -m tckdb_schemas.contract --print` (reaction `atom_map`: `ReactionAtomMapIn`, `ReactionAtomMapParticipantIn.atom_to_ts`,
+`source`, `note`; the 0.64 standalone `atom_map`, with `geometry_key` and a `key` and `geometry` on every participant).
+Every new key is optional for the adapter: a document without it (the earlier draft; the fixtures `arc_1_3_levels`,
+`arc_1_3_reactions`, `arc_1_3_thermo`, `arc_1_3_samples`) takes the previous path unchanged. The golden corpus hashes are
+unchanged. Fixtures: `arc_1_3_samples_ebc88ec8` (ARC's real writer at `ebc88ec8`, two of the ARC agent's three samples; the
+third, `legacy_restart`, fails ARC's own `minItems: 1` on the species labels and is not copied) and `arc_1_3_ts_atom_map`
+(derived by hand, `generate.py`, README there). `test_arc_1_3_ts_atom_map.py` validates all three against ARC's
+`output_yml_schema.json` when it is available (`ARC_OUTPUT_YML_SCHEMA`, else the ARC worktree path).
+
+| ARC key (`ebc88ec8`) | What the adapter does |
+|---|---|
+| reaction `reactant_species_labels`, `product_species_labels` | **B16 done.** THE order and repeats of `reactant_keys` / `product_keys` on both routes (`_with_stated_participants`). Absent (earlier draft): the previous recovery from `atom_map_*_labels`, then `irc_participant_mapping`, then the collapsed lists when they balance (`reaction_stoichiometry_not_stated` otherwise). Present but contradicted (other species than `reactant_labels`, differing from `atom_map_*_labels` in content or order, not a list of labels, one side only): the reaction is refused with `reaction_species_labels_contradicted`. No repeat is ever guessed from the label string. |
+| reaction `ts_atom_map`, `ts_atom_map_unavailable_reason` | **B8 revised done.** TCKDB's `atom_map` on the bundle and on the standalone route: for every participant slot, `atom_to_ts` is `{participant geometry atom (1-based): TS atom (1-based)}` over that participant's block of `reactants` / `products` (blocks in `atom_map_*_labels` order, which after the species labels is the slot order); `source: inferred`, `note` quoting ARC's method and symmetry-equivalent-atom convention; no `equivalent_map_count` (unknown is not 1). Sent only when every check passes (`_tckdb_reaction_atom_map`): the map is well formed and for this TS; the uploaded slot labels are exactly `atom_map_*_labels`; each block length is the participant's uploaded geometry atom count and equals `atom_map`'s; TS indices are in range and each side covers every TS atom once; each participant atom has the element of its TS atom (uploaded geometries); `products[atom_map[i]] == reactants[i]`; `ts_atom_order_follows_reactants` agrees with the list; and, when the IRC evidence that is sent carries participant mappings, each participant's TS atoms equal the IRC mapping's (TCKDB blocks `atom_map_contradicts_irc_mapping` otherwise). A failure sends no map and reports `reaction_ts_atom_map_not_sent` with the reason. `ts_atom_map: null` omits it with the same code and `ts_atom_map_unavailable_reason` in the warning context; a document without the key keeps `reaction_atom_map_ts_order_not_stated`. Standalone route: each participant gets `key` (`reactant_1`, ...) and `geometry` (key `reactant_1_geom`), the request `geometry_key` `ts_geom`; only when a map is sent, so requests without one are byte-identical to before. A repeated reactant is two participants of one species block (bundle) or two keyed participants (standalone), each with its own `atom_to_ts`. The correspondence is constitutional (2D); that is why the note says symmetry-equivalent atoms (diastereotopic ones too) are assigned by convention. |
+| TS `nmd_forced` | **Q2 done.** `true` (the check failed and `skip_nmd` forced the pass): `mode_displacement_agrees: false` is sent (the check ran and the mode disagreed; never `true`; TCKDB has no rule tying it to `passed`) and the rationale says so; an index stated beside it is a contradiction (`ts_nmd_forced_contradicts_reaction_coordinate_index`) and is not used as the NMD designation of the frequency result (TCKDB's tau rule designates, or the record is refused as before). `false` with an index: unchanged (`True`). `null`: unchanged (the adapter no longer relies only on ARC nulling the index). There was no kinetics comment or other validation note that mentions NMD to extend. |
+| species `conformer_ess_software`, `conformer_ess_version` | **Q4 done.** Where both lists are present and index-aligned with `conformers`, each screened conformer whose `conformer_levels[i]` is a level and whose program entry is non-null is filed at that level with `software_release` = the observed program and its banner (split as for `ess_versions`); a null program is not filed (`conformer_program_not_stated`, now worded for the null entry) and is never replaced by the header `conformer_opt_level` program; a null banner files the program without a version. The conformer single point keeps its own program from `conformer_sp_level` (ARC states the list names the optimization log). Absent or misaligned lists: the header rule of 0.8.0. Only the computed-species route files screened conformers (the conformer route uploads the selected one). |
+| `conformer_energies` null entries (Q3) | **Q3 done, no change.** A null entry means no energy; `conformer_energy_kind` / `_level` / `_force_field` describe only the non-null entries. The adapter already sent an `opt_result` only when the kind is `electronic_kj_mol`, the level matches the conformer's and that entry is a finite number; a null entry never becomes one (pinned in `test_arc_1_3_ts_atom_map.py`). |
+| `standard_state_pressure_pa` (Q6) | **Q6 done, no rule change.** ARC states 101325 for every thermo an Arkane run it invoked produced (also when read from `output.py` because `thermo.yaml` was missing); `null` only for a thermo no ARC path produces and for documents before the key. A number within 0.5 to 2 bar still becomes `reference_pressure_bar`; a null is still omitted with `thermo_reference_pressure_not_stated`, never defaulted (repo CLAUDE.md). On 1.3 final it is always stated. |
+| header `bac_type`, thermo `bond_corrections_applied` (Q5) | **Q5 done.** ARC's schema now requires `bac_type` in `{p, m}` when a thermo or statmech states bond corrections were applied. `bond_corrections_applied: true` with a null `bac_type` raises `bac_type_not_stated`; the BAC scheme is still built from the record's `energy_corrections` and `bac_type` is not inferred. |
+
+Not consumed: `ts_atom_map.reactant_endpoint` beyond the note, and `ts_label` beyond checking it names this TS. TCKDB has no
+`equivalent_map_count` source in ARC, and no `ts_atom_map` for a reaction without an `atom_map` or a passed IRC (ARC states
+`no_atom_map` / `irc_not_passed` / `irc_fallback_path` ... and the adapter sends no map). Still open on the ARC side: Q7
+(a record-level signal that an NEB job ran) and B17 (composite step route lines).
+
+Upgrading changes the payload hash, and so the idempotency key, only of documents that carry the new keys.

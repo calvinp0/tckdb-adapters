@@ -1564,6 +1564,7 @@ class TCKDBAdapter:
         arkane_release = _arc_analysis_software_release(output_doc)
         _note_omitted_bac_on_thermo(
             thermo_block, omitted_bacs, _bond_corrections_flag(species_record))
+        _warn_bac_type_not_stated(output_doc, species_record, warnings)
         if thermo_block is not None:
             if arkane_release is not None:
                 thermo_block["software_release"] = dict(arkane_release)
@@ -1937,6 +1938,9 @@ class TCKDBAdapter:
         # geometry (``conformer_levels``, in lockstep with ``conformers``).
         stated_levels = (
             isinstance(conformer_levels, list) and len(conformer_levels) == len(raw_conformers))
+        # Schema 1.3 (ARC #1059 ebc88ec8) also states the program and banner of each conformer's own
+        # optimization log. Where those lists are present the program is theirs, never the header's.
+        observed_programs = _conformer_observed_lists(species_record) is not None
         for index, raw_xyz in enumerate(raw_conformers):
             normalized = _normalize_xyz_text(raw_xyz, label)
             if normalized is None or normalized in seen_xyz:
@@ -1966,12 +1970,15 @@ class TCKDBAdapter:
                 if normalized in unoptimized:
                     continue
                 result_payload = None
+                observed_version = None
                 if stated_levels:
                     index = candidate_index[normalized]
                     level = _stated_conformer_level(output_doc, species_record, index)
                     if level is None:
                         no_program.append(normalized)
                         continue
+                    if observed_programs:
+                        observed_version = _conformer_observed_provenance(species_record, index)[1]
                     result_payload = _stated_conformer_opt_result(
                         species_record, index, conformer_levels[index])
                 alt_key = f"alt{len(blocks)}"
@@ -1995,6 +2002,10 @@ class TCKDBAdapter:
                         # ``tckdb_origin`` tags the row as a screened-conformer
                         # anchor, NOT a parsed opt job of the selected conformer.
                         tckdb_origin=_screened_conformer_origin(),
+                        # The program of the conformer's own optimization log and its banner
+                        # (``conformer_ess_software`` / ``conformer_ess_version``), when ARC states them.
+                        observed_software=level["software"] if observed_programs else None,
+                        observed_version=observed_version,
                     )
                 except ValueError as exc:
                     logger.warning(
@@ -2061,7 +2072,7 @@ class TCKDBAdapter:
                     force_field=species_record.get("conformer_force_field"))
             if no_program:
                 _warn_conformer_program_not_stated(
-                    warnings, label=label, omitted=len(no_program))
+                    warnings, label=label, omitted=len(no_program), observed=observed_programs)
         elif omitted:
             _warn_conformer_level_not_stated(warnings, label=label, omitted=omitted)
         return blocks
@@ -2944,6 +2955,7 @@ class TCKDBAdapter:
         ts_label = reaction_record.get("ts_label")
         ts_block: dict[str, Any] | None = None
         ts_calc_keys: dict[str, str] = {}
+        atom_map_block: dict[str, Any] | None = None
         if ts_label:
             ts_record = ts_index.get(ts_label)
             if ts_record is None:
@@ -2965,7 +2977,21 @@ class TCKDBAdapter:
                 reaction_record=reaction_record,
                 species_index=species_index,
             )
-            _warn_atom_map_not_sent(reaction_record, ts_label=ts_label, warnings=warnings)
+            ts_geometry = ts_block.get("geometry")
+            if isinstance(ts_geometry, Mapping) and ts_geometry.get("key"):
+                slots = []
+                for side, keys, labels in (("reactant", reactant_keys, reactant_labels),
+                                           ("product", product_keys, product_labels)):
+                    for position, (species_key, label) in enumerate(zip(keys, labels), start=1):
+                        block = next(b for b in species_blocks if b["key"] == species_key)
+                        slots.append({"side": side, "index": position, "species_key": species_key,
+                                      "label": label, "geometry": block["conformers"][0].get("geometry")})
+                atom_map_block = _tckdb_reaction_atom_map(
+                    reaction_record, ts_label=ts_label, ts_xyz_text=ts_geometry.get("xyz_text"),
+                    ts_geometry_key=ts_geometry["key"], participants=slots,
+                    irc_evidence=ts_block.get("validation_evidence") or (), warnings=warnings)
+            else:
+                _warn_atom_map_not_sent(reaction_record, ts_label=ts_label, warnings=warnings)
             # ARC's electronic-energy ordering verdict (``ts_checks['e_elect']``) needs every
             # participant's own sp calculation, which only the bundle carries: the standalone
             # TS upload refuses ``energy_ordering``, so it is built here and not in the TS block.
@@ -3016,6 +3042,10 @@ class TCKDBAdapter:
             bundle["reversible"] = reaction_record["reversible"]
         if ts_block is not None:
             bundle["transition_state"] = ts_block
+        if atom_map_block is not None:
+            # Participants are the slots of reactant_keys / product_keys; each counts into the
+            # conformer geometry of its species block, and the map names the TS geometry.
+            bundle["atom_map"] = atom_map_block
         if kinetics_blocks:
             bundle["kinetics"] = kinetics_blocks
 
@@ -3328,6 +3358,7 @@ class TCKDBAdapter:
         _note_omitted_bac_on_thermo(
             species_block.get("thermo"), omitted_bacs,
             _bond_corrections_flag(species_record))
+        _warn_bac_type_not_stated(output_doc, species_record, warnings)
         if applied_corrections:
             species_block["applied_energy_corrections"] = applied_corrections
 
@@ -3979,9 +4010,13 @@ class TCKDBAdapter:
         Since tckdb-schemas 0.64 the request also takes rotor-``scan``
         calculations (with ``scan_result``) and ``applied_energy_corrections``
         (AEC/BAC; with no source keys, since the payload has no key
-        namespace), both carried here; its ``atom_map`` slot stays unset
-        (ARC states no participant-atom to transition-state-atom relation,
-        ``reaction_atom_map_ts_order_not_stated``).
+        namespace), both carried here, and an ``atom_map`` (participants with
+        their own ``key`` and ``geometry``, the saddle point named by
+        ``geometry_key``). The map is built from ARC's ``ts_atom_map`` (output
+        1.3 at ARC #1059 ebc88ec8) by the same function the bundle uses
+        (:func:`_tckdb_reaction_atom_map`); without it the slot stays unset and the
+        reason is reported (``reaction_ts_atom_map_not_sent``, or
+        ``reaction_atom_map_ts_order_not_stated`` for a document that predates the key).
         """
         species_index = _index_species(output_doc)
         reaction_record = _with_stated_participants(
@@ -4020,8 +4055,20 @@ class TCKDBAdapter:
             reaction_record=reaction_record,
             species_index=species_index,
         )
-        _warn_atom_map_not_sent(
-            reaction_record, ts_label=str(ts_label), warnings=ts_warnings)
+        # ARC's ts_atom_map (ebc88ec8) becomes TCKDB's atom_map here too, from the same data as on
+        # the bundle: each participant carries its own ``key`` and ``geometry`` (the geometries the
+        # map counts into) and the request names the saddle-point geometry by ``geometry_key``.
+        ts_geometry = ts_block.get("geometry")
+        slots = _ts_route_atom_map_slots(reaction_record, species_index)
+        atom_map_block = None
+        if isinstance(ts_geometry, Mapping):
+            atom_map_block = _tckdb_reaction_atom_map(
+                reaction_record, ts_label=str(ts_label), ts_xyz_text=ts_geometry.get("xyz_text"),
+                ts_geometry_key=_TS_ROUTE_TS_GEOMETRY_KEY, participants=slots,
+                irc_evidence=ts_block.get("validation_evidence") or (), warnings=ts_warnings)
+        else:
+            _warn_atom_map_not_sent(
+                reaction_record, ts_label=str(ts_label), warnings=ts_warnings)
         if warnings is not None:
             warnings.extend(ts_warnings)
 
@@ -4046,6 +4093,14 @@ class TCKDBAdapter:
             "geometry": {k: v for k, v in ts_block["geometry"].items() if k != "key"},
             "primary_opt": primary_opt,
         }
+        if atom_map_block is not None:
+            members = {"reactant": request["reaction"]["reactants"], "product": request["reaction"]["products"]}
+            for slot in slots:
+                member = members[slot["side"]][slot["index"] - 1]
+                member["key"] = slot["species_key"]
+                member["geometry"] = dict(slot["geometry"])
+            request["geometry_key"] = _TS_ROUTE_TS_GEOMETRY_KEY
+            request["atom_map"] = atom_map_block
         if additional_calculations:
             request["additional_calculations"] = additional_calculations
         # 0.64: ``applied_energy_corrections`` takes no ``source_calculation_key`` or
@@ -6234,6 +6289,16 @@ def _freq_result_payload(
             isinstance(stated_index, int) and not isinstance(stated_index, bool)
             and 1 <= stated_index <= len(modes) and modes[stated_index - 1]["is_imaginary"]
         )
+        if record.get("nmd_forced") is True:
+            # ``nmd_forced`` (ARC #1059 ebc88ec8): the normal mode displacement check failed and
+            # ``skip_nmd`` forced the pass. ARC states the index only for a genuine pass, so an index
+            # beside ``nmd_forced: true`` is a contradiction, and the index is not a designation by
+            # the check. TCKDB's tau rule below designates instead.
+            if stated_index is not None:
+                logger.warning(
+                    "TCKDB freq: %r states reaction_coordinate_mode_index=%r and nmd_forced=true; "
+                    "the index is not used as the NMD designation.", label, stated_index)
+            index_is_usable = False
         if index_is_usable:
             reaction_coordinate_mode_index = stated_index
             # Every other imaginary mode is "extra" once one is designated
@@ -6652,6 +6717,38 @@ def _bond_corrections_flag(record: Mapping[str, Any]) -> bool | None:
     thermo = record.get("thermo")
     flag = thermo.get("bond_corrections_applied") if isinstance(thermo, Mapping) else None
     return flag if isinstance(flag, bool) else None
+
+
+_W_BAC_TYPE_NOT_STATED = "bac_type_not_stated"
+
+
+def _warn_bac_type_not_stated(
+    output_doc: Mapping[str, Any], record: Mapping[str, Any], warnings: list[dict[str, Any]] | None,
+) -> None:
+    """Warn when a thermo says bond corrections were applied but the header ``bac_type`` is null.
+
+    Output 1.3 at ARC #1059 ebc88ec8 requires ``bac_type`` to be ``p`` or ``m`` whenever a thermo
+    (or statmech) says bond corrections were applied, so ``bond_corrections_applied: true`` beside a
+    null ``bac_type`` is a document ARC's own schema refuses. It only warns: the BAC scheme is still built
+    from the record's ``energy_corrections``, and ``bac_type`` is never inferred from them.
+    """
+    if _bond_corrections_flag(record) is not True or output_doc.get("bac_type") in ("p", "m"):
+        return
+    message = (
+        f"{record.get('label')!r}: thermo.bond_corrections_applied is true but the header bac_type is "
+        f"{output_doc.get('bac_type')!r}; ARC's output schema requires 'p' or 'm' then. The bond "
+        "additivity correction scheme is taken from the record's energy_corrections as before, and bac_type "
+        "is not inferred."
+    )
+    logger.warning("TCKDB %s: %s", _W_BAC_TYPE_NOT_STATED, message)
+    if warnings is not None:
+        warnings.append({
+            "code": _W_BAC_TYPE_NOT_STATED,
+            "message": message,
+            "field": "thermo",
+            "context": {"source": "tckdb_arc_self_check", "action": "none_scheme_from_energy_corrections",
+                        "bac_type": str(output_doc.get("bac_type"))},
+        })
 
 
 def _note_omitted_bac_on_thermo(
@@ -9975,22 +10072,65 @@ def _detect_irc_direction(log_path: str) -> str | None:
     return None
 
 
+def _conformer_observed_lists(
+    species_record: Mapping[str, Any],
+) -> tuple[list[Any], list[Any]] | None:
+    """``(conformer_ess_software, conformer_ess_version)`` when ARC states both, index-aligned with ``conformers``.
+
+    Output.yml 1.3 at ARC #1059 ebc88ec8 emits them with ``conformers``; the earlier 1.3 draft had
+    neither (the fallback is the header ``conformer_opt_level``'s program). A pair that is not aligned
+    with ``conformers`` is not used.
+    """
+    conformers = species_record.get("conformers")
+    software = species_record.get("conformer_ess_software")
+    version = species_record.get("conformer_ess_version")
+    if (isinstance(conformers, (list, tuple)) and isinstance(software, list)
+            and isinstance(version, list)
+            and len(software) == len(version) == len(conformers)):
+        return software, version
+    return None
+
+
+def _conformer_observed_provenance(
+    species_record: Mapping[str, Any], index: int,
+) -> tuple[str | None, str | None]:
+    """``(program, banner)`` of conformer ``index``'s optimization log, each ``None`` when not stated.
+
+    The banner is only meaningful with its program: it is dropped when the program is ``None``.
+    """
+    lists = _conformer_observed_lists(species_record)
+    if lists is None:
+        return None, None
+    program, banner = lists[0][index], lists[1][index]
+    program = program.strip() if isinstance(program, str) and program.strip() else None
+    banner = banner.strip() if program and isinstance(banner, str) and banner.strip() else None
+    return program, banner
+
+
 def _stated_conformer_level(
     output_doc: Mapping[str, Any], species_record: Mapping[str, Any], index: int,
 ) -> Mapping[str, Any] | None:
     """The level of conformer ``index`` (output.yml 1.3 ``conformer_levels``) with its program, or ``None``.
 
     ARC states the level of the optimization job behind each conformer geometry
-    but, like every level inside a record, no ``software`` (the programs of
-    conformer jobs are not stated). The program is the header
+    but, like every level inside a record, no ``software``. Where ARC also states
+    the program of each conformer's own optimization log (``conformer_ess_software``,
+    ARC #1059 ebc88ec8) that observed program is the one used and a ``null`` entry
+    (no ESS optimization, no log recorded, or none identified) means not filed. Otherwise
+    (the earlier 1.3 draft) the program is the header
     ``conformer_opt_level``'s, the level the conformer jobs were requested at
     (software included), accepted only when it names the same level as the
     conformer's own; a conformer re-run at a troubleshooting level, or an adaptive
     ``conf_opt`` (which leaves the header level null), has none and is not filed.
     """
     level = species_record["conformer_levels"][index]
+    if not isinstance(level, Mapping):
+        return None
+    if _conformer_observed_lists(species_record) is not None:
+        program = _conformer_observed_provenance(species_record, index)[0]
+        return {**level, "software": program} if program else None
     header = output_doc.get("conformer_opt_level")
-    if not isinstance(level, Mapping) or not isinstance(header, Mapping):
+    if not isinstance(header, Mapping):
         return None
     software = header.get("software")
     if not software:
@@ -10091,15 +10231,23 @@ def _warn_conformer_not_esss_optimized(
 
 
 def _warn_conformer_program_not_stated(
-    warnings: list[dict[str, Any]] | None, *, label: Any, omitted: int,
+    warnings: list[dict[str, Any]] | None, *, label: Any, omitted: int, observed: bool = False,
 ) -> None:
-    message = (
-        f"{omitted} screened conformer(s) of {label!r} were not uploaded: ARC states the "
-        "level of their optimization but not the program (no level inside a record states "
-        "one), and the header conformer_opt_level, the only level that names a program, "
-        "is null or names another level than theirs (an adaptive conf_opt, or a conformer "
-        "re-run at a troubleshooting level)."
-    )
+    if observed:
+        message = (
+            f"{omitted} screened conformer(s) of {label!r} were not uploaded: ARC states the "
+            "level of their optimization but their conformer_ess_software entry is null (the "
+            "optimization log was not recorded, is missing, or states no program), and the "
+            "program of a calculation is never deduced from a requested level."
+        )
+    else:
+        message = (
+            f"{omitted} screened conformer(s) of {label!r} were not uploaded: ARC states the "
+            "level of their optimization but not the program (no level inside a record states "
+            "one), and the header conformer_opt_level, the only level that names a program, "
+            "is null or names another level than theirs (an adaptive conf_opt, or a conformer "
+            "re-run at a troubleshooting level)."
+        )
     logger.warning("TCKDB %s: %s", _W_CONFORMER_PROGRAM_NOT_STATED, message)
     if warnings is not None:
         warnings.append({
@@ -10543,6 +10691,7 @@ def _ts_irc_validation_evidence(
 
 _W_TS_ENERGY_ORDERING_NOT_SENT = "ts_energy_ordering_evidence_not_sent"
 _W_TS_IMAGINARY_MODE_NOT_SENT = "ts_imaginary_mode_evidence_not_sent"
+_W_TS_NMD_FORCED_CONTRADICTS_INDEX = "ts_nmd_forced_contradicts_reaction_coordinate_index"
 
 # The e_elect check's margin (``arc/checks/ts.py``), in kJ/mol; hartree convert with the vendored ``E_h_kJmol``.
 _ENERGY_ORDERING_MARGIN_KJ_MOL = 1.0
@@ -10685,9 +10834,12 @@ def _ts_imaginary_mode_validation_evidence(
     ``reaction_coordinate_mode_index`` into ``freq_frequencies_cm1_ess_order``, else tau / the window rule),
     or, with exactly one imaginary mode, ``imag_freq_cm1``; both are negated to the negative convention.
     ``mode_displacement_agrees`` is ``True`` only when ARC's own ``reaction_coordinate_mode_index`` is
-    what designates the mode (ARC states it only for a genuine, non-forced normal-mode-displacement pass),
-    ``False`` only when ``ts_checks['NMD']`` is ``False`` and no index is stated, otherwise omitted (not
-    assessed: a forced ``skip_nmd`` pass or an unrun check is not a verdict). A passing record with more
+    what designates the mode (ARC states it only for a genuine, non-forced normal-mode-displacement pass)
+    and the TS's ``nmd_forced`` (output 1.3, ARC #1059 ebc88ec8) is not ``True``,
+    ``False`` when ``ts_checks['NMD']`` is ``False`` with no index stated, or when ``nmd_forced`` is ``True``
+    (ARC forces only a check that ran and failed, so the displacement disagreed), otherwise omitted (not
+    assessed: an unrun or undecided check). ``nmd_forced: true`` never yields ``True``, and an index stated beside it is a contradiction that
+    is reported (``ts_nmd_forced_contradicts_reaction_coordinate_index``) and not used. A passing record with more
     than one imaginary mode needs the cited result to designate the coordinate; otherwise it is not sent.
     On the standalone route the key is dropped by the caller (the record binds to the single freq).
     """
@@ -10730,8 +10882,35 @@ def _ts_imaginary_mode_validation_evidence(
     stated = ts_record.get("reaction_coordinate_mode_index")
     stated_index = stated if isinstance(stated, int) and not isinstance(stated, bool) else None
     nmd = checks.get("NMD")
+    nmd_forced = ts_record.get("nmd_forced")
     rationale = f"ARC ts_checks['freq'] = {verdict}"
-    if stated_index is not None and stated_index == designated and nmd is not False:
+    if nmd_forced is True:
+        # ARC sets ``nmd_forced`` only after ``check_normal_mode_displacement`` returned False and
+        # ``skip_nmd`` overwrote ts_checks['NMD'] to True (arc/checks/ts.py); a None ("could not
+        # decide") is never forced. So the displacement check ran and found the mode inconsistent
+        # with the reaction: that is a ``False`` verdict, never ``True``. (TCKDB has no rule tying
+        # ``mode_displacement_agrees`` to ``passed``.)
+        record["mode_displacement_agrees"] = False
+        rationale += ("; mode_displacement_agrees = False: ARC's normal mode displacement check failed "
+                      "and the pass in ts_checks['NMD'] was forced (skip_nmd; nmd_forced = true)")
+        if stated_index is not None:
+            message = (
+                f"ARC states reaction_coordinate_mode_index = {stated_index} for {ts_label!r} but also "
+                "nmd_forced = true (the normal mode displacement check failed and the pass was forced); "
+                "ARC states the index only for a genuine pass, so the index was not used as an NMD "
+                "designation and mode_displacement_agrees was sent as False.")
+            logger.warning("TCKDB %s: %s", _W_TS_NMD_FORCED_CONTRADICTS_INDEX, message)
+            if warnings is not None:
+                warnings.append({
+                    "code": _W_TS_NMD_FORCED_CONTRADICTS_INDEX,
+                    "message": message,
+                    "field": "transition_state.validation_evidence",
+                    "context": {"source": "tckdb_arc_self_check",
+                                "action": "reaction_coordinate_index_not_used",
+                                "ts_label": str(ts_label), "nmd_forced": "true",
+                                "reaction_coordinate_mode_index": str(stated_index)},
+                })
+    elif stated_index is not None and stated_index == designated and nmd is not False:
         record["mode_displacement_agrees"] = True
         rationale += (f"; mode_displacement_agrees from ARC's reaction_coordinate_mode_index = {stated_index} "
                       "(set only by a genuine normal mode displacement pass)")
@@ -10747,6 +10926,7 @@ _W_ATOM_MAP_TS_ORDER_NOT_STATED = "reaction_atom_map_ts_order_not_stated"
 
 
 _W_REACTION_STOICHIOMETRY_NOT_STATED = "reaction_stoichiometry_not_stated"
+_W_REACTION_SPECIES_LABELS_CONTRADICTED = "reaction_species_labels_contradicted"
 
 
 def _with_stated_participants(
@@ -10762,18 +10942,54 @@ def _with_stated_participants(
     after ``remove_dup_species`` sorted and de-duplicated them, so ``HO2 + HO2
     <=> H2O2 + O2`` is exported as ``['HO2'] <=> ['H2O2', 'O2']`` and TCKDB
     refuses the unbalanced reaction. The occurrences are taken, in this
-    order, from (a) ``atom_map_reactant_labels`` / ``atom_map_product_labels``
-    (output 1.3, one label per occurrence, present when ``atom_map`` is), then
+    order, from (0) ``reactant_species_labels`` / ``product_species_labels`` (output 1.3 at
+    ARC #1059 ebc88ec8: one entry per occurrence, in ``get_reactants_and_products`` order, always
+    stated for a reaction ARC ran; they are THE order of ``reactant_keys`` / ``product_keys``), else,
+    for the earlier 1.3 draft that lacked them, from (a) ``atom_map_reactant_labels`` /
+    ``atom_map_product_labels`` (one label per occurrence, present when ``atom_map`` is), then
     (b) the participants of the TS's ``irc_participant_mapping`` (repeats
     expanded, in ``position`` order); each must name exactly the species of
     the collapsed lists. Otherwise (c) the collapsed lists are used when their
     elements balance (from the species geometries; not checked when a geometry
     is missing), and the reaction is refused when they do not, with
     ``reaction_stoichiometry_not_stated``. The reaction label string is never
-    parsed.
+    parsed, and no repeat is guessed from a label.
+
+    When (0) is stated it is refused (``reaction_species_labels_contradicted``) if it disagrees with
+    ``atom_map_*_labels`` (which ARC says it equals when ``atom_map`` is not null), or names other
+    species than the collapsed ``reactant_labels`` / ``product_labels``, or is not a list of labels.
     """
     collapsed = {side: [str(x) for x in reaction_record.get(key) or []]
                  for side, key in (("reactants", "reactant_labels"), ("products", "product_labels"))}
+
+    species_labels = {side: reaction_record.get(f"{side[:-1]}_species_labels") for side in collapsed}
+    if any(isinstance(v, list) and v for v in species_labels.values()):
+        def contradicted(reason: str) -> ValueError:
+            message = (
+                f"reaction {reaction_record.get('label')!r}: ARC's reactant_species_labels / "
+                f"product_species_labels {species_labels} are contradicted: {reason}; the "
+                "reaction was not uploaded.")
+            logger.warning("TCKDB %s: %s", _W_REACTION_SPECIES_LABELS_CONTRADICTED, message)
+            if warnings is not None:
+                warnings.append({"code": _W_REACTION_SPECIES_LABELS_CONTRADICTED, "message": message,
+                                 "field": "reactant_keys",
+                                 "context": {"source": "tckdb_arc_self_check",
+                                             "action": "reaction_not_uploaded"}})
+            return ValueError(message)
+
+        if not all(isinstance(v, list) and v and all(isinstance(x, str) and x for x in v)
+                   for v in species_labels.values()):
+            raise contradicted("one side is missing, empty, or not a list of labels")
+        for side in collapsed:
+            map_labels = reaction_record.get(f"atom_map_{side[:-1]}_labels")
+            if map_labels is not None and list(map_labels) != species_labels[side]:
+                raise contradicted(f"the {side} differ from atom_map_{side[:-1]}_labels {map_labels}, "
+                                   "which ARC states they equal when atom_map is not null")
+            if collapsed[side] and sorted(set(species_labels[side])) != sorted(set(collapsed[side])):
+                raise contradicted(f"the {side} name other species than {side[:-1]}_labels "
+                                   f"{collapsed[side]}")
+        return {**reaction_record, "reactant_labels": list(species_labels["reactants"]),
+                "product_labels": list(species_labels["products"])}
 
     def from_atom_map() -> dict[str, list[str]] | None:
         found = {side: reaction_record.get(f"atom_map_{side[:-1]}_labels")
@@ -10987,10 +11203,20 @@ def _warn_atom_map_not_sent(
     atom_map = reaction_record.get("atom_map")
     if not isinstance(atom_map, list) or not atom_map:
         return
+    if "ts_atom_map" in reaction_record:
+        # ARC #1059 ebc88ec8 states ``ts_atom_map`` and, when it cannot, why.
+        unavailable = reaction_record.get("ts_atom_map_unavailable_reason")
+        _warn_ts_atom_map_not_sent(
+            reaction_record, ts_label=ts_label, warnings=warnings,
+            why=("ARC states ts_atom_map = null with ts_atom_map_unavailable_reason "
+                 f"{unavailable!r}"),
+            action="atom_map_omitted")
+        return
     reason = (
         f"TCKDB's atom_map maps each participant atom to an atom of the transition-state "
         f"geometry {ts_label!r} and ARC states no relation between its map and the "
-        "transition-state atom order"
+        "transition-state atom order (the output document has no ts_atom_map; it predates ARC "
+        "#1059 ebc88ec8)"
     )
     message = (
         f"ARC states a reactant-to-product atom_map for {reaction_record.get('label')!r} "
@@ -11008,6 +11234,211 @@ def _warn_atom_map_not_sent(
                         "atom_map_source": str(reaction_record.get("atom_map_source")),
                         "atom_map_method": str(reaction_record.get("atom_map_method"))},
         })
+
+
+_W_REACTION_TS_ATOM_MAP_NOT_SENT = "reaction_ts_atom_map_not_sent"
+_TS_ATOM_MAP_METHOD = "irc_endpoint_cgr_isomorphism"
+_TS_ATOM_MAP_NOTE = (
+    "ARC ts_atom_map (output.yml 1.3, method irc_endpoint_cgr_isomorphism, IRC endpoint {endpoint} "
+    "served as the reactants): the TS atom of every reactant and product atom, from a label-preserving "
+    "isomorphism of the condensed graph of reaction of the reaction (its atom_map) and that of the TS "
+    "and its two IRC endpoint geometries. It is a constitutional (2D) correspondence: symmetry-equivalent "
+    "atoms, including diastereotopic ones, are assigned by a deterministic convention that no geometry "
+    "decides, and a different but equally valid assignment exists."
+)
+
+
+def _warn_ts_atom_map_not_sent(
+    reaction_record: Mapping[str, Any],
+    *,
+    ts_label: Any,
+    warnings: list[dict[str, Any]] | None,
+    why: str,
+    action: str = "atom_map_omitted",
+) -> None:
+    """Report that no TCKDB ``atom_map`` was built from ARC's ``ts_atom_map`` (or its absence), and why."""
+    message = (
+        f"No atom_map was sent for {reaction_record.get('label')!r} (transition state {ts_label!r}): "
+        f"{why}. TCKDB will report reaction_atom_map_absent."
+    )
+    logger.warning("TCKDB %s: %s", _W_REACTION_TS_ATOM_MAP_NOT_SENT, message)
+    if warnings is not None:
+        warnings.append({
+            "code": _W_REACTION_TS_ATOM_MAP_NOT_SENT,
+            "message": message,
+            "field": "atom_map",
+            "context": {"source": "tckdb_arc_self_check",
+                        "action": action,
+                        "ts_atom_map_unavailable_reason": str(
+                            reaction_record.get("ts_atom_map_unavailable_reason")),
+                        "atom_map_source": str(reaction_record.get("atom_map_source")),
+                        "atom_map_method": str(reaction_record.get("atom_map_method"))},
+        })
+
+
+_TS_ROUTE_TS_GEOMETRY_KEY = "ts_geom"
+
+
+def _ts_route_atom_map_slots(
+    reaction_record: Mapping[str, Any], species_index: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """The participant slots of a standalone TS upload, with the key and geometry each would carry.
+
+    Keys (``reactant_1``) and geometry keys (``reactant_1_geom``) are unique per slot, as the route
+    requires, even when one species fills several slots. A slot whose species has no usable geometry
+    has ``geometry: None``.
+    """
+    slots: list[dict[str, Any]] = []
+    for side, labels_key in (("reactant", "reactant_labels"), ("product", "product_labels")):
+        for position, label in enumerate(reaction_record.get(labels_key) or [], start=1):
+            record = species_index.get(label) or {}
+            key = f"{side}_{position}"
+            text = _normalize_xyz_text(record.get("xyz"), label) if record.get("xyz") else None
+            geometry = _geometry_payload(
+                record, text, record.get("xyz_isotopes"), key=f"{key}_geom") if text else None
+            slots.append({"side": side, "index": position, "species_key": key,
+                          "label": label, "geometry": geometry})
+    return slots
+
+
+def _is_plain_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _tckdb_reaction_atom_map(
+    reaction_record: Mapping[str, Any],
+    *,
+    ts_label: Any,
+    ts_xyz_text: str | None,
+    ts_geometry_key: str,
+    participants: Sequence[Mapping[str, Any]],
+    irc_evidence: Sequence[Mapping[str, Any]] = (),
+    warnings: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """TCKDB's ``ReactionAtomMapIn`` from ARC's ``ts_atom_map`` (output 1.3 at ARC #1059 ebc88ec8), or ``None``.
+
+    ARC states, for every concatenated reactant atom and every concatenated product atom, the 0-based TS
+    atom it is (``ts_atom_map.reactants`` / ``.products``), counting the participants in the order of
+    ``atom_map_reactant_labels`` / ``atom_map_product_labels`` and each participant's atoms in the atom
+    order of its exported geometry. ``participants`` are the uploaded slots, in upload order, each
+    ``{side, index (1-based), species_key, label, geometry: {key, xyz_text} | None}``; for each, its block
+    of the map becomes ``atom_to_ts`` ({participant geometry atom: TS atom}, both 1-based) and the map is
+    ``source: inferred`` naming ARC's method and its symmetry-equivalent-atom convention (the note).
+
+    Nothing is sent unless every check passes; a failure reports ``reaction_ts_atom_map_not_sent`` and
+    sends no map (never a partial one): ``ts_atom_map`` is stated and well formed; the uploaded slot labels
+    are exactly ``atom_map_*_labels``; each block length is the participant's uploaded geometry atom count;
+    TS indices are in range and cover every TS atom once per side; each participant atom has the element of
+    its TS atom; ``products[atom_map[i]] == reactants[i]``; and, when the IRC evidence sent a participant
+    mapping, each participant's TS atoms are the ones that mapping gives it. When ARC states
+    ``ts_atom_map = null`` (or the document predates the key) the omission is reported with ARC's reason.
+    """
+    atom_map = reaction_record.get("atom_map")
+    if not isinstance(atom_map, list) or not atom_map:
+        return None
+    ts_map = reaction_record.get("ts_atom_map")
+    if "ts_atom_map" not in reaction_record or ts_map is None:
+        _warn_atom_map_not_sent(reaction_record, ts_label=ts_label, warnings=warnings)
+        return None
+
+    def refuse(why: str) -> None:
+        _warn_ts_atom_map_not_sent(
+            reaction_record, ts_label=ts_label, warnings=warnings,
+            why=f"ARC's ts_atom_map cannot be sent as TCKDB's atom_map: {why}")
+        return None
+
+    if not isinstance(ts_map, Mapping):
+        return refuse("it is not an object")
+    reactants, products = ts_map.get("reactants"), ts_map.get("products")
+    endpoint = ts_map.get("reactant_endpoint")
+    if (ts_map.get("method") != _TS_ATOM_MAP_METHOD or not _is_plain_int(endpoint)
+            or endpoint not in (1, 2) or not isinstance(ts_map.get("ts_atom_order_follows_reactants"), bool)
+            or not all(isinstance(side, list) and all(_is_plain_int(i) for i in side)
+                       for side in (reactants, products))):
+        return refuse("it does not have the documented shape (method "
+                      f"{ts_map.get('method')!r}, reactant_endpoint {endpoint!r})")
+    if ts_map.get("ts_label") != ts_label:
+        return refuse(f"it is for transition state {ts_map.get('ts_label')!r}, not {ts_label!r}")
+    ts_symbols = _xyz_element_symbols(ts_xyz_text)
+    if ts_symbols is None:
+        return refuse("the transition-state geometry has no readable atoms")
+    n_ts = len(ts_symbols)
+    if not all(_is_plain_int(i) for i in atom_map):
+        return refuse("ARC's atom_map is not a list of integers")
+    sides: dict[str, list[Mapping[str, Any]]] = {"reactant": [], "product": []}
+    for participant in participants:
+        sides[participant["side"]].append(participant)
+    for side, key in (("reactant", "atom_map_reactant_labels"), ("product", "atom_map_product_labels")):
+        if [p["label"] for p in sides[side]] != list(reaction_record.get(key) or []):
+            return refuse(f"the uploaded {side} slots {[p['label'] for p in sides[side]]} are not "
+                          f"ARC's {key} {reaction_record.get(key)}, the order its map counts in")
+    mapped = {"reactant": reactants, "product": products}
+    symbols: dict[str, list[list[str]]] = {"reactant": [], "product": []}
+    for side in sides:
+        for participant in sides[side]:
+            geometry = participant.get("geometry")
+            found = _xyz_element_symbols(geometry.get("xyz_text") if isinstance(geometry, Mapping) else None)
+            if found is None:
+                return refuse(f"{side} {participant['index']} ({participant['label']!r}) has no readable "
+                              "uploaded geometry")
+            symbols[side].append(list(found))
+        total = sum(len(block) for block in symbols[side])
+        if len(mapped[side]) != total or len(atom_map) != total:
+            return refuse(f"the {side} block lengths do not agree: ts_atom_map.{side}s has "
+                          f"{len(mapped[side])} entries, atom_map has {len(atom_map)}, and the uploaded "
+                          f"{side} geometries have {total} atoms")
+        if sorted(mapped[side]) != list(range(n_ts)):
+            return refuse(f"ts_atom_map.{side}s is not a one-to-one map onto the {n_ts} transition-state "
+                          "atoms (an index is out of range, repeated, or a TS atom is not covered)")
+    n = len(atom_map)
+    if sorted(atom_map) != list(range(n)) or any(products[atom_map[i]] != reactants[i] for i in range(n)):
+        return refuse("it is not consistent with ARC's atom_map (products[atom_map[i]] != reactants[i] "
+                      "for some reactant atom i)")
+    if ts_map["ts_atom_order_follows_reactants"] != (list(reactants) == list(range(n))):
+        return refuse("ts_atom_order_follows_reactants disagrees with its own reactants list")
+
+    entries: list[dict[str, Any]] = []
+    claimed: dict[tuple[str, int], set[int]] = {}
+    for side in ("reactant", "product"):
+        offset = 0
+        for participant, block in zip(sides[side], symbols[side]):
+            atom_to_ts: dict[str, int] = {}
+            for atom_index, element in enumerate(block):
+                ts_atom = mapped[side][offset + atom_index]
+                if ts_symbols[ts_atom].capitalize() != element.capitalize():
+                    return refuse(
+                        f"{side} {participant['index']} ({participant['label']!r}) atom {atom_index + 1} is "
+                        f"{element} but the transition-state atom {ts_atom + 1} it maps to is "
+                        f"{ts_symbols[ts_atom]}")
+                atom_to_ts[str(atom_index + 1)] = ts_atom + 1
+            offset += len(block)
+            claimed[(side, participant["index"])] = set(atom_to_ts.values())
+            entries.append({
+                "side": side,
+                "species_key": participant["species_key"],
+                "participant_index": participant["index"],
+                "geometry_key": participant["geometry"]["key"],
+                "atom_to_ts": atom_to_ts,
+            })
+    for evidence in irc_evidence:
+        if evidence.get("kind") != "irc":
+            continue
+        for side in ("reactant", "product"):
+            given = evidence.get(f"{side}_participant_mapping")
+            if not isinstance(given, Mapping):
+                continue
+            for slot, atoms in given.items():
+                index = int(str(slot).split(":")[1])
+                if claimed.get((side, index)) != set(atoms):
+                    return refuse(
+                        f"it contradicts the IRC participant mapping that is sent: {slot} has transition-state "
+                        f"atoms {sorted(claimed.get((side, index), ()))} here and {sorted(atoms)} there")
+    return {
+        "source": "inferred",
+        "ts_geometry_key": ts_geometry_key,
+        "participants": entries,
+        "note": _TS_ATOM_MAP_NOTE.format(endpoint=endpoint),
+    }
 
 
 _W_IRC_DIRECTION_NOT_STATED = "irc_direction_not_stated"
