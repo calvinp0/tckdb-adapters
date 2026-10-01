@@ -4,7 +4,7 @@ Convert ARC `output/output.yml` and portable parser evidence into TCKDB
 species, reaction, and transition-state uploads. Payloads and upload metadata
 are written locally before any network request, allowing inspection and replay.
 
-Requires Python 3.11+, `tckdb-client` 0.98.x and `tckdb-schemas` 0.58.x.
+Requires Python 3.11+, `tckdb-client` 0.102.x and `tckdb-schemas` 0.64.x.
 For development with sibling checkouts:
 
 ```bash
@@ -166,6 +166,7 @@ had a repeated species or gained conformer labels or scan logs.
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 
 <!-- tckdb-drift:changelog -->
+- Adapter 0.6.9: tracked TCKDB f22d3a8 (schemas 0.64.0, client 0.102.0).
 - Adapter 0.6.8: tracked TCKDB a515fb9 (schemas 0.58.0, client 0.98.0).
 
 Thermo blocks with enthalpy content declare `enthalpy_reference_kind:
