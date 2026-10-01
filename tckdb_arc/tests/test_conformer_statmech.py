@@ -23,7 +23,7 @@ from _backend_level_rules import calculations_by_key, energy_level_verdict
 from _contract import contract_validate
 from tckdb_schemas.workflows.conformer_upload import ConformerUploadRequest
 
-from test_adapter import _fake_output_doc, _full_record
+from test_adapter import _fake_output_doc, _full_record, _reaction_output_doc
 from test_current_contract_mapping import _neutral_scan
 from test_provenance_passthrough import ARKANE, FIXTURE, _benzene, _submit
 from test_thermo_enthalpy_declaration import _adapter
@@ -218,14 +218,32 @@ def test_a_treated_rotor_without_atoms_is_not_sent_in_conformer_mode(tmp_path):
     assert warning["context"]["torsion_position"] == 1
 
 
-def test_bundle_routes_have_no_home_for_rejected_rotors(tmp_path):
+def test_the_computed_species_bundle_carries_rejected_rotors_since_0_61(tmp_path):
+    """tckdb-schemas 0.61 gave ``StatmechTorsionInBundle`` ``invalidated_reason``; it has no ``note``."""
     doc, record = _benzene_with(tmp_path, torsions=[TORSION], rejected=[REJECTED])
     with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
         outcome = _adapter(tmp_path, mode="computed_species").submit_computed_species_from_output(
             output_doc=doc, species_record=record)
     payload = json.loads(outcome.payload_path.read_text())
-    assert len(payload["statmech"]["torsions"]) == 1
-    assert "invalidated_reason" not in json.dumps(payload)
+    treated, rejected = payload["statmech"]["torsions"]
+    assert "invalidated_reason" not in treated
+    assert rejected == {
+        "torsion_index": 2, "dimension": 1,
+        "coordinates": [{"coordinate_index": 1, "atom1_index": 2, "atom2_index": 3,
+                         "atom3_index": 4, "atom4_index": 5}],
+        "invalidated_reason": "the barrier was too high. "}
+    # A rejected rotor was not treated: the treatment is what the treated rotors give.
+    assert payload["statmech"]["statmech_treatment"] == "rrho_1d"
+
+
+def test_the_computed_reaction_bundle_carries_rejected_rotors_since_0_61(tmp_path):
+    doc = _reaction_output_doc()
+    doc["species"][0]["statmech"] = {"external_symmetry": 1, "rejected_torsions": [dict(REJECTED)]}
+    adapter = _adapter(tmp_path, mode="computed_reaction")
+    payload = adapter._build_computed_reaction_payload(
+        output_doc=doc, reaction_record=doc["reactions"][0])
+    (torsion,) = payload["species"][0]["statmech"]["torsions"]
+    assert torsion["invalidated_reason"] == "the barrier was too high. " and "note" not in torsion
 
 
 def test_bundle_route_reports_a_torsion_sent_without_coordinates(tmp_path):

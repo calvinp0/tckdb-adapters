@@ -90,7 +90,9 @@ applied it, not deposited; false: no note; absent: the note states only that
 ARC exported a Petersson BAC total that is not deposited). Atom-energy,
 Petersson and Melius schemes carry Arkane as `workflow_tool_release`. Its
 `git_commit` is the RMG-Py commit Arkane ran from; the correction tables come
-from RMG-database, whose commit ARC does not record. So a database-only
+from RMG-database, whose commit output 1.3 records (since adapter 0.8.0, batch H,
+it travels as `scheme.data_revision`, which stops the Arkane build from splitting
+schemes). Before output 1.3 a database-only
 revision of a table value for the same key still conflicts with the stored
 scheme (a parameter-conflict 422), and each new RMG-Py commit makes a new
 scheme row even when the tables are unchanged. The first 0.6.3 upload of an
@@ -165,9 +167,10 @@ Adapter 0.6.7:
 - A species on both sides of a reaction (or repeated on one side) is deposited once; the
   computed-reaction bundle repeats its key in `reactant_keys` / `product_keys`, and the
   kinetics `reactant_energy` / `product_energy` links point at its sp once per role.
-- A single-atom species is uploaded with the placeholder primary opt both routes require
-  and a `monatomic_species_primary_opt_placeholder` warning (ARC runs no optimisation for
-  an atom; TCKDB #600 asks for an sp primary).
+- A single-atom species was uploaded with a placeholder primary opt and a
+  `monatomic_species_primary_opt_placeholder` warning (TCKDB#600). Superseded in batch H: an atom
+  now sends its real `sp` as its primary calculation (TCKDB#610, tckdb-schemas 0.59), with no
+  placeholder and no warning.
 - Each calculation's artifact batch is sent through `TCKDBClient.request_json`, so the
   artifact sidecar (and `ArtifactUploadOutcome.warnings`) carries the server's warnings,
   the HTTP status, the request id and the replay flag.
@@ -195,9 +198,9 @@ only, and a document before 1.3 gives the payload it gave before):
   sent as stated.
 - The kinetics `note` carries Arkane's comment, the `ts_validation` text and the kinetics run's
   atom-correction switch; the reaction's `reversible` is sent as stated.
-- A correction scheme's `workflow_tool_release` names the RMG-database table Arkane loaded
-  (`git_commit`, package `version` or a SHA-256) instead of the Arkane build, so a revised table
-  is a new scheme identity.
+- A correction scheme names the RMG-database table Arkane loaded. Batch F did that with a
+  `RMG-database` `workflow_tool_release` (commit, package version or `sha256:`); that stand-in is
+  replaced in batch H by `scheme.data_revision` (tckdb-schemas 0.62), see below.
 - A TS's modes are its frequencies in ESS order and its reaction-coordinate mode is the one ARC's
   normal mode displacement check validated; with none stated, TCKDB's 50 cm-1 noise floor picks the one
   mode above it (the others `unassigned`), and two or more above it refuse the record.
@@ -205,9 +208,46 @@ only, and a document before 1.3 gives the payload it gave before):
   and polarizability have no home on these routes (TCKDB holds them only on the standalone
   transport record), and the E0 switches gate nothing since no E0 is deposited.
 
-Scheme rows get a third identity set (no tool <= 0.6.2, the Arkane build 0.6.3, `RMG-database` 0.8.0); the
-new rows are expected. Upgrading changes the payload hash, and so the idempotency key, of 1.3 uploads that gain any of
+Upgrading changes the payload hash, and so the idempotency key, of 1.3 uploads that gain any of
 the above. See `docs/contract/CURRENT_ARC_INTEGRATION.md`.
+
+Adapter 0.8.0 (batch H) uses what tckdb-schemas 0.59 to 0.64 added:
+
+- **Atoms (0.59).** A conformer whose own XYZ has exactly one atom sends `type: "sp"` as its
+  primary calculation (computed-species, computed-reaction and conformer routes): the atom's own
+  log, level, program and energy (`sp_energy_hartree`, else the `opt_final_energy_hartree` ARC
+  parsed from the same one log), no `opt`, no `converged` (an sp result has none), no placeholder, no
+  warning, no `freq`, no coarse opt, no rotor scans and no alternative conformers. Thermo and statmech
+  link that one sp once (`thermo_role_duplicate` / `statmech_role_duplicate` need two on one
+  geometry). An atom with neither energy is refused (`ValueError`), never relabelled as an opt. The
+  placeholder opt stays only for a molecule with no opt job (`primary_opt_placeholder_no_opt_job`) or
+  a composite run (`composite_geometry_level_not_stated`).
+- **Scheme provenance (0.62).** `scheme.data_revision` is the RMG-database revision Arkane read:
+  the git commit for `path_kind: git`, else the package version, else the `data.py` SHA-256 as a
+  plain hex string. It joins the scheme's identity, so the Arkane build (still stamped as
+  `scheme.workflow_tool_release`, provenance only) stops splitting schemes. The `RMG-database`
+  tool-release identity set of the first batch-F draft was never deposited (it existed only on an
+  unmerged branch), so no deposited scheme has it; a scheme deposited with a revision never
+  matches one without, so the first upload of each table under 0.8.0 makes a new row. An
+  `atom_energy` scheme with `atom_params` also sends `atom_params_applied_as` as ARC states it
+  (`subtracted`); the scheme note keeps only Arkane's per-atom addend (`atom_hf - atom_thermal`),
+  which that field does not cover.
+- **Kinetics (0.63).** ARC's `A` is sent as it is with `t0_k` = ARC's `T0_k` (omitted when 1 K,
+  the contract default), instead of `A / T0**n`; a `T0_k` that is null, invalid or outside
+  `0 < t0_k <= 10000` omits `a`/`a_units`. `tunneling_application`, `interpretation_assignments`
+  and `network_kinetics_ref` are not sent: every reference in them is a record deposited earlier,
+  and the bundle cannot cite the transition state or statmech it is itself creating. The tunnelling
+  label is still ARC's `tunneling` as `tunneling_model`.
+- **Rejected rotors (0.61).** ARC's rejected rotors go out as torsions with `invalidated_reason` on the bundle
+  routes too (they were conformer-route only).
+- **Standalone transition-state route (0.64).** Rotor scans (with `scan_result`) and
+  `applied_energy_corrections` (without source keys) are now sent; its `atom_map` slot stays unset
+  because ARC states no participant-atom to TS-atom relation (`reaction_atom_map_ts_order_not_stated`).
+- Not built, no source in ARC or a decision needed: statmech `electronic_levels` (ARC 1.3 exports no
+  electronic level, term or spin-orbit data), bundle `transport` (ARC's dipole and polarizability keys
+  could feed it), TS `statmech` on the reaction bundle, and the `energy_ordering` / `imaginary_mode`
+  evidence kinds (ARC's `E0`/`NMD` verdicts). Only `irc` evidence is sent. An IRC result whose
+  direction ARC does not state is still withheld although 0.64 made `direction` and the flags optional.
 
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 

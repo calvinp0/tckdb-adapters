@@ -20,7 +20,7 @@ from tckdb_arc.adapter import (
     _build_statmech_block_for_species,
     _correction_records_from_record,
     _freq_result_payload,
-    _scheme_workflow_tool_releases,
+    _scheme_data_revisions,
     _wavefunction_diagnostic_payload,
 )
 from test_thermo_enthalpy_declaration import _adapter
@@ -98,8 +98,11 @@ def test_the_sample_petersson_record_is_sent_with_its_components_and_database_re
     # The Petersson record lists no skipped bond, so it has no skipped-bond note.
     assert "note" not in roles["bac_total"]
     for correction in roles.values():
-        release = correction["scheme"]["workflow_tool_release"]
-        assert (release["name"], release["version"]) == ("RMG-database", "4.0.0")
+        scheme = correction["scheme"]
+        # The tables' revision is the scheme's identity (0.62); the Arkane build that read them is kept as provenance.
+        assert scheme["data_revision"] == "4.0.0"
+        assert scheme["workflow_tool_release"] == {
+            "name": "Arkane", "version": "3.3.0", "git_commit": "6b1368de6c19204c7ce4fda6fbecb05da4a0fe0e"}
 
 
 @pytest.mark.parametrize("route", ROUTES)
@@ -236,7 +239,7 @@ def test_the_legacy_null_pattern_is_read_without_inventing_anything():
 
 
 def test_the_legacy_header_states_the_database_identity_it_always_emits():
-    assert _scheme_workflow_tool_releases(_load("legacy_restart"))["bac_petersson"]["name"] == "RMG-database"
+    assert _scheme_data_revisions(_load("legacy_restart"))["bac_petersson"] == "4.0.0"
 
 
 def test_the_sample_kinetics_block_reads_the_run_provenance_only_for_1_3():

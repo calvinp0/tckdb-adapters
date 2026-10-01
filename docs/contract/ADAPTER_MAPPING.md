@@ -75,7 +75,7 @@ The four `unit_conversion` rows all compute a `relative_energy_kj_mol`:
 
 No other field is unit-converted. Four behaviours need care:
 
-- **Kinetics A.** It is normalized for `T0` (`a = A / T0**n`, `adapter.py:6795`), a derived change of reference and not a unit conversion.
+- **Kinetics A.** At this snapshot (adapter 0.4.0) it was normalized for `T0` (`a = A / T0**n`, `adapter.py:6795`), a derived change of reference and not a unit conversion. Since tckdb-schemas 0.63 (adapter 0.8.0) `A` is sent as it is with `t0_k = T0_k`; see `CURRENT_ARC_INTEGRATION.md`.
 - **Kinetics units.** A and Ea units are mapped as enums.
 - **Unknown kinetics units** drop the value together with its unit (C-4).
 - **Renamed IRC and GSM gradients.** They drop the `_hartree_per_bohr` suffix without converting.

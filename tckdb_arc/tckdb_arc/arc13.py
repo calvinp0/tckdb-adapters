@@ -326,8 +326,10 @@ def primary_opt_placeholder(record: Any) -> str | None:
       ``opt_log``, no ``levels.opt``, no composite log); the opt is filed at the
       header opt level.
 
-    A monoatomic (its sp log is its ``opt_log``) is handled by the older
-    single-atom placeholder.
+    A monoatomic (its sp log is its ``opt_log``) is not a placeholder case: since
+    tckdb-schemas 0.59 its primary is its real ``sp`` and no opt is filed for it
+    (the adapter checks the conformer's own XYZ first, so a composite-run atom
+    never reaches this).
     """
     levels = levels_of(record)
     if levels is None:

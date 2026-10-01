@@ -61,9 +61,13 @@ def test_degenerate_reaction_declares_each_species_once():
     assert payload["product_keys"] == ["r1_H", "r0_H2"]
     assert payload["kinetics"][0]["reactant_keys"] == payload["reactant_keys"]
     assert payload["kinetics"][0]["product_keys"] == payload["product_keys"]
-    # One sp calculation per species, however many slots reference it.
-    sp_calcs = [c for s in payload["species"] for c in s["calculations"] if c["type"] == "sp"]
-    assert len(sp_calcs) == 2
+    # One sp calculation per species, however many slots reference it. The atom's sp is
+    # its primary calculation (tckdb-schemas 0.59); the molecule's is an additional one.
+    sp_calcs = [c for s in payload["species"]
+                for c in [s["conformers"][0]["calculation"], *s["calculations"]] if c["type"] == "sp"]
+    assert [c["key"] for c in sp_calcs] == ["r0_sp", "r1_sp"]
+    atom = payload["species"][1]
+    assert atom["conformers"][0]["calculation"]["type"] == "sp" and atom["calculations"] == []
     links = _assert_kinetics_links_resolve(payload)
     by_role = {}
     for link in links:

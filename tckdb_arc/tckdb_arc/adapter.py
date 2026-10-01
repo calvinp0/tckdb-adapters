@@ -260,6 +260,8 @@ def _neutral_scan_result_to_tckdb(
 
 
 _ENERGY_UNITS = frozenset({"hartree", "kj_mol", "kcal_mol"})
+# ``AtomParamApplication`` (tckdb-schemas 0.62).
+_ATOM_PARAM_APPLICATIONS = frozenset({"subtracted", "added"})
 
 
 def _atom_params_from_reference_atom_energies(
@@ -456,21 +458,29 @@ def _correction_records_from_record(
                 ]
             if atom_params:
                 scheme["atom_params"] = atom_params
-                if reference.get("applied_as") == "subtracted":
-                    # ARC records ``applied_as: subtracted``; the atom_params
-                    # themselves are bare atomic energies. Arkane's full
-                    # per-atom term (RMG-Py arkane/encorr/corr.py,
-                    # get_atom_correction, steps 1-2) is
-                    #   -E_atom + (atom_hf - atom_thermal)
-                    # i.e. the atomic energy is subtracted and the atom's gas-phase
-                    # formation enthalpy (less its thermal correction, kcal/mol
-                    # in RMG-database data.py) is added, so a component's
-                    # contribution is not count x atomic energy.
+                applied_as = reference.get("applied_as")
+                if applied_as in _ATOM_PARAM_APPLICATIONS:
+                    # tckdb-schemas 0.62 ``EnergyCorrectionSchemeRef.atom_params_applied_as``:
+                    # "How ``atom_params`` enter the corrected energy: ``subtracted`` or
+                    # ``added``. Applies to every entry of ``atom_params`` and to nothing
+                    # else... not inferred when omitted"; it requires ``atom_params``.
+                    # ARC records it with the table, and Arkane's atom_energy tables are
+                    # ``subtracted`` ("count * value is removed from the energy"), so it is
+                    # sent exactly as ARC states it, only beside the atom_params it covers.
+                    scheme["atom_params_applied_as"] = applied_as
+                if applied_as == "subtracted":
+                    # The atom_params are bare atomic energies. Arkane's full per-atom
+                    # term (RMG-Py arkane/encorr/corr.py, get_atom_correction, steps 1-2)
+                    # is -E_atom + (atom_hf - atom_thermal): the atom's gas-phase
+                    # formation enthalpy (less its thermal correction, kcal/mol in
+                    # RMG-database data.py) is added as well, and that addend is no
+                    # atom_param, so ``atom_params_applied_as`` (which covers atom_params
+                    # alone) does not state it. The subtraction itself is structured now,
+                    # so the note keeps only the part it cannot carry.
                     scheme["note"] = (
-                        "Arkane subtracts these atomic energies from the "
-                        "molecular electronic energy and adds each atom's "
-                        "gas-phase formation enthalpy less its thermal "
-                        "correction (RMG-database atom_hf - atom_thermal)."
+                        "Arkane also adds each atom's gas-phase formation enthalpy less "
+                        "its thermal correction (RMG-database atom_hf - atom_thermal); "
+                        "those addends are not atom_params."
                     )
                 # ``scheme.units`` is the unit the scheme's parameter values
                 # are expressed in; the applied total keeps its own value_unit.
@@ -986,69 +996,51 @@ class TCKDBReadinessError(RuntimeError):
         self.headers = dict(headers) if headers is not None else None
 
 
-_W_MONATOMIC_PLACEHOLDER_OPT = "monatomic_species_primary_opt_placeholder"
-
-
-def _warn_monatomic_placeholder_opt(
+def _warn_primary_opt_placeholder(
     species_record: Mapping[str, Any],
     warnings: list[dict[str, Any]] | None,
     *,
     field: str,
 ) -> None:
-    """Warn that a single-atom species' primary opt is a placeholder.
+    """Warn that a molecule's primary opt is a placeholder for a job ARC did not run as an opt.
 
     TCKDB's computed-species and computed-reaction routes require every
-    conformer's primary calculation to be an ``opt``
-    (``ConformerInBundle.validate_primary_is_opt`` and the reaction
-    ``ConformerIn`` equivalent), but ARC runs no optimisation for a single atom
-    (BRIDGE_ROADMAP A6). The atom is still deposited, with the primary opt the
-    routes require and ``converged`` as ARC reports it, and this warning says so.
-    The calculation model has no ``note`` field to carry the statement.
-    TCKDB issue #600 asks the route to accept an sp primary for an atom.
+    conformer of two or more atoms to carry an ``opt`` primary calculation
+    (``ConformerInBundle.validate_primary_is_opt`` and the reaction ``ConformerIn``
+    equivalent). Two shapes of 1.3 record have none: a composite run, whose
+    geometry came from a job whose internal optimisation level ARC does not
+    export, and a record that exports an sp or freq log but no opt job. Each is
+    filed as a marked placeholder opt and reported. The calculation model has no
+    ``note`` field to carry the statement.
+
+    A single atom is not a placeholder case: since tckdb-schemas 0.59 (TCKDB#610)
+    its primary is its real ``sp`` (``_build_monatomic_primary_sp``), so nothing
+    is filed or warned for it.
     """
+    if _is_single_atom_geometry(species_record.get("xyz")):
+        return
     kind = arc13.primary_opt_placeholder(species_record)
-    if kind is not None:
-        code = (_W_COMPOSITE_GEOMETRY_LEVEL_NOT_STATED if kind == "composite"
-                else _W_PRIMARY_OPT_PLACEHOLDER_NO_OPT_JOB)
-        label = species_record.get("label") or "<unlabeled>"
-        message = (
-            f"The primary opt filed for {label!r} is a placeholder (tckdb_origin "
-            f"placeholder_primary_opt_{kind}): "
-            + ("its geometry came from a composite-method job, whose internal optimisation "
-               "level ARC does not export, so the opt carries the composite level ARC states."
-               if kind == "composite" else
-               "ARC exports no optimisation job for it, so the opt carries the header opt level; "
-               "only ARC's stated convergence is sent, with no step count or energy.")
-            + " TCKDB requires a primary opt and has no composite calculation type."
-        )
-        logger.warning("TCKDB %s: %s", code, message)
-        if warnings is not None:
-            warnings.append({
-                "code": code, "message": message, "field": field,
-                "context": {"source": "tckdb_arc_self_check",
-                            "action": "placeholder_primary_opt_filed"},
-            })
+    if kind is None:
         return
-    symbols = _species_element_symbols(species_record)
-    if symbols is None or len(symbols) != 1:
-        return
+    code = (_W_COMPOSITE_GEOMETRY_LEVEL_NOT_STATED if kind == "composite"
+            else _W_PRIMARY_OPT_PLACEHOLDER_NO_OPT_JOB)
     label = species_record.get("label") or "<unlabeled>"
     message = (
-        f"{label!r} is a single atom ({symbols[0]}). TCKDB requires a primary "
-        "opt calculation, but ARC runs no optimisation for a single atom, so "
-        "the primary opt filed for it is a placeholder (its convergence is "
-        "whatever ARC reports for the species). The atom's real calculations "
-        "are its sp and freq. See https://github.com/TCKDB/TCKDB/issues/600."
+        f"The primary opt filed for {label!r} is a placeholder (tckdb_origin "
+        f"placeholder_primary_opt_{kind}): "
+        + ("its geometry came from a composite-method job, whose internal "
+           "optimisation level ARC does not export, so the opt carries the composite level ARC states."
+           if kind == "composite" else
+           "ARC exports no optimisation job for it, so the opt carries the header opt level; "
+           "only ARC's stated convergence is sent, with no step count or energy.")
+        + " TCKDB requires a primary opt and has no composite calculation type."
     )
-    logger.warning("TCKDB %s: %s", _W_MONATOMIC_PLACEHOLDER_OPT, message)
+    logger.warning("TCKDB %s: %s", code, message)
     if warnings is not None:
         warnings.append({
-            "code": _W_MONATOMIC_PLACEHOLDER_OPT,
-            "message": message,
-            "field": field,
+            "code": code, "message": message, "field": field,
             "context": {"source": "tckdb_arc_self_check",
-                        "action": "placeholder_primary_opt_filed",
-                        "element": symbols[0]},
+                        "action": "placeholder_primary_opt_filed"},
         })
 
 
@@ -1481,7 +1473,7 @@ class TCKDBAdapter:
         optional thermo block. Producer-side omissions (a thermo block the
         producer self-check refuses) are appended to ``warnings``.
         """
-        _warn_monatomic_placeholder_opt(species_record, warnings, field="conformers[0].primary_calculation")
+        _warn_primary_opt_placeholder(species_record, warnings, field="conformers[0].primary_calculation")
         # Scans ARC exported that could not be built, key -> reason; the
         # statmech builder drops torsion links to them (``torsion_scan_not_built``).
         unbuilt_scans: dict[str, str] = {}
@@ -1526,7 +1518,7 @@ class TCKDBAdapter:
             element_symbols=_species_element_symbols(species_record),
             target_label=str(species_record.get("label") or "") or None,
             arkane_release=_arkane_workflow_tool_release(output_doc),
-            scheme_releases=_scheme_workflow_tool_releases(output_doc),
+            scheme_data_revisions=_scheme_data_revisions(output_doc),
             aec_yml_digest=_arc_aec_yml_digest(output_doc),
             omitted_bac_reasons=omitted_bacs,
         )
@@ -1647,6 +1639,24 @@ class TCKDBAdapter:
         # Required: the bundle's ConformerInBundle.geometry, also reused
         # as the explicit input_geometries entry on freq + sp.
         conformer_xyz_text = _require_xyz_text(species_record)
+
+        if _is_single_atom_geometry(conformer_xyz_text):
+            # A single atom has no geometry to optimise: its primary calculation
+            # is its own single point (tckdb-schemas 0.59, TCKDB#610), and it has
+            # no opt, coarse opt, freq or rotor scan to carry.
+            primary_calc = self._build_monatomic_primary_sp(
+                output_doc=output_doc, species_record=species_record,
+                calc_key=_CALC_KEY_SP, conformer_xyz_text=conformer_xyz_text)
+            block: dict[str, Any] = {
+                "key": conformer_key,
+                "geometry": _geometry_payload(
+                    species_record, conformer_xyz_text, species_record.get("xyz_isotopes")),
+                "primary_calculation": primary_calc,
+                "additional_calculations": [],
+            }
+            if species_record.get("label"):
+                block["label"] = str(species_record["label"])[:64]
+            return [_CALC_KEY_SP], block
 
         # Coarse-opt provenance. Emitted only when ``coarse_opt_log``
         # exists AND ``coarse_opt_output_xyz`` is populated — the
@@ -1803,6 +1813,47 @@ class TCKDBAdapter:
             block["label"] = str(label)[:64]
         return included, block
 
+    def _build_monatomic_primary_sp(
+        self,
+        *,
+        output_doc: Mapping[str, Any],
+        species_record: Mapping[str, Any],
+        calc_key: str,
+        conformer_xyz_text: str,
+    ) -> dict[str, Any]:
+        """The ``sp`` primary calculation of a single atom (tckdb-schemas 0.59, TCKDB#610).
+
+        Contract (``ConformerInBundle.validate_primary_is_opt``): "A monatomic species
+        has no geometry to optimise ... send that single point, once, as
+        ``primary_calculation`` with ``type: "sp"``, its ``sp_result``, and the atom's
+        one-atom XYZ as the conformer ``geometry``. Do not relabel it as an ``opt``."
+        It is the atom's own job: its log, level, program, energy and settings as ARC
+        states them for the sp (an output.yml 1.3 monoatomic's sp log is also its
+        ``opt_log``, and ``levels.sp`` is its level). It carries no ``depends_on``
+        (there is no opt to depend on) and no reused-result marker. ``SPResultPayload``
+        has no convergence field, so ARC's ``converged`` for the atom is not sent. The
+        energy is ``sp_energy_hartree``, else (non-composite atoms only) the
+        ``opt_final_energy_hartree`` ARC parsed from the same one log
+        (``_monatomic_sp_result_payload``).
+        """
+        sp_result = _monatomic_sp_result_payload(species_record)
+        if sp_result is None:
+            raise _atom_without_sp_energy_error(species_record)
+        return self._build_calc_in_bundle(
+            output_doc=output_doc,
+            species_record=species_record,
+            calc_key=calc_key,
+            calc_role=_CALC_KEY_SP,
+            calc_type="sp",
+            level_kind="sp",
+            ess_job_key="sp",
+            result_field="sp_result",
+            result_payload=sp_result,
+            depends_on=None,
+            tckdb_origin=None,
+            conformer_xyz_text=conformer_xyz_text,
+        )
+
     def _build_alt_conformer_blocks(
         self,
         *,
@@ -1868,6 +1919,10 @@ class TCKDBAdapter:
         """
         raw_conformers = species_record.get("conformers")
         if not isinstance(raw_conformers, (list, tuple)) or not raw_conformers:
+            return []
+        if _is_single_atom_geometry(selected_xyz_text):
+            # An atom has one geometry; an alternative conformer would need the
+            # bare opt that TCKDB does not take for an atom.
             return []
 
         label = species_record.get("label")
@@ -3002,7 +3057,7 @@ class TCKDBAdapter:
         It only contains the roles whose calculation actually made it
         into the bundle.
         """
-        _warn_monatomic_placeholder_opt(
+        _warn_primary_opt_placeholder(
             species_record, warnings,
             field=f"species[{actor_key}].conformers[0].calculation")
         conformer_xyz_text = _require_xyz_text(species_record)
@@ -3012,6 +3067,7 @@ class TCKDBAdapter:
         sp_key = f"{calc_prefix}_{_CALC_KEY_SP}"
         geom_key = f"{actor_key}_geom"
         conf_key = f"{actor_key}_conf0"
+        monatomic = _is_single_atom_geometry(conformer_xyz_text)
 
         # Coarse-opt provenance, parallel to the computed-species path.
         # Same gate (both ``coarse_opt_log`` and ``coarse_opt_output_xyz``
@@ -3032,22 +3088,31 @@ class TCKDBAdapter:
                  "role": "optimized_from"}
             ]
 
-        primary_calc = self._build_calc_in_bundle(
-            output_doc=output_doc,
-            species_record=species_record,
-            calc_key=opt_key,
-            calc_role=_CALC_KEY_OPT,
-            calc_type="opt",
-            level_kind="opt",
-            ess_job_key="opt",
-            result_field="opt_result",
-            result_payload=_opt_result_payload(species_record),
-            depends_on=fine_opt_depends_on,
-            tckdb_origin=None,
-            conformer_xyz_text=conformer_xyz_text,
-        )
-
-        calc_keys: dict[str, str] = {_CALC_KEY_OPT: opt_key}
+        if monatomic:
+            # An atom's primary is its own single point (tckdb-schemas 0.59,
+            # TCKDB#610): no opt, coarse opt, freq or rotor scan exists to carry.
+            primary_calc = self._build_monatomic_primary_sp(
+                output_doc=output_doc, species_record=species_record,
+                calc_key=sp_key, conformer_xyz_text=conformer_xyz_text)
+            opt_coarse_calc = None
+            fine_opt_depends_on = None
+            calc_keys: dict[str, str] = {_CALC_KEY_SP: sp_key}
+        else:
+            primary_calc = self._build_calc_in_bundle(
+                output_doc=output_doc,
+                species_record=species_record,
+                calc_key=opt_key,
+                calc_role=_CALC_KEY_OPT,
+                calc_type="opt",
+                level_kind="opt",
+                ess_job_key="opt",
+                result_field="opt_result",
+                result_payload=_opt_result_payload(species_record),
+                depends_on=fine_opt_depends_on,
+                tckdb_origin=None,
+                conformer_xyz_text=conformer_xyz_text,
+            )
+            calc_keys = {_CALC_KEY_OPT: opt_key}
         additional: list[dict[str, Any]] = []
         # opt_coarse is type=opt, so the schema validator at
         # computed_reaction_upload.py:446 exempts it from needing
@@ -3060,7 +3125,7 @@ class TCKDBAdapter:
             calc_keys[_CALC_KEY_OPT_COARSE] = opt_coarse_key
 
         freq_result = _freq_result_payload(species_record, schema_1_3=_is_output_schema_1_3_or_later(output_doc))
-        if freq_result is not None:
+        if freq_result is not None and not monatomic:
             try:
                 freq_calc = self._build_calc_in_bundle(
                     output_doc=output_doc,
@@ -3089,7 +3154,7 @@ class TCKDBAdapter:
                 )
 
         sp_result = _sp_result_payload(species_record)
-        if sp_result is not None:
+        if sp_result is not None and not monatomic:
             try:
                 sp_calc = self._build_calc_in_bundle(
                     output_doc=output_doc,
@@ -3131,7 +3196,7 @@ class TCKDBAdapter:
         #    freq/sp set it above).
         scan_key_renames: dict[str, str] = {}
         unbuilt_scans: dict[str, str] = {}
-        for scan_entry in _scan_entries_from_record(species_record):
+        for scan_entry in ([] if monatomic else _scan_entries_from_record(species_record)):
             if not isinstance(scan_entry, Mapping):
                 continue
             if scan_entry.get("type") != _CALC_KEY_SCAN:
@@ -3239,7 +3304,7 @@ class TCKDBAdapter:
             element_symbols=_species_element_symbols(species_record),
             target_label=str(species_record.get("label") or "") or None,
             arkane_release=_arkane_workflow_tool_release(output_doc),
-            scheme_releases=_scheme_workflow_tool_releases(output_doc),
+            scheme_data_revisions=_scheme_data_revisions(output_doc),
             aec_yml_digest=_arc_aec_yml_digest(output_doc),
             omitted_bac_reasons=omitted_bacs,
         )
@@ -3330,7 +3395,7 @@ class TCKDBAdapter:
         """
         conformer_xyz_text = _require_xyz_text(ts_record)
         if arc13.primary_opt_placeholder(ts_record) is not None:
-            _warn_monatomic_placeholder_opt(
+            _warn_primary_opt_placeholder(
                 ts_record, warnings, field="transition_state.calculation")
         ts_opt_key = f"ts_{_CALC_KEY_OPT}"
         # ``_CALC_KEY_TS_GUESS`` already starts with ``ts_``; using it
@@ -3757,7 +3822,7 @@ class TCKDBAdapter:
             target_kind="transition_state",
             target_label=str(ts_label) or None,
             arkane_release=_arkane_workflow_tool_release(output_doc),
-            scheme_releases=_scheme_workflow_tool_releases(output_doc),
+            scheme_data_revisions=_scheme_data_revisions(output_doc),
             aec_yml_digest=_arc_aec_yml_digest(output_doc),
         )
         if applied_corrections:
@@ -3874,9 +3939,8 @@ class TCKDBAdapter:
         ``output_doc['species']`` into a ``SpeciesEntryIdentityPayload``
         (the same ``_species_entry_payload`` shape the species path uses).
 
-        Two pieces of computed-reaction provenance are intentionally NOT
-        carried here because the ``/uploads/transition-states`` schema has
-        no slot for them:
+        One piece of computed-reaction provenance is intentionally NOT carried
+        here because the ``/uploads/transition-states`` schema has no slot for it:
 
         * **Inline artifacts** (ESS logs / input decks). The bundle path
           base64-inlines these under each calc when
@@ -3885,12 +3949,13 @@ class TCKDBAdapter:
           ``include_artifacts=False`` to skip the read+encode entirely
           (rather than build-then-drop), and a one-time WARNING tells the
           user their request can't be honored on this path.
-        * **Applied energy corrections** (AEC/BAC). ``_build_ts_block``
-          attaches ``applied_energy_corrections`` to the TS block for the
-          reaction bundle, but the standalone request carries no such
-          field. We drop them deliberately (a debug log records when a TS
-          actually had them) — the raw SP energy still ships on the ``sp``
-          calc, so no scientific data the endpoint can store is lost.
+
+        Since tckdb-schemas 0.64 the request also takes rotor-``scan``
+        calculations (with ``scan_result``) and ``applied_energy_corrections``
+        (AEC/BAC; with no source keys, since the payload has no key
+        namespace), both carried here; its ``atom_map`` slot stays unset
+        (ARC states no participant-atom to transition-state-atom relation,
+        ``reaction_atom_map_ts_order_not_stated``).
         """
         species_index = _index_species(output_doc)
         reaction_record = _with_stated_participants(
@@ -3930,41 +3995,18 @@ class TCKDBAdapter:
             species_index=species_index,
         )
         _warn_atom_map_not_sent(
-            reaction_record, ts_label=str(ts_label), warnings=ts_warnings,
-            route_has_atom_map=False)
-        # The standalone request drops the TS's applied energy corrections
-        # (below), so findings about them do not describe this upload.
+            reaction_record, ts_label=str(ts_label), warnings=ts_warnings)
         if warnings is not None:
-            warnings.extend(
-                w for w in ts_warnings
-                if not str(w.get("field", "")).startswith(
-                    "transition_state.applied_energy_corrections")
-            )
-
-        # Applied energy corrections travel on the TS block for the
-        # reaction bundle but have no home in the standalone request. Log
-        # (debug) when we drop a non-empty set so the omission is visible
-        # and clearly intentional, not a silent data loss.
-        if ts_block.get("applied_energy_corrections"):
-            logger.debug(
-                "TCKDB transition-state %r: %d applied energy correction(s) "
-                "dropped — /uploads/transition-states has no slot for them.",
-                str(ts_label),
-                len(ts_block["applied_energy_corrections"]),
-            )
+            warnings.extend(ts_warnings)
 
         # primary_opt is required and must be type=opt; _build_ts_block
         # always emits ts_block["calculation"] as the type=opt primary.
         primary_opt = self._ts_calc_to_standalone(ts_block["calculation"])
         additional_calculations = []
+        # tckdb-schemas 0.64: "``additional_calculations`` now accepts ``scan``, and
+        # ``CalculationWithResultsPayload`` gains ``scan_result``", so a rotor scan travels
+        # with its points on this route too.
         for calc in ts_block.get("calculations", []):
-            if calc.get("type") == "scan":
-                logger.warning(
-                    "TCKDB transition-state %r: standalone uploads cannot carry "
-                    "rotor scan results; use computed_reaction mode to retain them.",
-                    str(ts_label),
-                )
-                continue
             additional_calculations.append(self._ts_calc_to_standalone(calc))
 
         request: dict[str, Any] = {
@@ -3980,6 +4022,17 @@ class TCKDBAdapter:
         }
         if additional_calculations:
             request["additional_calculations"] = additional_calculations
+        # 0.64: ``applied_energy_corrections`` takes no ``source_calculation_key`` or
+        # ``source_conformer_key`` ("the payload has no key namespace") and no frequency
+        # scale factor, which "is defined by the frequency calculation it was applied to".
+        corrections = [
+            {k: v for k, v in correction.items()
+             if k not in ("source_calculation_key", "source_conformer_key")}
+            for correction in ts_block.get("applied_energy_corrections") or []
+            if correction.get("frequency_scale_factor") is None
+        ]
+        if corrections:
+            request["applied_energy_corrections"] = corrections
         # The standalone route has no calculation-key namespace: evidence binds
         # to the upload's single irc additional calculation and must omit
         # ``source_calculation_key``.
@@ -4178,7 +4231,7 @@ class TCKDBAdapter:
         ``statmech.torsions[].invalidated_reason``. There is no thermo slot.
         Producer-side omissions are appended to ``warnings``.
         """
-        _warn_monatomic_placeholder_opt(species_record, warnings, field="calculation")
+        _warn_primary_opt_placeholder(species_record, warnings, field="calculation")
         species_entry = self._species_entry_payload(species_record)
         geometry_payload = _geometry_payload(
             species_record, _require_xyz_text(species_record), species_record.get("xyz_isotopes"))
@@ -4186,7 +4239,7 @@ class TCKDBAdapter:
 
         # Local keys, so the statmech links and the corrections' source name
         # the calculations of this request (as computed-species' role keys do).
-        primary["key"] = _CALC_KEY_OPT
+        primary["key"] = _CALC_KEY_SP if primary["type"] == "sp" else _CALC_KEY_OPT
         for calc in additional:
             calc["key"] = calc["type"]
         calc_keys_by_role = {
@@ -4213,7 +4266,7 @@ class TCKDBAdapter:
             element_symbols=_species_element_symbols(species_record),
             target_label=str(species_record.get("label") or "") or None,
             arkane_release=_arkane_workflow_tool_release(output_doc),
-            scheme_releases=_scheme_workflow_tool_releases(output_doc),
+            scheme_data_revisions=_scheme_data_revisions(output_doc),
             aec_yml_digest=_arc_aec_yml_digest(output_doc),
             omitted_bac_reasons=omitted_bacs,
         )
@@ -4275,7 +4328,27 @@ class TCKDBAdapter:
         Additional calculations are skipped (with a warning) when their
         result fields are absent or malformed, or when no level of theory
         is available. Skipping an optional calc never fails the upload.
+
+        A single atom (its own XYZ has one atom) returns its ``sp`` as the primary
+        calculation and no additional calculations (tckdb-schemas 0.59,
+        TCKDB#610; ``ConformerUploadRequest`` gives a one-atom ``sp`` primary
+        the conformer geometry link), see ``_build_monatomic_primary_sp``.
         """
+        if _is_single_atom_geometry(_require_xyz_text(record)):
+            sp_result = _monatomic_sp_result_payload(record)
+            if sp_result is None:
+                raise _atom_without_sp_energy_error(record)
+            return cls._calculation_payload(
+                output_doc,
+                record,
+                calc_type="sp",
+                level=_resolve_level(output_doc, "sp", record),
+                ess_job_key="sp",
+                result_field="sp_result",
+                result_payload=sp_result,
+                tckdb_origin=None,
+                final_settings=_final_settings_for_calc(species_record=record, calc_role=_CALC_KEY_SP),
+            ), []
         primary = cls._calculation_payload(
             output_doc,
             record,
@@ -6681,7 +6754,7 @@ def _build_applied_energy_corrections(
     target_label: str | None = None,
     arkane_release: Mapping[str, Any] | None = None,
     omitted_bac_reasons: list[str] | None = None,
-    scheme_releases: Mapping[str, Mapping[str, Any]] | None = None,
+    scheme_data_revisions: Mapping[str, str] | None = None,
     aec_yml_digest: str | None = None,
 ) -> list[dict[str, Any]]:
     """Translate ``output.yml`` per-species ``applied_energy_corrections``
@@ -6722,10 +6795,11 @@ def _build_applied_energy_corrections(
     ``arkane_release`` (see ``_arkane_workflow_tool_release``) is stamped as
     ``scheme.workflow_tool_release`` on ``atom_energy``, ``bac_petersson`` and
     ``bac_melius`` schemes, the kinds built from Arkane's tables. An output.yml
-    1.3 document identifies the tables themselves (the RMG-database
-    ``quantum_corrections/data.py`` Arkane loaded); ``scheme_releases`` (see
-    ``_scheme_workflow_tool_releases``) then names that source per scheme kind,
-    and takes the place of the Arkane build for the kinds it covers.
+    1.3 document also identifies the tables themselves (the RMG-database
+    ``quantum_corrections/data.py`` Arkane loaded); ``scheme_data_revisions`` (see
+    ``_scheme_data_revisions``) then names that revision per scheme kind as
+    ``scheme.data_revision`` (tckdb-schemas 0.62), which joins the scheme's
+    identity and makes the Arkane build provenance only.
 
     ``aec_yml_digest`` (output 1.3's ``arc_aec_yml_sha256``, see
     ``_arc_aec_yml_digest``) says ARC rendered Arkane's ``atomEnergies`` from its own
@@ -6867,14 +6941,12 @@ def _build_applied_energy_corrections(
             else:
                 scheme_out["software"] = {"name": key_software}
 
-        if (
-            (arkane_release is not None or scheme_releases)
-            and "workflow_tool_release" not in scheme_out
-            and scheme_out.get("kind") in ("atom_energy", "bac_petersson", "bac_melius")
-        ):
-            scheme_out["workflow_tool_release"] = dict(
-                (scheme_releases or {}).get(scheme_out.get("kind")) or arkane_release
-            )
+        if scheme_out.get("kind") in _RMG_DATABASE_SCHEME_KINDS:
+            if arkane_release is not None and "workflow_tool_release" not in scheme_out:
+                scheme_out["workflow_tool_release"] = dict(arkane_release)
+            revision = (scheme_data_revisions or {}).get(scheme_out["kind"])
+            if revision is not None and "data_revision" not in scheme_out:
+                scheme_out["data_revision"] = revision
 
         payload: dict[str, Any] = {
             "application_role": rec["application_role"],
@@ -7238,6 +7310,67 @@ def _species_element_symbols(record: Mapping[str, Any]) -> tuple[str, ...] | Non
     if symbols is None:
         symbols = _formula_element_symbols(record.get("formula"))
     return symbols
+
+
+def _is_single_atom_geometry(xyz_text: Any) -> bool:
+    """Whether a conformer's own XYZ has exactly one atom.
+
+    The rule tckdb-schemas 0.59 states for an ``sp`` primary calculation is on the
+    geometry the conformer carries (``geometry.natoms == 1``), so it is read from
+    the XYZ the adapter sends, never from the formula or the SMILES.
+    """
+    symbols = _xyz_element_symbols(xyz_text)
+    return symbols is not None and len(symbols) == 1
+
+
+def _monatomic_sp_result_payload(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """``sp_result`` of a single atom's one job: ``sp_energy_hartree``, else ``opt_final_energy_hartree``.
+
+    An atom has no optimisation job; ARC runs only its single point, whose log
+    output.yml 1.3 also exports as the atom's ``opt_log`` (so ``sp_log == opt_log``).
+    Output written before that, and some records after it, state the atom's energy
+    only as ``opt_final_energy_hartree``, which ARC parses from that same log. It is
+    the energy of the atom's single job whichever key carries it, so it is used when
+    ``sp_energy_hartree`` is not stated; nothing else is read.
+
+    Not for a composite-run atom (``composite_log`` or a composite level stated): its
+    ``opt_final_energy_hartree`` is parsed from the composite log and may be an
+    intermediate SCF energy rather than the composite energy, so only
+    ``sp_energy_hartree`` is accepted and the atom is otherwise refused.
+    """
+    result = _sp_result_payload(record)
+    if result is not None:
+        return result
+    if _is_composite_atom_record(record):
+        return None
+    fallback = record.get("opt_final_energy_hartree")
+    if isinstance(fallback, bool) or not isinstance(fallback, (int, float)) or not math.isfinite(fallback):
+        return None
+    return {"electronic_energy_hartree": float(fallback)}
+
+
+def _is_composite_atom_record(record: Mapping[str, Any]) -> bool:
+    """Whether the record is a composite-method run (composite log, or a composite level/method stated)."""
+    if record.get("composite_log") or record.get("composite_method"):
+        return True
+    levels = record.get("levels")
+    return isinstance(levels, Mapping) and bool(levels.get("composite"))
+
+
+def _atom_without_sp_energy_error(record: Mapping[str, Any]) -> ValueError:
+    if _is_composite_atom_record(record):
+        return ValueError(
+            f"{record.get('label')!r} is a single atom of a composite run, so its primary "
+            "calculation is its single point, but ARC states no sp_energy_hartree for it "
+            "(opt_final_energy_hartree is parsed from the composite log and may be an "
+            "intermediate SCF energy, so it is not used); the adapter does "
+            "not relabel it as an optimisation, so the species is not built.")
+    return ValueError(
+        f"{record.get('label')!r} is a single atom, so its primary calculation is its "
+        "single point (an atom has no geometry to optimise and TCKDB accepts an sp "
+        "primary for it), but ARC states neither sp_energy_hartree nor "
+        "opt_final_energy_hartree for it; the adapter does "
+        "not relabel it as an optimisation, so the species is not built.")
 
 
 def _light_species_raw_energy_kj_mol(element_symbols: Any) -> float | None:
@@ -7943,27 +8076,39 @@ def _arkane_workflow_tool_release(
     return release if len(release) > 1 else None
 
 
-_RMG_DATABASE_TOOL_NAME = "RMG-database"
-
-
 def _sha256_or_none(value: Any) -> str | None:
     text = value.strip().lower() if isinstance(value, str) else ""
     return text if re.fullmatch(r"[0-9a-f]{64}", text) else None
 
 
-def _rmg_database_release(output_doc: Mapping[str, Any]) -> dict[str, Any] | None:
-    """The RMG-database code state behind Arkane's correction tables, or ``None``.
+# ``EnergyCorrectionSchemeRef.data_revision`` is at most 200 characters (0.62).
+_DATA_REVISION_MAX_CHARS = 200
+
+
+def _rmg_database_data_revision(output_doc: Mapping[str, Any]) -> str | None:
+    """The revision of the RMG-database tables Arkane loaded, as a ``data_revision``, or ``None``.
 
     Output 1.3's header ``rmg_database`` identifies the ``quantum_corrections/
     data.py`` Arkane actually loaded (it need not be the file under ARC's
     ``RMG_DB_PATH``): its SHA-256, and the git ``HEAD`` of its checkout
     (``path_kind: git``) or the conda ``rmgdatabase`` package version
-    (``path_kind: package``). TCKDB's ``WorkflowToolReleaseRef`` identifies a
-    release by ``(name, version, git_commit)`` only, so the SHA-256 (the exact
-    table) is the identity where neither a commit nor a version exists; it is
-    always repeated in ``notes``. Never filled from anything else: ``None``
-    (the caller keeps the Arkane build) when the document is not 1.3, the
-    block is absent, or it states no commit, version or digest.
+    (``path_kind: package``). tckdb-schemas 0.62's ``data_revision`` is "the
+    revision of the *data* that holds the parameter tables, for example the
+    RMG-database commit that holds Arkane's atom-energy and BAC tables" and joins
+    the scheme's identity, so two Arkane builds that read one revision are one
+    scheme. It is the git commit when the path is a git checkout, else the
+    package version, else the ``data.py`` digest as a plain hex string (that is
+    the exact table; TCKDB reads a 7-64 hex value as a git commit and lower-cases
+    it, and keeps anything else as written). Never filled from anything else:
+    ``None`` (the scheme then keeps its pre-0.62 identity, which includes the
+    Arkane build) when the document is not 1.3, the block is absent, or it states
+    no usable commit, version or digest.
+
+    Not stated by ARC, so not checked here: whether the checkout is dirty or the
+    tables were overridden (Arkane ``atomEnergies``/BAC overrides). The contract
+    asks for a revision "only when the tables really came from that repository
+    revision"; ARC's own ``data/AEC.yml`` override is handled separately
+    (``_arc_aec_yml_digest``).
     """
     if not _is_output_schema_1_3_or_later(output_doc):
         return None
@@ -7971,36 +8116,16 @@ def _rmg_database_release(output_doc: Mapping[str, Any]) -> dict[str, Any] | Non
     if not isinstance(identity, Mapping):
         return None
     kind = identity.get("path_kind")
-    digest = _sha256_or_none(identity.get("quantum_corrections_sha256"))
     commit = identity.get("git_commit")
     commit = commit.strip() if isinstance(commit, str) else ""
     version = identity.get("version")
     version = version.strip() if isinstance(version, str) else ""
-    release: dict[str, Any] = {"name": _RMG_DATABASE_TOOL_NAME}
-    if kind == "git" and 1 <= len(commit) <= 40:
-        release["git_commit"] = commit
-    elif kind == "package" and version:
-        release["version"] = version
-    elif digest is not None:
-        release["version"] = f"sha256:{digest}"
-    else:
-        return None
-    notes = [f"quantum_corrections/data.py of the RMG database Arkane loaded (path_kind={kind})"]
-    if digest is not None:
-        notes.append(f"sha256={digest}")
-    if kind == "git" and commit:
-        notes.append(f"git HEAD {commit}")
-    if version:
-        notes.append(f"package version {version}")
-    if identity.get("matches_arc_rmg_db_path") is False:
-        notes.append("differs from the file under ARC's RMG_DB_PATH")
-    arkane = _arkane_workflow_tool_release(output_doc)
-    if arkane is not None:
-        notes.append(
-            "looked up by Arkane " + " ".join(
-                str(arkane[k]) for k in ("version", "git_commit") if k in arkane))
-    release["notes"] = "; ".join(notes)
-    return release
+    digest = _sha256_or_none(identity.get("quantum_corrections_sha256"))
+    if kind == "git" and 1 <= len(commit) <= _DATA_REVISION_MAX_CHARS:
+        return commit.lower() if re.fullmatch(r"[0-9a-fA-F]{7,64}", commit) else commit
+    if kind == "package" and 1 <= len(version) <= _DATA_REVISION_MAX_CHARS:
+        return version
+    return digest
 
 
 def _arc_aec_yml_digest(output_doc: Mapping[str, Any]) -> str | None:
@@ -8010,31 +8135,33 @@ def _arc_aec_yml_digest(output_doc: Mapping[str, Any]) -> str | None:
     return _sha256_or_none(output_doc.get("arc_aec_yml_sha256"))
 
 
-def _scheme_workflow_tool_releases(
-    output_doc: Mapping[str, Any],
-) -> dict[str, dict[str, Any]]:
-    """``scheme.workflow_tool_release`` per scheme kind from an output 1.3 header.
+# The scheme kinds whose parameters Arkane reads from the RMG-database tables.
+_RMG_DATABASE_SCHEME_KINDS = ("atom_energy", "bac_petersson", "bac_melius")
 
-    The scheme's tool release is the tool whose data file was the proximate
-    source of its parameters. Every record ARC exports (``atom_energy``,
-    ``bac_petersson``, ``bac_melius``) is computed by Arkane's own correction
-    functions from the RMG-database ``quantum_corrections/data.py`` it loaded, so
-    the release names that table (a commit, a package version or its digest)
-    rather than the Arkane build: a revised table then gives a new scheme identity
-    (BRIDGE_ROADMAP B12) and an unrelated RMG-Py commit does not.
+
+def _scheme_data_revisions(output_doc: Mapping[str, Any]) -> dict[str, str]:
+    """``scheme.data_revision`` per scheme kind from an output 1.3 header.
+
+    Every record ARC exports (``atom_energy``, ``bac_petersson``, ``bac_melius``) is
+    computed by Arkane's own correction functions from the RMG-database
+    ``quantum_corrections/data.py`` it loaded, so the scheme's data revision is that
+    table's (``_rmg_database_data_revision``). A revised table is then a new scheme
+    identity (BRIDGE_ROADMAP B12), and an unrelated RMG-Py (Arkane) commit no longer
+    splits one: the Arkane build stays on ``scheme.workflow_tool_release`` as
+    provenance only (tckdb-schemas 0.62: "send the RMG-database commit here, keep
+    stamping the tool release").
 
     The header's ``arc_aec_yml_sha256`` (ARC's own ``data/AEC.yml``, rendered
-    as Arkane's ``atomEnergies``) is deliberately not a scheme release: ARC writes
+    as Arkane's ``atomEnergies``) is deliberately not a revision: ARC writes
     no ``atom_energy`` record for energies that came from that file (the record
     is keyed on a ``data.py`` entry), so no exported scheme has it as its source.
 
-    Empty (the caller keeps ``_arkane_workflow_tool_release``) when the document
-    states no database identity.
+    Empty when the document states no database identity.
     """
-    database = _rmg_database_release(output_doc)
-    if database is None:
+    revision = _rmg_database_data_revision(output_doc)
+    if revision is None:
         return {}
-    return {kind: dict(database) for kind in ("atom_energy", "bac_petersson", "bac_melius")}
+    return {kind: revision for kind in _RMG_DATABASE_SCHEME_KINDS}
 
 
 def _arc_analysis_software_release(
@@ -8278,8 +8405,8 @@ _STATMECH_FIELDS_BY_TARGET: dict[str, frozenset[str]] = {
         "energy_level_of_theory",
     }),
     # The conformer upload's nested statmech (ConformerUploadRequest.statmech).
-    # Its torsions (StatmechTorsionIn) are the only ones with
-    # ``invalidated_reason``, the home of ARC's rejected rotors.
+    # Its torsions (StatmechTorsionIn) carry ``invalidated_reason``, the home of
+    # ARC's rejected rotors, as the bundle torsions have since tckdb-schemas 0.61.
     "ConformerUploadStatmechPayload": frozenset({
         "freq_scale_factor", "external_symmetry", "optical_isomers",
         "is_linear", "rigid_rotor_kind", "statmech_treatment",
@@ -8342,10 +8469,9 @@ def _build_statmech_block_for_species(
     only when that role is among the block's source links, which TCKDB checks
     the declaration against.
 
-    Only the ``ConformerUploadStatmechPayload`` target adds ARC's rejected
-    rotors (``statmech.rejected_torsions``): its torsions alone carry
-    ``invalidated_reason``, which the bundle torsion models lack. See
-    ``_build_rejected_torsions``.
+    Every target adds ARC's rejected rotors (``statmech.rejected_torsions``) as
+    torsions carrying ``invalidated_reason`` (the bundle torsion models have it
+    since tckdb-schemas 0.61). See ``_build_rejected_torsions``.
 
     Both bundle endpoints (``StatmechInBundle`` for computed-species,
     ``BundleStatmechIn`` for computed-reaction per-species) currently
@@ -8551,14 +8677,18 @@ def _build_statmech_block_for_species(
                                 "torsion_count": len(slim_torsions)},
                 })
 
-        if is_conformer_root:
-            # After the treatment is classified: a rejected rotor was not
-            # treated, so it never counts toward ``statmech_treatment``.
-            slim_torsions = [*slim_torsions, *_build_rejected_torsions(
-                statmech_input.get("rejected_torsions"),
-                first_index=(len(torsions_input) if isinstance(torsions_input, list) else 0) + 1,
-                warnings=warnings, warning_field=warning_field,
-            )]
+        # After the treatment is classified: a rejected rotor was not treated, so it
+        # never counts toward ``statmech_treatment``. tckdb-schemas 0.61 gave the bundle
+        # torsion models ``invalidated_reason`` too ("Same field, same meaning and same
+        # storage as ``StatmechTorsionIn.invalidated_reason`` on the conformer route"),
+        # so every route carries ARC's rejected rotors.
+        slim_torsions = [*slim_torsions, *_build_rejected_torsions(
+            statmech_input.get("rejected_torsions"),
+            first_index=(len(torsions_input) if isinstance(torsions_input, list) else 0) + 1,
+            warnings=warnings, warning_field=warning_field,
+            # The bundle torsion models have no ``note`` (only ``StatmechTorsionIn`` does).
+            with_note=is_conformer_root,
+        )]
 
         if slim_torsions:
             block["torsions"] = slim_torsions
@@ -8913,8 +9043,12 @@ def _build_rejected_torsions(
     first_index: int,
     warnings: list[dict[str, Any]] | None = None,
     warning_field: str = "statmech",
+    with_note: bool = True,
 ) -> list[dict[str, Any]]:
     """Build ``StatmechTorsionIn`` entries for ARC's ``statmech.rejected_torsions``.
+
+    ``with_note`` is false for the bundle torsion models, which have no ``note``
+    (ARC's ``rotor_index`` is then not sent).
 
     ARC's ``_get_rejected_torsions`` (``arc/output.py``) lists each rotor it
     decided against (``success is False``; pending rotors are not rejections)
@@ -8975,7 +9109,7 @@ def _build_rejected_torsions(
                 else _REJECTED_TORSION_NO_REASON
             ),
         }
-        if isinstance(rotor_index, int) and not isinstance(rotor_index, bool):
+        if with_note and isinstance(rotor_index, int) and not isinstance(rotor_index, bool):
             slim["note"] = f"ARC rotor_index {rotor_index}"
         out.append(slim)
         next_index += 1
@@ -9391,6 +9525,10 @@ def _stringify_tunneling_model(value: object) -> str | None:
     return encoded or None
 
 
+# ``BundleKineticsIn.t0_k``: 0 < t0_k <= 10000 K (tckdb-schemas 0.63).
+_MAX_ARRHENIUS_T0_K = 10000.0
+
+
 def _build_kinetics_block(
     *,
     kinetics_record: Mapping[str, Any],
@@ -9411,7 +9549,8 @@ def _build_kinetics_block(
     a free-text ``note`` and no structured field for any of the three.
 
     Mapping (ARC → TCKDB):
-        A, T0_k, n  → a = A / T0_k**n (RMG uses (T/T0)**n)
+        A, T0_k, n  → a = A (unnormalised), t0_k = T0_k when it is not 1 K, n
+                      (RMG uses (T/T0)**n; TCKDB's ``t0_k``, 0.63, carries the T0)
         A_units     → a_units (via :func:`arc_to_tckdb_a_units`)
         n           → n
         Ea          → reported_ea
@@ -9517,32 +9656,39 @@ def _build_kinetics_block(
         except (TypeError, ValueError) as exc:
             logger.warning("TCKDB kinetics: malformed n=%r (%s)", n, exc)
 
-    # RMG/Arkane fits A * (T/T0)**n; TCKDB evaluates a * T**n.
-    # Older exports omitted T0 entirely and used the 1 K convention: their
-    # rates come from Arkane's ``Arrhenius().fit_to_data(...)``
-    # (RMG-Py arkane/kinetics.py), called without T0, whose default is
-    # T0=1 K (rmgpy/kinetics/arrhenius.pyx ``fit_to_data(..., double T0=1)``,
-    # stored as ``self.T0 = (T0, "K")``; ``Arrhenius.__init__`` also defaults
-    # T0=(1.0, "K")). Current output always writes ``T0_k``. Kept by
-    # maintainer decision (adapter 0.6.0) for pre-contract output only.
-    # An explicit null/invalid T0 is unknown, not evidence for 1 K.
-    if "a" in block:
+    # RMG/Arkane fits k = A * (T/T0)**n * exp(-Ea/RT). TCKDB (tckdb-schemas
+    # 0.63) states the same law: ``t0_k`` is "the reference temperature T0 of the
+    # Arrhenius expression, in K, meaning k = A * (T / T0)**n * exp(-Ea / (R * T))",
+    # it defaults to 1 K ("the plain A T^n form and what every record deposited
+    # before this release meant") and "the server stores ``a`` as sent (it is A at
+    # T0, not A rescaled)". So ARC's A is sent unnormalised beside ARC's own T0_k
+    # (the adapter used to send A / T0**n and lose the T0 it was fitted with).
+    # Older exports omitted T0 entirely and used the 1 K convention: their rates
+    # come from Arkane's ``Arrhenius().fit_to_data(...)`` (RMG-Py
+    # arkane/kinetics.py), called without T0, whose default is T0=1 K
+    # (rmgpy/kinetics/arrhenius.pyx ``fit_to_data(..., double T0=1)``, stored as
+    # ``self.T0 = (T0, "K")``; ``Arrhenius.__init__`` also defaults T0=(1.0, "K")).
+    # Current output always writes ``T0_k``. A record with no T0_k key at all is
+    # kept as 1 K by maintainer decision (adapter 0.6.0) for pre-contract output
+    # only (no ``t0_k`` sent: 1 K is TCKDB's default); an explicit null or invalid
+    # T0 is unknown, not evidence for 1 K, and so is one the contract refuses
+    # (``0 < t0_k <= 10000``): ``a`` is then not sent, since A at an unstated
+    # reference temperature would be read as A at 1 K.
+    if "a" in block and "T0_k" in kinetics_record:
+        raw_t0 = kinetics_record.get("T0_k")
         try:
-            t0 = float(kinetics_record.get("T0_k", 1.0))
-            if not math.isfinite(t0) or t0 <= 0:
-                raise ValueError("T0_k must be finite and positive")
+            if isinstance(raw_t0, bool):
+                raise ValueError("T0_k must be a number")
+            t0 = float(raw_t0)
+            if not math.isfinite(t0) or not 0 < t0 <= _MAX_ARRHENIUS_T0_K:
+                raise ValueError(
+                    f"T0_k must satisfy 0 < t0_k <= {_MAX_ARRHENIUS_T0_K:g} K (tckdb-schemas 0.63)")
             if t0 != 1.0:
-                exponent = block.get("n")
-                if exponent is None or not math.isfinite(exponent):
-                    raise ValueError("non-unit T0_k requires a finite n")
-                normalized_a = block["a"] / t0**exponent
-                if not math.isfinite(normalized_a) or (normalized_a == 0 and block["a"] != 0):
-                    raise ValueError("normalized A is not representable")
-                block["a"] = normalized_a
-        except (TypeError, ValueError, OverflowError, ZeroDivisionError) as exc:
+                block["t0_k"] = t0
+        except (TypeError, ValueError, OverflowError) as exc:
             logger.warning(
-                "TCKDB kinetics: cannot normalize A with T0_k=%r, n=%r (%s); "
-                "omitting a/a_units.", kinetics_record.get("T0_k"), n, exc,
+                "TCKDB kinetics: cannot state T0_k=%r (%s); omitting a/a_units.",
+                raw_t0, exc,
             )
             block.pop("a", None)
             block.pop("a_units", None)
@@ -10593,7 +10739,6 @@ def _warn_atom_map_not_sent(
     *,
     ts_label: Any,
     warnings: list[dict[str, Any]] | None,
-    route_has_atom_map: bool = True,
 ) -> None:
     """Report ARC's reaction ``atom_map`` (schema 1.3) that cannot be sent as TCKDB's ``atom_map``.
 
@@ -10617,8 +10762,6 @@ def _warn_atom_map_not_sent(
         f"geometry {ts_label!r} and ARC states no relation between its map and the "
         "transition-state atom order"
     )
-    if not route_has_atom_map:
-        reason += ", and this route has no atom_map field"
     message = (
         f"ARC states a reactant-to-product atom_map for {reaction_record.get('label')!r} "
         f"(source {reaction_record.get('atom_map_source')!r}), but {reason}, so no atom_map "

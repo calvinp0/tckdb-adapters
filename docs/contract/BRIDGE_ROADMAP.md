@@ -474,6 +474,14 @@ atom through this root (C6).
 **What to change.** Skip atoms in computed-species mode with a sidecar reason until C6
 provides a form without an opt.
 
+**Status (adapter 0.8.0, batch H): done.** tckdb-schemas 0.59 (TCKDB#610, which fixed #600) accepts
+`type: "sp"` as the primary calculation of a conformer whose own XYZ has exactly one atom, on
+the computed-species, computed-reaction and conformer routes. An atom now sends its real sp as
+its primary (its own log, level, program and energy; no `converged`, since an sp result has none), with no
+placeholder opt and no warning; thermo, statmech and corrections link that one sp. The placeholder opt
+remains only for molecules (`primary_opt_placeholder_no_opt_job`, `composite_geometry_level_not_stated`).
+Tests: `test_monatomic_sp_primary.py`. The history below is the 0.6.7 state.
+
 **Status (adapter 0.6.7): atoms uploaded with a placeholder opt + warning, pending TCKDB
 #600.** Atoms are needed for reactions and have real sp (often freq) calculations, so no
 route refuses them. A single-atom species (exactly one atom in its xyz, else its
@@ -484,7 +492,7 @@ requires a primary opt, ARC runs no optimisation for a single atom, so that opt 
 placeholder (https://github.com/TCKDB/TCKDB/issues/600 asks for an sp primary). The
 calculation model has no `note` field, so the warning is the only place the statement
 lives. The standalone TS route names atoms as participants only and needs no opt. Tests:
-`test_monatomic_placeholder_opt.py`.
+`test_monatomic_placeholder_opt.py` (renamed `test_monatomic_sp_primary.py` in batch H).
 
 **Effort.** S to skip; M with C6.
 
@@ -1025,11 +1033,14 @@ about its runtime; do not export requested resources as runtime facts.
 
 ### B12. Export the RMG-database commit behind Arkane's correction tables
 
-**Status: exported by ARC 1.3 (`rmg_database`, `arc_aec_yml_sha256`), consumed by adapter 0.8.0.**
-`scheme.workflow_tool_release` is `RMG-database` with `git_commit` (path_kind `git`), `version`
-(`package`) or `version: sha256:<digest>` (neither), and the digest, the path kind and the Arkane
-build in `notes`. A revised table is therefore a new scheme identity and an unrelated RMG-Py
-commit is not. Without the block, or on a document before 1.3, it stays the Arkane build.
+**Status: exported by ARC 1.3 (`rmg_database`, `arc_aec_yml_sha256`), consumed by adapter 0.8.0 as
+`scheme.data_revision` (tckdb-schemas 0.62, batch H).** The revision is the git commit (path_kind `git`), else the
+package `version`, else the `data.py` SHA-256 as a plain hex string; the Arkane build stays on
+`scheme.workflow_tool_release` as provenance only. A revised table is a new scheme identity and an unrelated RMG-Py
+commit is not. Without the block, or on a document before 1.3, no revision is sent and the scheme keeps its
+pre-0.62 identity (the Arkane build). The first draft of batch F put the table in a `RMG-database`
+`workflow_tool_release` instead (0.61 had no field for it); that identity set was never deposited (it existed only
+on an unmerged branch).
 `arc_aec_yml_sha256` is not a scheme release: ARC writes no `atom_energy` record for energies it
 rendered from `data/AEC.yml`.
 
@@ -1183,18 +1194,26 @@ hint. The adapter should keep sending ARC's string verbatim.
 
 ### C6. Atoms and the computed-species primary opt ([gate])
 
-**Status (adapter 0.6.7): atoms uploaded with placeholder opt + warning, pending TCKDB #600** (see A6).
+**Status (adapter 0.8.0, batch H): done by tckdb-schemas 0.59 (TCKDB#610)** for atoms (see A6). A molecule
+with no opt job still has no form: the adapter files a marked placeholder opt (`primary_opt_placeholder_no_opt_job`).
+(0.6.7: atoms uploaded with placeholder opt + warning, pending TCKDB #600.)
 
 **What happens.** The primary calculation must be type `opt`
-(`TCKDB:…/computed_species_upload.py:327`).
+(`TCKDB:…/computed_species_upload.py:327`); since 0.59 a one-atom conformer may send `sp`.
 
-**What to change.** Provide a form for a species that had no optimization (A6).
+**What to change.** Provide a form for a species that had no optimization (A6): done for atoms, open for molecules.
 
 **Effort.** M.
 
 ### C7. TS validation evidence accepts only `kind: 'irc'`
 
-**What happens.** `ts_validation_evidence.py:58` is `Literal["irc"]`, so ARC's E0,
+**Status (adapter 0.8.0, batch H): TCKDB 0.64 added `energy_ordering` and `imaginary_mode`; the adapter sends
+only `irc`.** ARC's `E0`/`e_elect` and `freq`/`NMD` verdicts are not turned into the new kinds (an
+`energy_ordering` needs each participant's absolute energy from an sp/opt or freq calculation and TCKDB
+refuses a pass its own numbers contradict; ARC states the check on its own E0 basis). What is sent obeys the
+0.64 rules (`test_ts_validation_evidence_rules.py`).
+
+**What happens (0.51).** `ts_validation_evidence.py:58` is `Literal["irc"]`, so ARC's E0,
 e_elect, freq and NMD verdicts have no home.
 
 **Effort.** M.
@@ -1203,10 +1222,11 @@ e_elect, freq and NMD verdicts have no home.
 
 Highest value first:
 
-- the kinetics reference temperature `T0` (the adapter normalizes `a = A/T0^n` correctly,
-  but the reported T0 is lost);
-- TS statmech;
-- tunneling application and interpretation fields;
+- the kinetics reference temperature `T0` (**done in batch H**: tckdb-schemas 0.63 `t0_k`; `a` is ARC's A
+  and `t0_k` its T0; before, the adapter normalized `a = A/T0^n` and lost the T0);
+- TS statmech (0.64 `BundleTransitionStateIn.statmech`; not wired);
+- tunneling application and interpretation fields (0.63 has the fields, but every reference in them is a record
+  deposited earlier, which a bundle cannot cite for the TS or statmech it creates; not sent);
 - `statmech.e0_kj_mol` with its correction marker;
 - rejected-rotor pivots and barriers;
 - constraint `target_value_units`;
@@ -1214,21 +1234,26 @@ Highest value first:
 
 ### C9. Standalone-TS route asymmetries
 
-`ts_upload` has three:
+**Status (adapter 0.8.0, batch H): TCKDB 0.64 closed two of the three.** `ts_upload` had three:
 
-- no `atom_map` field in the contract, so it always warns `reaction_atom_map_absent` (ARC 1.3's
-  map is not sent on the computed-reaction route either, B8);
-- no slot for TS applied corrections;
-- the async `/jobs/transition-state` route drops every warning.
+- no `atom_map` field in the contract, so it always warned `reaction_atom_map_absent`. **0.64 added the slot**
+  (with `geometry_key` and a `key`/`geometry` on each participant). The adapter still sends no map, because ARC states
+  no participant-atom to TS-atom relation (B8, `reaction_atom_map_ts_order_not_stated`), so TCKDB still reports
+  `reaction_atom_map_absent` on both routes;
+- no slot for TS applied corrections. **0.64 added `applied_energy_corrections`** (no source keys, no frequency scale
+  factor); the adapter sends them. Likewise `scan` calculations with `scan_result` are accepted and sent;
+- the async `/jobs/transition-state` route drops every warning (still open).
 
 Separately, `conformer_upload` runs no provenance warnings for its nested statmech.
 
 ### C10. Correction-scheme provenance for tool-table schemes ([gate])
 
-**Adapter 0.8.0 request to TCKDB.** `WorkflowToolReleaseRef` / `WorkflowToolReleaseIdentity` are
-`(name, version, git_commit)` with no content-digest field. For a correction table of unknown origin
-the adapter puts `sha256:<digest>` in `version` as a stand-in; a digest field would be the honest home.
-Scheme rows now carry up to three identities (none, Arkane build, `RMG-database`), as expected.
+**Adapter 0.8.0 (batch H): the request below was met by tckdb-schemas 0.62's `data_revision`.** The adapter's
+`sha256:<digest>` stand-in in a `RMG-database` tool release (the first batch-F draft; never deposited, it existed
+only on an unmerged branch) is replaced by `scheme.data_revision`. Deposited scheme rows carry two identities (none
+and the Arkane build) plus, from 0.8.0, `data_revision` ones. A plain SHA-256 is sent as a 64-hex `data_revision`,
+which TCKDB reads as a git commit and lower-cases; the contract has no digest-specific field. `atom_params_applied_as`
+(0.62) is sent as `subtracted` for `atom_energy` schemes with `atom_params`, as ARC states it.
 
 **Status (adapter 0.6.1):** `scheme.software` now names the program in the record's
 `matched_arkane_key` (`gaussian`), without a release, and is omitted when the key names

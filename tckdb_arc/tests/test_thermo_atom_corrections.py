@@ -57,9 +57,9 @@ def _submit(tmp_path, doc, record):
     payload = json.loads(outcome.payload_path.read_text())
     contract_validate(ComputedSpeciesUploadRequest, payload)
     assert json.loads(outcome.sidecar_path.read_text())["warnings"] == outcome.warnings
-    # An atom also draws the placeholder-opt warning (A6); these tests are about thermo.
-    return payload.get("thermo"), [
-        w for w in outcome.warnings if w["code"] != "monatomic_species_primary_opt_placeholder"]
+    # An atom's primary is its sp (tckdb-schemas 0.59): it draws no placeholder-opt warning.
+    assert not any("placeholder" in w["code"] for w in outcome.warnings)
+    return payload.get("thermo"), outcome.warnings
 
 
 def _expected_stripped(thermo):
@@ -127,7 +127,13 @@ def test_corrections_not_applied_strips_enthalpy(tmp_path, label):
     record = _species(doc, label)
     assert "energy_corrections" not in record
     thermo, warnings = _submit(tmp_path, doc, record)
-    assert thermo == _expected_stripped(record["thermo"]) | {"source_calculations": thermo["source_calculations"]}
+    extra = {"source_calculations": thermo["source_calculations"]}
+    if label == "H":
+        # The atom's primary is its real sp (tckdb-schemas 0.59), which thermo links, so the energy level
+        # the block declares is that sp's own level (the header sp_level), as for any linked sp.
+        assert thermo["source_calculations"] == [{"calculation_key": "sp", "role": "sp"}]
+        extra["energy_level_of_theory"] = {"method": "wb97x-d", "basis": "def2-tzvp"}
+    assert thermo == _expected_stripped(record["thermo"]) | extra
     _assert_stripped_block_is_valid(thermo)
     assert _shape(warnings) == [_warning("enthalpy_atom_corrections_not_applied")]
 

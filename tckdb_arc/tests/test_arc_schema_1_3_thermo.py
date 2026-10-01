@@ -23,7 +23,7 @@ from tckdb_arc.adapter import (
     _build_kinetics_block,
     _build_slim_torsions,
     _is_output_schema_1_3_or_later,
-    _scheme_workflow_tool_releases,
+    _scheme_data_revisions,
     _skipped_bonds_note,
     _wavefunction_diagnostic_payload,
 )
@@ -489,12 +489,14 @@ def test_the_standalone_ts_route_keeps_true_before_1_3(tmp_path):
     assert payload["reaction"]["reversible"] is True
 
 
-def test_the_reference_temperature_still_normalises_the_pre_exponential_factor(tmp_path):
+def test_the_reference_temperature_is_sent_with_the_unnormalised_pre_exponential_factor(tmp_path):
+    """tckdb-schemas 0.63: ``t0_k`` is T0 of k = A (T/T0)^n exp(-Ea/RT) and ``a`` is stored as sent."""
     doc = _doc()
     kinetics = doc["reactions"][0]["kinetics"]
     kinetics.update(T0_k=298.15, A=1.2e5, n=2.1)
     payload, _ = build_reaction(tmp_path, doc)
-    assert payload["kinetics"][0]["a"] == pytest.approx(1.2e5 / 298.15 ** 2.1)
+    assert payload["kinetics"][0]["a"] == 1.2e5
+    assert payload["kinetics"][0]["t0_k"] == 298.15
 
 
 def test_a_null_reference_temperature_still_omits_a(tmp_path):
@@ -505,31 +507,33 @@ def test_a_null_reference_temperature_still_omits_a(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 4. Correction-scheme identity: the RMG-database table, not the Arkane build
+# 4. Correction-scheme identity (tckdb-schemas 0.62): ``data_revision`` is the RMG-database table's
+#    revision and the Arkane build stays on ``workflow_tool_release`` as provenance only
 # ---------------------------------------------------------------------------
 
+ARKANE = {"name": "Arkane", "version": "3.3.0", "git_commit": "6b1368de6c19204c7ce4fda6fbecb05da4a0fe0e"}
 
-def _scheme_releases(built):
-    return {c["scheme"]["kind"]: c["scheme"].get("workflow_tool_release") for c in built.corrections}
+
+def _schemes(built):
+    return {c["scheme"]["kind"]: c["scheme"] for c in built.corrections}
 
 
 @pytest.mark.parametrize("route", ROUTES)
-def test_a_package_database_names_its_version_and_digest(tmp_path, route):
+def test_a_package_database_names_its_version_as_the_data_revision(tmp_path, route):
     built = build(tmp_path, route, _doc(), "sBuOH")
-    releases = _scheme_releases(built)
-    assert set(releases) == {"atom_energy", "bac_petersson"}
-    for release in releases.values():
-        assert release["name"] == "RMG-database"
-        assert release["version"] == "4.0.0" and "git_commit" not in release
-        assert "sha256=" + "a" * 64 in release["notes"]
-        # The Arkane build that looked the table up is kept beside it, in the notes.
-        assert "Arkane 3.3.0 6b1368de6c19204c7ce4fda6fbecb05da4a0fe0e" in release["notes"]
+    schemes = _schemes(built)
+    assert set(schemes) == {"atom_energy", "bac_petersson"}
+    for scheme in schemes.values():
+        assert scheme["data_revision"] == "4.0.0"
+        # The Arkane build that looked the table up is stamped as the tool release (provenance only now).
+        assert scheme["workflow_tool_release"] == ARKANE
 
 
-def test_the_ts_block_scheme_carries_the_database_identity_too(tmp_path):
+def test_the_ts_block_scheme_carries_the_data_revision_too(tmp_path):
     payload, _ = build_reaction(tmp_path, _doc())
     (correction,) = payload["transition_state"]["applied_energy_corrections"]
-    assert correction["scheme"]["workflow_tool_release"]["name"] == "RMG-database"
+    assert correction["scheme"]["data_revision"] == "4.0.0"
+    assert correction["scheme"]["workflow_tool_release"] == ARKANE
 
 
 @pytest.mark.parametrize("route", ROUTES)
@@ -537,53 +541,58 @@ def test_a_git_database_is_identified_by_its_commit(tmp_path, route):
     doc = _doc()
     doc["rmg_database"].update(path_kind="git", git_commit="f" * 40, version=None)
     built = build(tmp_path, route, doc, "sBuOH")
-    for release in _scheme_releases(built).values():
-        assert release["name"] == "RMG-database" and release["git_commit"] == "f" * 40
-        assert "version" not in release
+    for scheme in _schemes(built).values():
+        assert scheme["data_revision"] == "f" * 40
+        assert scheme["workflow_tool_release"] == ARKANE
 
 
-def test_a_database_of_unknown_origin_is_identified_by_its_digest():
+def test_a_commit_is_sent_lower_cased_the_way_tckdb_stores_it_and_a_tag_as_written():
+    doc = _doc()
+    doc["rmg_database"].update(path_kind="git", git_commit="ABCDEF0123456789" * 2 + "ABCDEF01", version=None)
+    assert _scheme_data_revisions(doc)["atom_energy"] == "abcdef0123456789" * 2 + "abcdef01"
+    doc["rmg_database"].update(git_commit="v4.0.0-rc.1")      # not 7-64 hex: kept exactly
+    assert _scheme_data_revisions(doc)["atom_energy"] == "v4.0.0-rc.1"
+
+
+def test_a_database_of_unknown_origin_is_identified_by_its_digest_as_a_plain_string():
     doc = _doc()
     doc["rmg_database"].update(path_kind="unknown", git_commit=None, version=None,
-                               quantum_corrections_sha256=SHA)
-    release = _scheme_workflow_tool_releases(doc)["bac_petersson"]
-    assert release["version"] == f"sha256:{SHA}" and "git_commit" not in release
+                               quantum_corrections_sha256=SHA.upper())
+    revisions = _scheme_data_revisions(doc)
+    assert revisions == {kind: SHA for kind in ("atom_energy", "bac_petersson", "bac_melius")}
+    assert not revisions["atom_energy"].startswith("sha256:")
 
 
-def test_a_revised_table_is_a_new_scheme_identity():
-    """The same RMG-Py build over a database revised in place must not resolve to the stored scheme."""
+def test_a_revision_longer_than_the_contract_allows_is_not_sent():
+    doc = _doc()
+    doc["rmg_database"].update(path_kind="package", version="v" * 201)
+    assert _scheme_data_revisions(doc)["atom_energy"] == "a" * 64      # falls through to the digest
+
+
+def test_a_revised_table_is_a_new_scheme_and_an_unrelated_arkane_build_is_not():
+    """Scheme identity is (kind, name, level, literature, software, data_revision): the build is not part of it."""
     first, second = _doc(), _doc()
     first["rmg_database"].update(path_kind="unknown", version=None, quantum_corrections_sha256="1" * 64)
     second["rmg_database"].update(path_kind="unknown", version=None, quantum_corrections_sha256="2" * 64)
-    identity = lambda doc: {k: v for k, v in _scheme_workflow_tool_releases(doc)["bac_petersson"].items()
-                            if k != "notes"}
-    assert identity(first) != identity(second)
-    # ... and an unrelated RMG-Py commit does not make a new one.
+    assert _scheme_data_revisions(first)["bac_petersson"] != _scheme_data_revisions(second)["bac_petersson"]
     third = copy.deepcopy(first)
     third["arkane_git_commit"] = "0" * 40
-    assert identity(third) == identity(first)
+    assert _scheme_data_revisions(third) == _scheme_data_revisions(first)
 
 
 @pytest.mark.parametrize("identity", [
     {"path_kind": "git", "git_commit": None, "version": None, "quantum_corrections_sha256": None},
-    {"path_kind": "git", "git_commit": "f" * 41, "version": None, "quantum_corrections_sha256": None},
+    {"path_kind": "git", "git_commit": "f" * 201, "version": None, "quantum_corrections_sha256": None},
     {"path_kind": "package", "git_commit": None, "version": None, "quantum_corrections_sha256": None},
     {"path_kind": "unknown", "git_commit": None, "version": None, "quantum_corrections_sha256": "short"},
 ])
-def test_an_unusable_database_identity_falls_back_to_the_arkane_build(tmp_path, identity):
+def test_an_unusable_database_identity_sends_no_revision_and_keeps_the_arkane_build(tmp_path, identity):
     doc = _doc()
     doc["rmg_database"].update(identity)
     built = build(tmp_path, "computed_species", doc, "sBuOH")
-    for release in _scheme_releases(built).values():
-        assert release == {"name": "Arkane", "version": "3.3.0",
-                           "git_commit": "6b1368de6c19204c7ce4fda6fbecb05da4a0fe0e"}
-
-
-def test_a_database_that_is_not_the_one_under_arcs_path_says_so():
-    doc = _doc()
-    doc["rmg_database"]["matches_arc_rmg_db_path"] = False
-    assert "differs from the file under ARC's RMG_DB_PATH" in \
-        _scheme_workflow_tool_releases(doc)["atom_energy"]["notes"]
+    assert _scheme_data_revisions(doc) == {}
+    for scheme in _schemes(built).values():
+        assert "data_revision" not in scheme and scheme["workflow_tool_release"] == ARKANE
 
 
 @pytest.mark.parametrize("route", ROUTES)
@@ -594,7 +603,7 @@ def test_an_atom_energy_record_is_not_deposited_when_arc_rendered_the_atom_energ
     doc["arc_aec_yml_sha256"] = SHA
     built = build(tmp_path, route, doc, "sBuOH")
     assert [c["application_role"] for c in built.corrections] == ["bac_total"]
-    assert _scheme_releases(built)["bac_petersson"]["name"] == "RMG-database"
+    assert _schemes(built)["bac_petersson"]["data_revision"] == "4.0.0"
     warnings = [w for w in built.warnings if w["code"] == "atom_energy_record_not_deposited_aec_yml"]
     assert warnings and all(w["context"]["arc_aec_yml_sha256"] == SHA for w in warnings)
     assert SHA not in json.dumps(built.payload)
@@ -612,11 +621,41 @@ def test_the_aec_yml_digest_is_ignored_before_1_3_and_when_malformed(tmp_path):
 
 
 @pytest.mark.parametrize("route", ROUTES)
-def test_before_1_3_the_scheme_keeps_the_arkane_build(tmp_path, route):
+def test_before_1_3_the_scheme_keeps_the_arkane_build_and_states_no_revision(tmp_path, route):
     doc = _doc("1.2")
     built = build(tmp_path, route, doc, "sBuOH")
-    for release in _scheme_releases(built).values():
-        assert release["name"] == "Arkane" and release["version"] == "3.3.0"
+    for scheme in _schemes(built).values():
+        assert scheme["workflow_tool_release"]["name"] == "Arkane" and scheme["workflow_tool_release"]["version"] == "3.3.0"
+        assert "data_revision" not in scheme
+
+
+@pytest.mark.parametrize("route", ROUTES)
+def test_the_atom_energy_scheme_states_how_its_atom_params_are_applied(tmp_path, route):
+    """0.62 ``atom_params_applied_as``: ARC records ``applied_as: subtracted`` with the table."""
+    built = build(tmp_path, route, _doc(), "sBuOH")
+    schemes = _schemes(built)
+    assert schemes["atom_energy"]["atom_params"]
+    assert schemes["atom_energy"]["atom_params_applied_as"] == "subtracted"
+    # It "covers every entry of atom_params and nothing else": a scheme without atom_params states none.
+    assert "atom_params_applied_as" not in schemes["bac_petersson"]
+
+
+def test_applied_as_is_sent_as_arc_states_it_and_never_without_the_params_it_covers(tmp_path):
+    for stated, sent in (("added", "added"), (None, None), ("other", None)):
+        doc = _doc()
+        for record in doc["species"]:
+            for correction in record.get("energy_corrections") or []:
+                if correction.get("reference_atom_energies"):
+                    correction["reference_atom_energies"]["applied_as"] = stated
+        built = build(tmp_path / str(stated), "computed_species", doc, "sBuOH")
+        assert _schemes(built)["atom_energy"].get("atom_params_applied_as") == sent
+    doc = _doc()
+    for record in doc["species"]:
+        for correction in record.get("energy_corrections") or []:
+            if correction.get("reference_atom_energies"):
+                correction["reference_atom_energies"]["values"] = {}     # no usable table: no atom_params
+    scheme = _schemes(build(tmp_path / "noparams", "computed_species", doc, "sBuOH"))["atom_energy"]
+    assert "atom_params" not in scheme and "atom_params_applied_as" not in scheme
 
 
 # ---------------------------------------------------------------------------

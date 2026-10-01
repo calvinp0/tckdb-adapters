@@ -263,7 +263,7 @@ class TestTSArtifactShortCircuit(unittest.TestCase):
 
 
 class TestTSAppliedEnergyCorrections(unittest.TestCase):
-    """AEC/BAC on the TS are dropped (no standalone slot) — deliberately."""
+    """AEC/BAC on the TS travel on the standalone request since tckdb-schemas 0.64, without source keys."""
 
     def _doc_with_ts_aec(self):
         doc = copy.deepcopy(_reaction_output_doc())
@@ -273,25 +273,28 @@ class TestTSAppliedEnergyCorrections(unittest.TestCase):
         ]
         return doc
 
-    def test_aec_dropped_and_debug_logged(self):
+    def test_aec_travels_without_source_keys(self):
         doc = self._doc_with_ts_aec()
         adapter = _adapter()
-        with mock.patch("tckdb_arc.adapter.logger") as log:
-            payload = adapter._compose_transition_state_request(
-                output_doc=doc,
-                ts_record=doc["transition_states"][0],
-                reaction_record=doc["reactions"][0],
-            )
-        # No applied_energy_corrections anywhere in the standalone request.
-        self.assertNotIn("applied_energy_corrections", payload)
+        payload = adapter._compose_transition_state_request(
+            output_doc=doc,
+            ts_record=doc["transition_states"][0],
+            reaction_record=doc["reactions"][0],
+        )
+        corrections = payload["applied_energy_corrections"]
+        self.assertEqual([c["application_role"] for c in corrections], ["aec_total", "bac_total"])
+        # "This payload has no calculation-key or conformer-key namespace, so ``source_calculation_key``
+        # and ``source_conformer_key`` are not accepted, and neither is a frequency scale factor."
+        for correction in corrections:
+            self.assertFalse({"source_calculation_key", "source_conformer_key", "frequency_scale_factor"}
+                             & set(correction))
         self.assertNotIn("applied_energy_corrections", payload["primary_opt"])
-        # The drop is recorded at debug level (visible, intentional).
-        aec_debug = [
-            c for c in log.debug.call_args_list
-            if "applied energy correction" in str(c).lower()
-        ]
-        self.assertEqual(len(aec_debug), 1)
-        # Still a valid request without the corrections.
+        # The reaction bundle anchors the same corrections to the TS's own sp.
+        bundle = adapter._build_computed_reaction_payload(
+            output_doc=doc, reaction_record=doc["reactions"][0])
+        self.assertEqual(
+            {c["source_calculation_key"] for c in bundle["transition_state"]["applied_energy_corrections"]},
+            {"ts_sp"})
         contract_validate(TransitionStateUploadRequest, payload)
 
 

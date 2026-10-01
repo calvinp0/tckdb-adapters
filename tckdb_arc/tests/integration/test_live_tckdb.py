@@ -237,11 +237,12 @@ def test_golden_species_calculations_thermo_and_hessian(live_tckdb, tmp_path):
         record["label"]: adapter.submit_computed_species_from_output(output_doc=doc, species_record=record)
         for record in doc["species"] if record.get("converged")
     }
-    # The golden H is a single atom: ARC never optimises it, TCKDB needs a
-    # primary opt (issue #600), so the atom is uploaded with a placeholder opt
-    # and this warning (A6).
-    assert "monatomic_species_primary_opt_placeholder" in _codes(outcomes["H"].warnings)
-    _uploaded(live_tckdb, outcomes["H"])
+    # The golden H is a single atom: ARC never optimises it, and since
+    # tckdb-schemas 0.59 (TCKDB#610) the atom's primary calculation is its own sp:
+    # no placeholder opt and no warning (A6).
+    assert not [c for c in _codes(outcomes["H"].warnings) if "placeholder" in c]
+    atom_calcs = _species_calcs(_uploaded(live_tckdb, outcomes["H"]))
+    assert set(atom_calcs) == {"sp"}
     response = _uploaded(live_tckdb, outcomes["H2"])
     calcs = _species_calcs(response)
     assert set(calcs) == {"opt", "freq", "sp"}
@@ -372,16 +373,18 @@ def test_reaction_kinetics_participants_and_ts(live_tckdb, tmp_path, name):
     reaction = doc["reactions"][0]
     keys = response["calculation_keys"]
 
-    # Kinetics: RMG's (T/T0)**n translated to TCKDB's T**n without changing k(T).
+    # Kinetics: ARC's A is stored as sent, with RMG's T0 as ``t0_k`` (tckdb-schemas 0.63),
+    # so k(T) = a (T/t0_k)**n exp(-Ea/RT) is ARC's own.
     source = reaction["kinetics"]
     kinetics = live_tckdb.get(f"/kinetics/{response['kinetics_ids'][0]}")
     assert kinetics["reaction_entry_id"] == response["reaction_entry_id"]
-    assert kinetics["a"] == pytest.approx(source["A"] / source["T0_k"] ** source["n"], rel=1e-12)
+    assert kinetics["a"] == pytest.approx(source["A"], rel=1e-12)
+    assert kinetics.get("t0_k", 1.0) == pytest.approx(source["T0_k"])
     assert kinetics["a_units"] == "cm3_mol_s"
     assert kinetics["n"] == pytest.approx(source["n"])
     assert kinetics["ea_kj_mol"] == pytest.approx(source["Ea"])
     for temperature in (300.0, 1000.0):
-        assert kinetics["a"] * temperature ** kinetics["n"] == pytest.approx(
+        assert kinetics["a"] * (temperature / kinetics.get("t0_k", 1.0)) ** kinetics["n"] == pytest.approx(
             source["A"] * (temperature / source["T0_k"]) ** source["n"], rel=1e-12)
     roles = Counter(s["role"] for s in kinetics["source_calculations"])
     assert roles["reactant_energy"] == len(reaction["reactant_labels"])

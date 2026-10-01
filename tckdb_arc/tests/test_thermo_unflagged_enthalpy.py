@@ -409,9 +409,8 @@ def test_reaction_route_reads_the_header_level_and_composition(tmp_path):
         tmp_path / "light", doc,
         atom_map_reactant_labels=_reaction_record()["reactant_labels"],
         atom_map_product_labels=_reaction_record()["product_labels"])
-    # The atom also draws the placeholder-opt warning (A6); this test is about thermo.
-    assert [w["code"] for w in warnings].count("monatomic_species_primary_opt_placeholder") == 1
-    warnings = [w for w in warnings if w["code"] != "monatomic_species_primary_opt_placeholder"]
+    # The atom's primary is its sp (tckdb-schemas 0.59), so it draws no placeholder-opt warning.
+    assert not any("placeholder" in w["code"] for w in warnings)
     light = [sp for sp in payload["species"] if "h298_kj_mol" not in sp["thermo"]]
     assert light and len(light) < len(payload["species"])
     assert {w["code"] for w in warnings} == {"enthalpy_formation_unverifiable_light_species"}

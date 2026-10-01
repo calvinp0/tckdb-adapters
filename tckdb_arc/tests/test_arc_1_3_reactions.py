@@ -16,8 +16,9 @@ Two decisions are pinned here:
   the IRC validation evidence, only when everything TCKDB checks is stated;
 * the reaction ``atom_map`` is not sent, because TCKDB's ``atom_map`` is
   participant atom -> transition-state atom and ARC states no relation
-  between its map and the transition-state atom order (and the standalone
-  transition-state route has no ``atom_map`` field at all).
+  between its map and the transition-state atom order. Both routes have the slot
+  (tckdb-schemas 0.64 gave the standalone route an ``atom_map``), so the omission is
+  the same on both.
 
 TCKDB's route-handler cross-checks are not run offline; the ones that apply to
 the evidence are replicated in ``_handler_errors`` from
@@ -384,8 +385,9 @@ def test_the_atom_map_is_not_sent_and_the_reason_is_reported(route, build, sourc
     payload, warnings = build(doc)
     assert "atom_map" not in set(_all_keys(payload))
     (warning,) = [w for w in warnings if w["code"] == ATOM_MAP_CODE]
-    # the standalone route has no atom_map field at all (tckdb-schemas contract)
-    assert ("no atom_map field" in warning["message"]) is (route == "transition_state")
+    # Both routes have an atom_map slot (0.64), so neither message blames the route.
+    assert "no atom_map field" not in warning["message"]
+    assert "ARC states no relation between its map and the transition-state atom order" in warning["message"]
     assert warning["context"]["atom_map_source"] == str(source)
     assert warning["context"]["atom_map_method"] == str(rxn["atom_map_method"])
     # With no atom map in the upload, TCKDB's ``atom_map_contradicts_irc_mapping``
@@ -414,11 +416,19 @@ def test_a_reaction_without_a_transition_state_reports_no_atom_map_warning():
     assert ATOM_MAP_CODE not in _codes(warnings)
 
 
-def test_the_contract_has_no_atom_map_on_the_standalone_route():
-    """The standalone TS request cannot carry an atom map; the computed-reaction request can."""
+def test_the_contract_has_an_atom_map_slot_on_both_routes_and_the_adapter_leaves_it_unset():
+    """tckdb-schemas 0.64 added ``atom_map`` to the standalone request. ARC states no
+    participant-atom -> transition-state-atom relation (batch G), so neither route's slot is filled."""
     from tckdb_schemas import contract
-    assert "atom_map" not in contract.json_schema("TransitionStateUploadRequest")["properties"]
-    assert "atom_map" in contract.json_schema("ComputedReactionUploadRequest")["properties"]
+    for model in ("TransitionStateUploadRequest", "ComputedReactionUploadRequest"):
+        assert "atom_map" in contract.json_schema(model)["properties"]
+    # The standalone map counts into participant geometries and the request's ``geometry_key``;
+    # none of that is sent without a map.
+    doc = _fixture()
+    for route, build in ROUTES:
+        payload, warnings = build(doc)
+        assert "atom_map" not in payload and "geometry_key" not in payload
+        assert ATOM_MAP_CODE in _codes(warnings)
 
 
 # ---------------------------------------------------------------------------
