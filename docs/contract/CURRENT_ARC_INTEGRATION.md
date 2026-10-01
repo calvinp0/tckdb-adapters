@@ -44,6 +44,8 @@ and schema versions; their percentages are not current coverage measurements.
 - **Adapter 0.8.0, batch H (tckdb-schemas 0.59 to 0.64):** atoms send their real `sp`, scheme
   `data_revision`, kinetics `t0_k`, standalone TS scans and corrections. See
   [tckdb-schemas 0.59 to 0.64 (adapter 0.8.0, batch H)](#tckdb-schemas-059-to-064-adapter-080-batch-h).
+- **Adapter 0.8.1, batch I:** TS `imaginary_mode` and `energy_ordering` validation evidence (tckdb-schemas 0.64), from ARC's
+  `ts_checks['freq']` / `ts_checks['e_elect']` and the stated frequencies and energies. See A14 (below).
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
@@ -129,7 +131,7 @@ here: transport, `wavefunction_stability` and `ts_checks`.
 | Full tunneling and partition-function provenance | TCKDB 0.63 added `tunneling_application`, `interpretation_assignments` and `network_kinetics_ref` to `BundleKineticsIn`, but every reference in them is a record deposited earlier and a bundle cannot cite the TS or statmech it creates, so the adapter cannot send them. The tunneling label is still ARC's | C8 |
 | Transport | **Corrected.** ARC has no working transport path to export: no `onedmin` job adapter is registered, the processor's transport step is a `# todo` (`arc/processor.py:237`), and `transport_data` is not persisted. TCKDB *does* have homes at 0.51 (`conformer_upload.transport` and `POST /uploads/transport`). So this is new ARC capability first; the adapter follows | B11 |
 | `wavefunction_stability` | **Corrected:** ARC exports it (`arc/output.py:1841-1842`, tested). **Done in 0.6.6:** mapped to `scf_stability` on the primary opt (the wavefunction ARC tests), never on freq/sp | A10 |
-| `ts_checks` | **Corrected:** ARC exports the verdicts since output 1.1 (`arc/output.py:1986`, `:2779-2805`). The gaps are in the adapter and TCKDB. The adapter maps `ts_checks.IRC` (never `irc_converged`, which only means the IRC jobs finished) to `validation_evidence` (done in 0.6.4). TCKDB 0.64 added the `energy_ordering` and `imaginary_mode` kinds; the adapter still sends only `irc` (batch H, C7). No real-ARC fixture sets `ts_checks.IRC` | A14, C7 |
+| `ts_checks` | **Corrected:** ARC exports the verdicts since output 1.1 (`arc/output.py:1986`, `:2779-2805`). The gaps are in the adapter and TCKDB. The adapter maps `ts_checks.IRC` (never `irc_converged`, which only means the IRC jobs finished) to `validation_evidence` (done in 0.6.4). TCKDB 0.64 added the `energy_ordering` and `imaginary_mode` kinds; adapter 0.8.1 (batch I) maps `ts_checks.freq` to `imaginary_mode` and, on the reaction bundle only, `ts_checks.e_elect` to `energy_ordering` (A14, C7). No real-ARC fixture sets `ts_checks.IRC` | A14, C7 |
 | Execution environment and effective calculation settings | ARC export is incomplete, especially beyond coarse/fine optimization settings. Do not invent runtime metadata from requested input settings | B11 |
 | NEB portable evidence, alternative TS guesses, multidimensional rotor scans | Producer evidence/export work; the current portable sidecar covers Hessian/IRC/GSM, successful 1D rotors and the chosen guess | B11 |
 | Deposit rights | Requires explicit depositor information/configuration; no license or consent is inferred. Silent at upload, but a dataset release refuses records without a rights basis | D2 |
@@ -437,6 +439,34 @@ which job types the adaptive levels name.
   the `ts_irc` calculation; the standalone route omits the key. A verdict with no IRC
   calculation in the upload is not sent (`ts_irc_evidence_without_irc_calculation`).
   Participant mappings stay omitted (ARC discards them, roadmap B10).
+- **A14 / C7, the two 0.64 kinds (adapter 0.8.1, batch I).** Each is sent only from what ARC states, and each
+  record is left out, with a warning, rather than sent where TCKDB would refuse it.
+  - `imaginary_mode`, from `ts_checks['freq']` (a bool; `None` or no `ts_checks` sends nothing) and the TS
+    frequency result the same upload sends: `imaginary_frequency_count` is its `n_imag` (`freq_n_imag`);
+    `imaginary_frequency_cm1` is the designated reaction-coordinate mode's frequency (1.3
+    `reaction_coordinate_mode_index` into `freq_frequencies_cm1_ess_order`, else the single imaginary mode's
+    `imag_freq_cm1`; written negative); `mode_displacement_agrees` is `True` only when ARC states
+    `reaction_coordinate_mode_index` (ARC sets it only for a genuine, non-forced normal mode displacement
+    pass), `False` only when `ts_checks['NMD']` is `False` and no index is stated, and omitted otherwise (a forced
+    `skip_nmd` pass or an unrun check is not assessed). It is read from the result, not from the raw record,
+    because TCKDB refuses a count that differs from that result or a frequency more than 1 cm-1 from it, and a
+    passing record with several imaginary modes unless the result designates the coordinate: with several modes
+    and no designation the record is not sent (`ts_imaginary_mode_evidence_not_sent`, as it is with no freq
+    calculation in the upload). Both routes; the bundle binds `ts_freq` by key, the standalone route omits the
+    key and binds to its single freq calculation.
+  - `energy_ordering` (bundle only: the standalone route refuses it), from `ts_checks['e_elect']`. ARC's check
+    (`arc/checks/ts.py::check_rxn_e_elect`) is the TS electronic energy above both wells by more than
+    1 kJ/mol, summed over the participants; it leaves `e_elect` unset whenever the `E0` check passed, and
+    `passed` is required, so `None` sends nothing. Only electronic energies are sent: each participant's
+    `sp_energy_hartree` (the TS and every reactant and product, `reactant:N` / `product:N` in the order of
+    `reactant_keys` / `product_keys`, a repeated species repeated) cited to that participant's own `sp`
+    calculation (an atom's is its sp primary). `e0` is never sent: ARC's `e0_kj_mol` carries corrections and is
+    not one calculation's absolute energy; ARC's `E0` verdict appears only in `rationale`. TCKDB refuses a pass
+    its stated numbers do not support (strictly above each side summed) and a positive energy, and a passing
+    record needs every participant, so a `True` verdict the stated hartree values contradict (ARC's 1 kJ/mol
+    margin), a participant with no finite non-positive `sp_energy_hartree`, or one with no `sp` calculation in the
+    upload, leaves the record out with `ts_energy_ordering_evidence_not_sent`. A `False` verdict is sent as stated.
+  - Neither kind silences `transition_state_missing_irc_evidence`; only a passing `irc` record does.
 
 Upgrading changes the payload hash, and so the idempotency key, of every TS upload
 with a GSM guess and of species uploads whose screened-conformer or level attribution changed.
@@ -830,15 +860,16 @@ Read first: `python -m tckdb_schemas.contract --since 0.58.0`. Each paragraph qu
   field is refused on a kind it does not describe, and only a passing `irc` record silences
   `transition_state_missing_irc_evidence` ... `energy_ordering` is accepted on the computed-reaction and
   pressure-dependent bundles and refused on the standalone transition-state upload ... a pass with more than one
-  imaginary mode needs that result to designate the reaction coordinate." The adapter sends only `irc` evidence,
+  imaginary mode needs that result to designate the reaction coordinate." The adapter sends `irc` evidence
   carrying only irc fields (`passed`, `rationale`, the key on the bundle, the two participant mappings with
   1-based, non-empty, unrepeated atoms and both sides or neither), never a mapping on a failed verdict, and on the
   standalone route no `source_calculation_key` with exactly one irc calculation to bind to. Batch F's
   reaction-coordinate designation (the stated index or the one mode at or above TCKDB's 50 cm-1 tau) is unchanged
-  and meets the contract. `test_ts_validation_evidence_rules.py` replicates these rules offline. ARC's
-  `E0`/`e_elect` and `NMD`/`freq` verdicts are not sent as `energy_ordering` or `imaginary_mode`: an
-  `energy_ordering` needs each participant's absolute energy from the right calculation kinds and TCKDB refuses a
-  pass its numbers contradict, and ARC states its check on its own E0 basis.
+  and meets the contract. Since 0.8.1 (batch I) it also sends `imaginary_mode` (both routes) and `energy_ordering`
+  (bundle only; electronic energies only), see A14 above; `test_ts_validation_evidence_rules.py` replicates the
+  rules offline (fields belong to the kind; one record per kind; ownership and type of each energy's source; a pass
+  the stated numbers contradict; the count and frequency against the cited frequency result), and
+  `test_ts_energy_ordering_evidence.py` / `test_ts_imaginary_mode_evidence.py` pin what is sent and what is left out.
 - **Standalone transition-state route (0.64; C9).** "`additional_calculations` now accepts `scan`, and
   `CalculationWithResultsPayload` gains `scan_result` ... The request gains `applied_energy_corrections` (no source
   keys or frequency scale factor, since the payload has no key namespace), and `atom_map`." The adapter now sends the

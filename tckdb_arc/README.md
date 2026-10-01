@@ -245,9 +245,24 @@ Adapter 0.8.0 (batch H) uses what tckdb-schemas 0.59 to 0.64 added:
   because ARC states no participant-atom to TS-atom relation (`reaction_atom_map_ts_order_not_stated`).
 - Not built, no source in ARC or a decision needed: statmech `electronic_levels` (ARC 1.3 exports no
   electronic level, term or spin-orbit data), bundle `transport` (ARC's dipole and polarizability keys
-  could feed it), TS `statmech` on the reaction bundle, and the `energy_ordering` / `imaginary_mode`
-  evidence kinds (ARC's `E0`/`NMD` verdicts). Only `irc` evidence is sent. An IRC result whose
+  could feed it) and TS `statmech` on the reaction bundle. An IRC result whose
   direction ARC does not state is still withheld although 0.64 made `direction` and the flags optional.
+
+Adapter 0.8.1 (batch I) sends the two other TS validation evidence kinds tckdb-schemas 0.64 added, only from
+what ARC states (details in `docs/contract/CURRENT_ARC_INTEGRATION.md`, A14):
+
+- **`imaginary_mode`** (both TS routes) from `ts_checks['freq']`: `imaginary_frequency_count` and
+  `imaginary_frequency_cm1` (the designated reaction-coordinate mode, written negative) are read from the TS
+  frequency result sent in the same upload, so TCKDB's cross-check against it passes; `mode_displacement_agrees`
+  is `True` only when ARC 1.3 states `reaction_coordinate_mode_index`, `False` only for a failed
+  `ts_checks['NMD']` with no index, otherwise omitted. A passing record with several imaginary modes and no
+  designated coordinate is not sent (`ts_imaginary_mode_evidence_not_sent`).
+- **`energy_ordering`** (reaction bundle only; the standalone route refuses it) from `ts_checks['e_elect']`,
+  with every participant's own `sp_energy_hartree` cited to its `sp` calculation (`reactant:N` / `product:N` in
+  the declared order, a repeated species repeated). Electronic energies only: `e0` is never sent. A `True`
+  verdict the stated numbers contradict (ARC's 1 kJ/mol margin), or a participant with no usable energy or `sp`,
+  leaves the record out (`ts_energy_ordering_evidence_not_sent`). ARC leaves `e_elect` unset when its `E0`
+  check passed, and then nothing is sent.
 
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 

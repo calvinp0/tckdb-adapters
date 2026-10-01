@@ -2966,6 +2966,23 @@ class TCKDBAdapter:
                 species_index=species_index,
             )
             _warn_atom_map_not_sent(reaction_record, ts_label=ts_label, warnings=warnings)
+            # ARC's electronic-energy ordering verdict (``ts_checks['e_elect']``) needs every
+            # participant's own sp calculation, which only the bundle carries: the standalone
+            # TS upload refuses ``energy_ordering``, so it is built here and not in the TS block.
+            ordering = _ts_energy_ordering_validation_evidence(
+                ts_record,
+                ts_sp_key=ts_calc_keys.get(_CALC_KEY_SP),
+                reactant_labels=reactant_labels,
+                product_labels=product_labels,
+                reactant_keys=reactant_keys,
+                product_keys=product_keys,
+                actor_calc_keys=actor_calc_keys,
+                species_index=species_index,
+                ts_label=ts_label,
+                warnings=warnings,
+            )
+            if ordering:
+                ts_block["validation_evidence"] = [*ts_block.get("validation_evidence", []), *ordering]
 
         # Kinetics. ARC produces at most one fit per reaction today.
         kinetics_payload = reaction_record.get("kinetics")
@@ -3804,6 +3821,15 @@ class TCKDBAdapter:
             species_index=species_index,
             ts_xyz_text=conformer_xyz_text,
         )
+        # ARC's verdict on the TS frequency calculation (``ts_checks['freq']``), read from the
+        # ``freq_result`` sent for it, so the record cannot contradict that result.
+        validation_evidence += _ts_imaginary_mode_validation_evidence(
+            ts_record,
+            freq_calc_key=calc_keys.get(_CALC_KEY_FREQ),
+            freq_result=freq_result,
+            ts_label=ts_label,
+            warnings=warnings,
+        )
         if validation_evidence:
             ts_block["validation_evidence"] = validation_evidence
 
@@ -4036,10 +4062,13 @@ class TCKDBAdapter:
         # The standalone route has no calculation-key namespace: evidence binds
         # to the upload's single irc additional calculation and must omit
         # ``source_calculation_key``.
+        # ``energy_ordering`` is refused here outright (no calculations for the wells), and
+        # ``_build_ts_block`` never builds it; ``imaginary_mode`` binds to the one freq calculation.
         if ts_block.get("validation_evidence"):
             request["validation_evidence"] = [
                 {k: v for k, v in evidence.items() if k != "source_calculation_key"}
                 for evidence in ts_block["validation_evidence"]
+                if evidence["kind"] != "energy_ordering"
             ]
         unmapped_smiles = ts_block.get("unmapped_smiles")
         if unmapped_smiles:
@@ -10510,6 +10539,197 @@ def _ts_irc_validation_evidence(
             evidence["reactant_participant_mapping"] = mappings[0]
             evidence["product_participant_mapping"] = mappings[1]
     return [evidence]
+
+
+_W_TS_ENERGY_ORDERING_NOT_SENT = "ts_energy_ordering_evidence_not_sent"
+_W_TS_IMAGINARY_MODE_NOT_SENT = "ts_imaginary_mode_evidence_not_sent"
+
+# The e_elect check's margin (``arc/checks/ts.py``), in kJ/mol; hartree convert with the vendored ``E_h_kJmol``.
+_ENERGY_ORDERING_MARGIN_KJ_MOL = 1.0
+
+
+def _warn_ts_evidence_not_sent(
+    warnings: list[dict[str, Any]] | None, *, code: str, ts_label: Any, message: str,
+    context: Mapping[str, Any] | None = None,
+) -> None:
+    """Report a TS validation verdict ARC states that is not sent (the adapter never guesses around it)."""
+    logger.warning("TCKDB %s: %s", code, message)
+    if warnings is not None:
+        warnings.append({
+            "code": code,
+            "message": message,
+            "field": "transition_state.validation_evidence",
+            "context": {"source": "tckdb_arc_self_check", "action": "validation_evidence_omitted",
+                        "ts_label": str(ts_label), **(context or {})},
+        })
+
+
+def _finite_float(value: Any) -> float | None:
+    """``value`` as a finite float, else ``None`` (a bool is not an energy)."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _ts_energy_ordering_validation_evidence(
+    ts_record: Mapping[str, Any],
+    *,
+    ts_sp_key: str | None,
+    reactant_labels: Sequence[str],
+    product_labels: Sequence[str],
+    reactant_keys: Sequence[str],
+    product_keys: Sequence[str],
+    actor_calc_keys: Mapping[str, Mapping[str, str]],
+    species_index: Mapping[str, Mapping[str, Any]],
+    ts_label: Any,
+    warnings: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Map ARC's ``ts_checks['e_elect']`` verdict to a TCKDB ``energy_ordering`` record (bundle route only).
+
+    ARC's check (``arc/checks/ts.py::check_rxn_e_elect``) is ``ts_e_elect > sum(reactants) + 1 kJ/mol``
+    and ``> sum(products) + 1 kJ/mol`` over the participants (each with its stoichiometric multiplier).
+    It leaves ``e_elect`` unset (``None``) whenever the zero-point-corrected ``E0`` check passed, and a
+    record's ``passed`` is required, so ``None`` sends nothing. Only the *electronic* energies are sent
+    (each participant's ``sp_energy_hartree``, cited to its own ``sp`` calculation); ``e0`` is not:
+    ARC's ``e0_kj_mol`` carries corrections and is not one calculation's absolute energy. ARC's ``E0``
+    verdict is only mentioned in ``rationale``.
+
+    Participants are numbered by their position in ``reactant_keys`` / ``product_keys`` (a repeated
+    species repeats its entry, as the bundle repeats the key). TCKDB refuses a passing record whose
+    stated numbers do not put the saddle point above each side, so a ``True`` verdict is first
+    re-derived from the stated hartree values with ARC's margin; when they contradict it the record is
+    not sent. A participant without a stated finite non-positive energy, or without an ``sp``
+    calculation in the upload, also leaves the record out (a passing record needs every participant).
+    """
+    checks = ts_record.get("ts_checks")
+    verdict = checks.get("e_elect") if isinstance(checks, Mapping) else None
+    if not isinstance(verdict, bool):
+        return []
+    context = {"ts_checks_e_elect": str(verdict).lower()}
+
+    def omit(reason: str) -> list[dict[str, Any]]:
+        _warn_ts_evidence_not_sent(
+            warnings, code=_W_TS_ENERGY_ORDERING_NOT_SENT, ts_label=ts_label, context=context,
+            message=(f"ARC recorded ts_checks['e_elect'] = {verdict} for {ts_label!r}, but {reason}; "
+                     "the energy_ordering evidence was not sent."))
+        return []
+
+    entries: list[tuple[str, str, Any, str | None]] = [
+        ("ts", str(ts_label), ts_record.get("sp_energy_hartree"), ts_sp_key)]
+    for side, labels, keys in (("reactant", reactant_labels, reactant_keys),
+                               ("product", product_labels, product_keys)):
+        if len(labels) != len(keys):
+            return omit(f"the {side} labels and keys disagree")
+        for position, (label, key) in enumerate(zip(labels, keys), start=1):
+            entries.append((f"{side}:{position}", str(label),
+                            (species_index.get(label) or {}).get("sp_energy_hartree"),
+                            (actor_calc_keys.get(key) or {}).get("sp")))
+    energies: list[dict[str, Any]] = []
+    for participant, label, raw, key in entries:
+        energy = _finite_float(raw)
+        if energy is None:
+            return omit(f"{participant} ({label!r}) has no stated finite sp_energy_hartree")
+        if energy > 0:
+            return omit(f"{participant} ({label!r}) has a positive sp_energy_hartree ({energy}); "
+                        "TCKDB takes absolute (non-positive) energies")
+        if not key:
+            return omit(f"{participant} ({label!r}) has no sp calculation in this upload to cite")
+        energies.append({"participant": participant, "energy_kind": "electronic",
+                         "energy_hartree": energy, "source_calculation_key": key})
+    if verdict is True:
+        from tckdb_arc._vendor import E_h_kJmol
+        ts_energy = energies[0]["energy_hartree"]
+        for side in ("reactant", "product"):
+            well = sum(e["energy_hartree"] for e in energies if e["participant"].startswith(f"{side}:"))
+            if not (ts_energy - well) * E_h_kJmol > _ENERGY_ORDERING_MARGIN_KJ_MOL:
+                return omit(
+                    f"the stated sp energies do not put the saddle point more than "
+                    f"{_ENERGY_ORDERING_MARGIN_KJ_MOL:g} kJ/mol above the {side} side "
+                    f"({ts_energy} vs {well} hartree), so the pass is contradicted by its own numbers")
+    rationale = f"ARC ts_checks['e_elect'] = {verdict} (electronic energies; sp_energy_hartree of each participant)"
+    e0_verdict = checks.get("E0")
+    if isinstance(e0_verdict, bool):
+        rationale += f"; ARC ts_checks['E0'] = {e0_verdict} (not sent: not one calculation's energy)"
+    return [{"kind": "energy_ordering", "passed": verdict, "rationale": rationale, "energies": energies}]
+
+
+def _ts_imaginary_mode_validation_evidence(
+    ts_record: Mapping[str, Any],
+    *,
+    freq_calc_key: str | None,
+    freq_result: Mapping[str, Any] | None,
+    ts_label: Any,
+    warnings: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Map ARC's ``ts_checks['freq']`` verdict to a TCKDB ``imaginary_mode`` record.
+
+    ``passed`` is ``ts_checks['freq']`` when it is a bool, nothing otherwise. The record states what the
+    TS frequency calculation found, read from the ``freq_result`` this upload sends for it, so the
+    record cannot disagree with the result it cites (TCKDB refuses a count that differs, or a frequency
+    more than 1 cm^-1 apart): ``imaginary_frequency_count`` is its ``n_imag``;
+    ``imaginary_frequency_cm1`` is the designated reaction-coordinate mode's frequency (ARC's 1.3
+    ``reaction_coordinate_mode_index`` into ``freq_frequencies_cm1_ess_order``, else tau / the window rule),
+    or, with exactly one imaginary mode, ``imag_freq_cm1``; both are negated to the negative convention.
+    ``mode_displacement_agrees`` is ``True`` only when ARC's own ``reaction_coordinate_mode_index`` is
+    what designates the mode (ARC states it only for a genuine, non-forced normal-mode-displacement pass),
+    ``False`` only when ``ts_checks['NMD']`` is ``False`` and no index is stated, otherwise omitted (not
+    assessed: a forced ``skip_nmd`` pass or an unrun check is not a verdict). A passing record with more
+    than one imaginary mode needs the cited result to designate the coordinate; otherwise it is not sent.
+    On the standalone route the key is dropped by the caller (the record binds to the single freq).
+    """
+    checks = ts_record.get("ts_checks")
+    verdict = checks.get("freq") if isinstance(checks, Mapping) else None
+    if not isinstance(verdict, bool):
+        return []
+    context = {"ts_checks_freq": str(verdict).lower()}
+
+    def omit(reason: str) -> list[dict[str, Any]]:
+        _warn_ts_evidence_not_sent(
+            warnings, code=_W_TS_IMAGINARY_MODE_NOT_SENT, ts_label=ts_label, context=context,
+            message=(f"ARC recorded ts_checks['freq'] = {verdict} for {ts_label!r}, but {reason}; "
+                     "the imaginary_mode evidence was not sent."))
+        return []
+
+    if freq_calc_key is None or freq_result is None:
+        return omit("the TS has no frequency calculation in this upload, so there is no freq "
+                    "calculation for the evidence to bind to")
+    n_imag = freq_result.get("n_imag")
+    n_imag = n_imag if isinstance(n_imag, int) and not isinstance(n_imag, bool) else None
+    if verdict and n_imag == 0:
+        return omit("its frequency result reports no imaginary mode")
+    designated = freq_result.get("reaction_coordinate_mode_index")
+    if verdict and n_imag is not None and n_imag > 1 and designated is None:
+        return omit(f"the frequency result has {n_imag} imaginary modes and designates no reaction "
+                    "coordinate, which TCKDB requires of a passing record")
+    value = None
+    if designated is not None:
+        value = next((m.get("frequency_cm1") for m in freq_result.get("modes") or []
+                      if m.get("mode_index") == designated), None)
+    elif n_imag == 1:
+        value = freq_result.get("imag_freq_cm1")
+    value = _finite_float(value)             # a finite float or None
+    record: dict[str, Any] = {"kind": "imaginary_mode", "passed": verdict, "source_calculation_key": freq_calc_key}
+    if n_imag is not None:
+        record["imaginary_frequency_count"] = n_imag
+    if value:
+        record["imaginary_frequency_cm1"] = -abs(value)
+    stated = ts_record.get("reaction_coordinate_mode_index")
+    stated_index = stated if isinstance(stated, int) and not isinstance(stated, bool) else None
+    nmd = checks.get("NMD")
+    rationale = f"ARC ts_checks['freq'] = {verdict}"
+    if stated_index is not None and stated_index == designated and nmd is not False:
+        record["mode_displacement_agrees"] = True
+        rationale += (f"; mode_displacement_agrees from ARC's reaction_coordinate_mode_index = {stated_index} "
+                      "(set only by a genuine normal mode displacement pass)")
+    elif nmd is False and stated_index is None:
+        record["mode_displacement_agrees"] = False
+        rationale += "; mode_displacement_agrees from ARC ts_checks['NMD'] = False"
+    record["rationale"] = rationale
+    return [record]
 
 
 _W_IRC_PARTICIPANT_MAPPING_NOT_SENT = "ts_irc_participant_mapping_not_sent"

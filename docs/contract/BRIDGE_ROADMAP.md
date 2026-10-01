@@ -680,8 +680,8 @@ and is gone.
 **Why it matters to TCKDB.** Demand paths: `reaction_upload.transition_state.validation_evidence[]`
 and `ts_upload.validation_evidence[]` (6 `ADAPTER_GAP`, 6 `ARC_LATENT`). Without them TCKDB
 warns `transition_state_missing_irc_evidence` on every TS
-(`TCKDB:…/services/transition_state_validation.py:41`). Only the IRC check has a TCKDB
-home (C7). No real-ARC fixture sets `ts_checks.IRC` (E1).
+(`TCKDB:…/services/transition_state_validation.py:41`). Only the IRC check had a TCKDB
+home until 0.64 (C7). No real-ARC fixture sets `ts_checks.IRC` (E1).
 
 **Effort.** S–M.
 
@@ -1205,16 +1205,25 @@ with no opt job still has no form: the adapter files a marked placeholder opt (`
 
 **Effort.** M.
 
-### C7. TS validation evidence accepts only `kind: 'irc'`
+### C7. TS validation evidence accepted only `kind: 'irc'` (done in 0.64 / adapter 0.8.1)
 
-**Status (adapter 0.8.0, batch H): TCKDB 0.64 added `energy_ordering` and `imaginary_mode`; the adapter sends
-only `irc`.** ARC's `E0`/`e_elect` and `freq`/`NMD` verdicts are not turned into the new kinds (an
-`energy_ordering` needs each participant's absolute energy from an sp/opt or freq calculation and TCKDB
-refuses a pass its own numbers contradict; ARC states the check on its own E0 basis). What is sent obeys the
-0.64 rules (`test_ts_validation_evidence_rules.py`).
+**Status (adapter 0.8.1, batch I): done for `imaginary_mode` (both routes) and `energy_ordering` (bundle only).**
+TCKDB 0.64 added both kinds. `ts_checks['freq']` becomes `imaginary_mode` (count and the designated
+reaction-coordinate frequency read from the TS `freq_result` the same upload sends, so TCKDB's cross-check against
+that result cannot refuse it; `mode_displacement_agrees` only from ARC 1.3's `reaction_coordinate_mode_index` or a
+failed `ts_checks['NMD']`). `ts_checks['e_elect']` becomes `energy_ordering` with each participant's
+`sp_energy_hartree` cited to its own `sp` calculation, electronic energies only: ARC's `e0_kj_mol` carries
+corrections and is not one calculation's energy, so `e0` is never sent and ARC's `E0` verdict is only in the
+rationale. A `True` verdict the stated numbers contradict (ARC's 1 kJ/mol margin), a participant without a usable
+energy or `sp` calculation, or a pass with several imaginary modes and no designated coordinate is not sent
+(`ts_energy_ordering_evidence_not_sent`, `ts_imaginary_mode_evidence_not_sent`), because TCKDB refuses such a pass and
+the whole upload would 422. Neither kind silences `transition_state_missing_irc_evidence`. What is sent obeys the
+0.64 rules (`test_ts_validation_evidence_rules.py`, `test_ts_energy_ordering_evidence.py`,
+`test_ts_imaginary_mode_evidence.py`). ARC leaves `e_elect` unset whenever its `E0` check passed, so a TS that
+passed on E0 carries no `energy_ordering` (`passed` is required; ARC states no electronic verdict then).
 
 **What happens (0.51).** `ts_validation_evidence.py:58` is `Literal["irc"]`, so ARC's E0,
-e_elect, freq and NMD verdicts have no home.
+e_elect, freq and NMD verdicts have no home. (Since 0.64 and adapter 0.8.1: see the status above.)
 
 **Effort.** M.
 

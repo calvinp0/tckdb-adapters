@@ -8,16 +8,21 @@ transition-state upload ...; ``imaginary_mode`` binds there to the single ``freq
 calculation ... ``imaginary_frequency_cm1`` is finite ... a pass with more than one imaginary mode
 needs that result to designate the reaction coordinate."
 
-The adapter sends only ``kind="irc"`` evidence (ARC's ``ts_checks['IRC']``), so the rules that can bite
-it are: fields belong to the kind, the participant mappings (both sides or neither, non-empty,
-1-based, no repeated atom), the source binding on each route, one record per kind, and the TS
-frequency result designating its reaction coordinate. They are replicated here (the published model
-and JSON Schema also run on every built request via the conftest hook; the route handlers do not).
-ARC's other TS checks (``E0``/``e_elect`` energy ordering, ``NMD``/``freq`` imaginary mode) are not
-sent: see BRIDGE_ROADMAP C10.
+The adapter sends ``irc`` (ARC's ``ts_checks['IRC']``), ``imaginary_mode`` (``ts_checks['freq']`` and
+the TS frequency result) and, on the bundle only, ``energy_ordering`` (``ts_checks['e_elect']`` and each
+participant's ``sp_energy_hartree``), so the rules that can bite it are: fields belong to the kind, the
+participant mappings (both sides or neither, non-empty, 1-based, no repeated atom), the source binding on
+each route (``energy_ordering`` names a calculation per energy, of the participant it is the energy of,
+and is refused standalone), one record per kind, a pass the record's own numbers contradict, an
+``imaginary_mode`` count or frequency that disagrees with the cited frequency result (1 cm^-1), and the
+TS frequency result designating its reaction coordinate. They are replicated here (the published model
+and JSON Schema also run on every built request via the conftest hook; the route handlers do not; the
+two checks that need the stored calculation, the ownership of each energy's source and the freq-result
+cross-check, are replicated from ``app/services/transition_state_validation.py``).
 """
 
 import copy
+import math
 import re
 
 import pytest
@@ -26,10 +31,111 @@ from test_arc_1_3_reactions import (
     ROUTES, _evidence, _fixture, _reaction_payload, _ts_payload)
 from tckdb_schemas.fragments.ts_validation_evidence import TransitionStateValidationEvidenceIn
 
-IRC_FIELDS = {"kind", "passed", "rationale", "source_calculation_key",
-              "reactant_participant_mapping", "product_participant_mapping"}
+from _contract import assert_fragment_matches_contract
+
+COMMON_FIELDS = {"kind", "passed", "rationale", "source_calculation_key"}
+IRC_FIELDS = COMMON_FIELDS | {"reactant_participant_mapping", "product_participant_mapping"}
+ENERGY_ORDERING_FIELDS = (COMMON_FIELDS - {"source_calculation_key"}) | {"energies"}
+IMAGINARY_MODE_FIELDS = COMMON_FIELDS | {"imaginary_frequency_count", "imaginary_frequency_cm1",
+                                         "mode_displacement_agrees"}
 OTHER_KIND_FIELDS = {"energies", "imaginary_frequency_count", "imaginary_frequency_cm1",
                      "mode_displacement_agrees"}
+KIND_FIELDS = {"irc": IRC_FIELDS, "energy_ordering": ENERGY_ORDERING_FIELDS,
+               "imaginary_mode": IMAGINARY_MODE_FIELDS}
+HARTREE_TO_KJ_MOL = 2625.4996394799
+IMAGINARY_TOLERANCE_CM1 = 1.0     # backend: _IMAGINARY_FREQUENCY_TOLERANCE_CM1
+
+
+def _calc_freq_fields(calc):
+    """(n_imag, imag_freq_cm1, reaction_coordinate_mode_index) a freq calculation states, either route's shape."""
+    if "freq_result" in calc:
+        r = calc["freq_result"]
+        return r.get("n_imag"), r.get("imag_freq_cm1"), r.get("reaction_coordinate_mode_index")
+    return (calc.get("freq_n_imag"), calc.get("freq_imag_freq_cm1"),
+            calc.get("freq_reaction_coordinate_mode_index"))
+
+
+def _energy_ordering_errors(record, payload):
+    """The bundle-route rules on one ``energy_ordering`` record (model + ownership + stated numbers)."""
+    errors = []
+    energies = record.get("energies") or []
+    if not energies:
+        return ["energy_ordering requires the energies that were compared"]
+    if record.get("source_calculation_key") is not None:
+        errors.append("energy_ordering takes no record-level source_calculation_key")
+    slots = [(e["participant"], e["energy_kind"]) for e in energies]
+    if len(set(slots)) != len(slots):
+        errors.append("a participant has more than one energy of a kind")
+    sides = {"reactant": payload["reactant_keys"], "product": payload["product_keys"]}
+    ts = payload["transition_state"]
+    owned = {"ts": {c["key"]: c["type"] for c in [ts["calculation"], *ts.get("calculations", [])]}}
+    for species in payload["species"]:
+        owned[species["key"]] = {c["key"]: c["type"] for c in [
+            *(conf["calculation"] for conf in species["conformers"]), *species.get("calculations", [])]}
+    allowed = {"electronic": {"sp", "opt"}, "e0": {"freq"}}
+    for energy in energies:
+        participant, kind = energy["participant"], energy["energy_kind"]
+        if not re.fullmatch(r"(ts|reactant:[1-9][0-9]*|product:[1-9][0-9]*)", participant):
+            errors.append(f"bad participant {participant!r}")
+            continue
+        if not (math.isfinite(energy["energy_hartree"]) and energy["energy_hartree"] <= 0):
+            errors.append(f"{participant}: the energy must be finite and not positive")
+        if participant == "ts":
+            scope = owned["ts"]
+        else:
+            side, _, position = participant.partition(":")
+            if int(position) > len(sides[side]):
+                errors.append(f"{participant} is not declared by the reaction")
+                continue
+            scope = owned[sides[side][int(position) - 1]]
+        found = scope.get(energy["source_calculation_key"])
+        if found is None:
+            errors.append(f"{participant}: its source calculation does not belong to it")
+        elif found not in allowed[kind]:
+            errors.append(f"{participant}: a {kind} energy cannot come from a {found} calculation")
+    for kind in sorted({e["energy_kind"] for e in energies}):
+        group = [e for e in energies if e["energy_kind"] == kind]
+        names = {e["participant"] for e in group}
+        if "ts" not in names or not any(n.startswith("reactant:") for n in names) or not any(
+                n.startswith("product:") for n in names):
+            errors.append(f"{kind}: needs ts, a reactant and a product")
+        if record["passed"]:
+            declared = {f"reactant:{i}" for i in range(1, len(sides["reactant"]) + 1)} | {
+                f"product:{i}" for i in range(1, len(sides["product"]) + 1)}
+            if declared - names:
+                errors.append(f"{kind}: a passing record omits {sorted(declared - names)}")
+            elif "ts" in names:
+                ts_energy = next(e["energy_hartree"] for e in group if e["participant"] == "ts")
+                for side in ("reactant", "product"):
+                    well = sum(e["energy_hartree"] for e in group if e["participant"].startswith(side))
+                    if not ts_energy > well:
+                        errors.append(f"{kind}: a passing record puts the saddle point at or below the {side} side")
+    return errors
+
+
+def _imaginary_mode_errors(record, freq_calc):
+    """Model rules plus the cross-check against the cited frequency result."""
+    errors = []
+    count, value = record.get("imaginary_frequency_count"), record.get("imaginary_frequency_cm1")
+    if value is not None and not (math.isfinite(value) and value < 0):
+        errors.append("imaginary_frequency_cm1 must be negative and finite")
+    if count is not None and count < 0:
+        errors.append("imaginary_frequency_count must not be negative")
+    if count == 0 and value is not None:
+        errors.append("imaginary_frequency_cm1 is given but the count is 0")
+    if record["passed"] and count == 0:
+        errors.append("a pass with no imaginary mode")
+    if freq_calc is None:
+        return errors
+    n_imag, imag, designated = _calc_freq_fields(freq_calc)
+    if count is not None and n_imag is not None and count != n_imag:
+        errors.append(f"count {count} disagrees with the frequency result's {n_imag}")
+    if value is not None and imag is not None and abs(abs(value) - abs(imag)) > IMAGINARY_TOLERANCE_CM1:
+        errors.append(f"frequency {value} disagrees with the frequency result's {imag}")
+    effective = count if count is not None else n_imag
+    if record["passed"] and effective is not None and effective > 1 and designated is None:
+        errors.append("a pass with several imaginary modes needs the frequency result to designate the coordinate")
+    return errors
 
 
 def offline_evidence_errors(payload, *, standalone):
@@ -43,15 +149,21 @@ def offline_evidence_errors(payload, *, standalone):
     calcs = [block["primary_opt"], *block.get("additional_calculations", [])] if standalone else [
         block["calculation"], *block.get("calculations", [])]
     for record in records:
+        unknown = set(record) - KIND_FIELDS[record["kind"]]
+        if unknown:
+            errors.append(f"{record['kind']} record carries {sorted(unknown)}")
         if record["kind"] == "irc":
             extra = OTHER_KIND_FIELDS & set(record)
             if extra:
                 errors.append(f"irc record carries {sorted(extra)}")
-            unknown = set(record) - IRC_FIELDS
-            if unknown:
-                errors.append(f"irc record carries {sorted(unknown)}")
         elif standalone and record["kind"] == "energy_ordering":
             errors.append("energy_ordering is refused on the standalone route")
+        elif record["kind"] == "energy_ordering" and not standalone:
+            errors.extend(_energy_ordering_errors(record, payload))
+        elif record["kind"] == "imaginary_mode":
+            errors.extend(_imaginary_mode_errors(
+                record, next((c for c in calcs if c["type"] == "freq"
+                              and (standalone or c["key"] == record.get("source_calculation_key"))), None)))
         if record.get("passed") is not True and (
                 "reactant_participant_mapping" in record or "product_participant_mapping" in record):
             errors.append("a mapping is only meaningful on a passing record")
@@ -85,25 +197,49 @@ def offline_evidence_errors(payload, *, standalone):
     return errors
 
 
+def _block(payload, route):
+    return payload if route == "transition_state" else payload["transition_state"]
+
+
+def _kind(payload, route, kind):
+    (record,) = [r for r in _block(payload, route)["validation_evidence"] if r["kind"] == kind]
+    return record
+
+
+def _fixture_with_a_passing_ordering():
+    """The fixture's TS energy is put above both wells: ARC's ``e_elect`` verdict (True) is then not contradicted."""
+    doc = _fixture()
+    doc["transition_states"][0]["sp_energy_hartree"] = -116.19
+    return doc
+
+
 @pytest.mark.parametrize("route,build", ROUTES)
 def test_the_irc_evidence_obeys_the_0_64_rules(route, build):
     payload, _ = build(_fixture())
     assert offline_evidence_errors(payload, standalone=route == "transition_state") == []
-    (record,) = (payload if route == "transition_state" else payload["transition_state"])["validation_evidence"]
-    assert record["kind"] == "irc" and record["passed"] is True
+    record = _kind(payload, route, "irc")
+    assert record["passed"] is True
     assert set(record) <= IRC_FIELDS
     # the published model accepts exactly what is sent
     TransitionStateValidationEvidenceIn.model_validate(record)
 
 
 @pytest.mark.parametrize("route,build", ROUTES)
-def test_only_irc_evidence_is_ever_sent(route, build):
-    """ARC's E0/e_elect and NMD verdicts are not turned into energy_ordering / imaginary_mode records."""
-    doc = _fixture()
-    assert doc["transition_states"][0]["ts_checks"]["E0"] is True and doc["transition_states"][0]["ts_checks"]["NMD"] is True
-    payload, _ = build(doc)
-    block = payload if route == "transition_state" else payload["transition_state"]
-    assert [r["kind"] for r in block["validation_evidence"]] == ["irc"]
+def test_every_record_sent_obeys_the_0_64_rules(route, build):
+    """irc and imaginary_mode on both routes; energy_ordering on the bundle only."""
+    payload, _ = build(_fixture_with_a_passing_ordering())
+    assert offline_evidence_errors(payload, standalone=route == "transition_state") == []
+    kinds = [r["kind"] for r in _block(payload, route)["validation_evidence"]]
+    assert kinds == (["irc", "imaginary_mode", "energy_ordering"] if route == "computed_reaction"
+                     else ["irc", "imaginary_mode"])
+    for record in _block(payload, route)["validation_evidence"]:
+        assert set(record) <= KIND_FIELDS[record["kind"]]
+        TransitionStateValidationEvidenceIn.model_validate(record)
+        assert_fragment_matches_contract(record, "TransitionStateValidationEvidenceIn")
+        # only a passing irc record silences ``transition_state_missing_irc_evidence``: the new kinds are
+        # never sent as a stand-in for it
+        if record["kind"] != "irc":
+            assert record["passed"] is True and record["rationale"]
 
 
 @pytest.mark.parametrize("route,build", ROUTES)
@@ -112,8 +248,7 @@ def test_a_failed_irc_is_sent_as_a_failure_with_no_mapping(route, build):
     doc = _fixture()
     doc["transition_states"][0]["ts_checks"]["IRC"] = False
     payload, _ = build(doc)
-    block = payload if route == "transition_state" else payload["transition_state"]
-    (record,) = block["validation_evidence"]
+    record = _kind(payload, route, "irc")
     assert record["passed"] is False
     assert "reactant_participant_mapping" not in record and "product_participant_mapping" not in record
     assert offline_evidence_errors(payload, standalone=route == "transition_state") == []
@@ -123,10 +258,9 @@ def test_a_failed_irc_is_sent_as_a_failure_with_no_mapping(route, build):
 @pytest.mark.parametrize("route,build", ROUTES)
 def test_no_verdict_sends_no_evidence_at_all(route, build):
     doc = _fixture()
-    doc["transition_states"][0]["ts_checks"]["IRC"] = None
+    doc["transition_states"][0]["ts_checks"].update(IRC=None, freq=None, e_elect=None)
     payload, _ = build(doc)
-    block = payload if route == "transition_state" else payload["transition_state"]
-    assert "validation_evidence" not in block
+    assert "validation_evidence" not in _block(payload, route)
 
 
 # ---------------------------------------------------------------------------
@@ -261,3 +395,138 @@ def test_the_designation_checker_flags_each_failure():
         broken = copy.deepcopy(freq)
         mutate(broken)
         assert any(needle in e for e in designation_errors(broken)), needle
+
+
+# ---------------------------------------------------------------------------
+# 0.64: energy_ordering and imaginary_mode. The checker is real: each rule is refused by the published
+# model (or by ``validate_ts_evidence_set``, which knows the reaction's participants), and flagged by
+# the offline checker above.
+# ---------------------------------------------------------------------------
+
+from tckdb_schemas.enums import MoleculeKind
+from tckdb_schemas.fragments.ts_validation_evidence import validate_ts_evidence_set
+
+
+def _bundle():
+    payload, _ = _reaction_payload(_fixture_with_a_passing_ordering())
+    return payload
+
+
+def _record_of(payload, kind):
+    return copy.deepcopy(next(r for r in payload["transition_state"]["validation_evidence"] if r["kind"] == kind))
+
+
+@pytest.mark.parametrize("mutate,match", [
+    (lambda r: r.update(energies=[]), "requires the energies"),
+    (lambda r: r.update(source_calculation_key="ts_sp"), "source_calculation_key is not accepted"),
+    (lambda r: r["energies"].append(dict(r["energies"][0])), "more than one"),
+    (lambda r: r.update(energies=[e for e in r["energies"] if not e["participant"].startswith("product")]),
+     "at least one product"),
+    (lambda r: r["energies"][0].update(energy_hartree=0.5), "less than or equal to 0"),
+    (lambda r: r.update(imaginary_frequency_count=1), "only on kind='imaginary_mode'"),
+    (lambda r: r["energies"][0].update(participant="the_ts"), "should match pattern"),
+])
+def test_the_published_model_refuses_what_an_energy_ordering_checker_flags(mutate, match):
+    record = _record_of(_bundle(), "energy_ordering")
+    mutate(record)
+    with pytest.raises(ValueError, match=match):
+        TransitionStateValidationEvidenceIn.model_validate(record)
+
+
+KINDS = ([MoleculeKind.molecule] * 2, [MoleculeKind.molecule] * 2)
+
+
+def _validate_set(record):
+    validate_ts_evidence_set([TransitionStateValidationEvidenceIn.model_validate(record)],
+                             subject_label="TS0", xyz_text="3\n\nH 0 0 0\nH 0 0 1\nH 0 1 0\n",
+                             reactant_kinds=KINDS[0], product_kinds=KINDS[1])
+
+
+def test_the_published_set_rules_refuse_a_pass_the_numbers_contradict():
+    record = _record_of(_bundle(), "energy_ordering")
+    _validate_set(record)                                           # as sent: accepted
+    low = copy.deepcopy(record)
+    low["energies"][0]["energy_hartree"] = -116.21                 # below the wells
+    with pytest.raises(ValueError, match="at or below"):
+        _validate_set(low)
+    low["passed"] = False                                          # "the reverse is not refused"
+    _validate_set(low)
+    short = copy.deepcopy(record)
+    short["energies"] = [e for e in short["energies"] if e["participant"] != "reactant:2"]
+    with pytest.raises(ValueError, match="omit reactant:2"):
+        _validate_set(short)
+    extra = copy.deepcopy(record)
+    extra["energies"].append({**extra["energies"][1], "participant": "reactant:3"})
+    with pytest.raises(ValueError, match="does not declare"):
+        _validate_set(extra)
+
+
+def test_the_checker_flags_each_energy_ordering_rule():
+    payload = _bundle()
+    for mutate, needle in [
+        (lambda t: t["validation_evidence"][2].update(source_calculation_key="ts_sp"), "carries"),
+        (lambda t: t["validation_evidence"][2]["energies"][1].update(source_calculation_key="p0_sp"),
+         "does not belong"),
+        (lambda t: t["validation_evidence"][2]["energies"][0].update(source_calculation_key="ts_irc"),
+         "cannot come from a irc"),
+        (lambda t: t["validation_evidence"][2]["energies"][0].update(energy_hartree=-130.0), "at or below"),
+        (lambda t: t["validation_evidence"][2]["energies"][0].update(energy_hartree=1.0), "not positive"),
+        (lambda t: t["validation_evidence"][2]["energies"].pop(1), "omits"),
+        (lambda t: t["validation_evidence"][2]["energies"].append(dict(t["validation_evidence"][2]["energies"][0])),
+         "more than one energy"),
+        (lambda t: t["validation_evidence"][2]["energies"][0].update(energy_kind="e0"), "cannot come from a sp"),
+    ]:
+        broken = copy.deepcopy(payload)
+        mutate(broken["transition_state"])
+        assert any(needle in e for e in offline_evidence_errors(broken, standalone=False)), needle
+    standalone, _ = _ts_payload(_fixture_with_a_passing_ordering())
+    broken = copy.deepcopy(standalone)
+    broken["validation_evidence"].append(copy.deepcopy(payload["transition_state"]["validation_evidence"][2]))
+    assert any("refused on the standalone" in e for e in offline_evidence_errors(broken, standalone=True))
+
+
+@pytest.mark.parametrize("mutate,match", [
+    (lambda r: (r.update(imaginary_frequency_count=0), r.pop("imaginary_frequency_cm1")), "found no imaginary mode"),
+    (lambda r: r.update(passed=False, imaginary_frequency_count=0), "count is 0"),
+    (lambda r: r.update(imaginary_frequency_cm1=1235.4), "less than 0"),
+    (lambda r: r.update(imaginary_frequency_cm1=float("-inf")), "finite"),
+    (lambda r: r.update(energies=[{"participant": "ts", "energy_kind": "electronic", "energy_hartree": -1.0,
+                                   "source_calculation_key": "ts_sp"}]), "only on kind='energy_ordering'"),
+])
+def test_the_published_model_refuses_what_an_imaginary_mode_checker_flags(mutate, match):
+    record = _record_of(_bundle(), "imaginary_mode")
+    mutate(record)
+    with pytest.raises(ValueError, match=match):
+        TransitionStateValidationEvidenceIn.model_validate(record)
+
+
+def test_the_checker_flags_each_imaginary_mode_rule():
+    for route, build in ROUTES:
+        payload, _ = build(_fixture_with_a_passing_ordering())
+        standalone = route == "transition_state"
+        for mutate, needle in [
+            (lambda r: r.update(imaginary_frequency_count=2), "disagrees with the frequency result's 1"),
+            (lambda r: r.update(imaginary_frequency_cm1=-1230.0), "disagrees with the frequency result's"),
+            (lambda r: r.update(imaginary_frequency_cm1=1235.4), "negative"),
+            (lambda r: r.update(imaginary_frequency_count=0), "a pass with no imaginary mode"),
+            (lambda r: r.update(energies=[]), "carries"),
+        ]:
+            broken = copy.deepcopy(payload)
+            mutate(next(r for r in _block(broken, route)["validation_evidence"] if r["kind"] == "imaginary_mode"))
+            assert any(needle in e for e in offline_evidence_errors(broken, standalone=standalone)), (route, needle)
+        if standalone:
+            broken = copy.deepcopy(payload)
+            next(r for r in broken["validation_evidence"] if r["kind"] == "imaginary_mode")[
+                "source_calculation_key"] = "ts_freq"
+            assert any("must be omitted" in e for e in offline_evidence_errors(broken, standalone=True))
+
+
+def test_a_pass_with_several_imaginary_modes_needs_the_result_to_designate_the_coordinate():
+    payload = _thermo_fixture_ts("computed_reaction")
+    record = _kind(payload, "computed_reaction", "imaginary_mode")
+    assert record["imaginary_frequency_count"] == 2 and record["passed"] is True
+    assert offline_evidence_errors(payload, standalone=False) == []
+    broken = copy.deepcopy(payload)
+    freq = _ts_freq(broken["transition_state"], standalone=False)
+    freq.pop("freq_reaction_coordinate_mode_index")
+    assert any("designate" in e for e in offline_evidence_errors(broken, standalone=False))

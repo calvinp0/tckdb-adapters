@@ -38,7 +38,7 @@ SAMPLE_LOG = Path(__file__).resolve().parents[2] / "testing" / "irc" / "rxn_1_ir
 
 ARKANE_GIT_COMMIT = "7f4e9c2a1b3d5e6f708192a3b4c5d6e7f8091a2b"
 
-# ARC kinetics with T0 = 300 K: the stored prefactor must be A / T0**n.
+# ARC kinetics with T0 = 300 K: the prefactor is stored as sent (A), with ``t0_k`` = 300 (tckdb-schemas 0.63).
 KINETICS_T0 = {
     "A": 2.5e13, "A_units": "cm^3/(mol*s)", "n": 1.5, "T0_k": 300.0,
     "Ea": 40.0, "Ea_units": "kJ/mol", "Tmin_k": 300.0, "Tmax_k": 2000.0,
@@ -135,11 +135,12 @@ def _golden_with_irc_verdict(verdict):
 
     ``irc_converged`` only says the IRC jobs finished (ARC ``arc/output.py``
     ``_ts_checks_to_dict``); ``ts_checks['IRC']`` is ARC's verdict on whether
-    the IRC connects the declared reactants and products.
+    the IRC connects the declared reactants and products. ``freq`` is left unassessed: a stated verdict
+    would also deposit an ``imaginary_mode`` record (0.64), and these corpora read back the IRC evidence alone.
     """
     doc, sidecars = golden_kinetics()
     doc["transition_states"][0]["ts_checks"] = {
-        "E0": None, "e_elect": None, "IRC": verdict, "freq": True, "NMD": None, "warnings": "",
+        "E0": None, "e_elect": None, "IRC": verdict, "freq": None, "NMD": None, "warnings": "",
     }
     return doc, sidecars
 

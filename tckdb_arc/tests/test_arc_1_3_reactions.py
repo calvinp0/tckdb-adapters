@@ -90,7 +90,7 @@ def _ts_payload(doc):
 
 def _evidence(payload):
     block = payload.get("transition_state", payload)
-    (record,) = block["validation_evidence"]
+    (record,) = [r for r in block["validation_evidence"] if r["kind"] == "irc"]
     return record
 
 
