@@ -38,7 +38,7 @@ from tckdb_schemas.workflows.transition_state_upload import TransitionStateUploa
 #: The tckdb-schemas release line the suite was run against. Keep it equal
 #: to the ``tckdb-schemas`` bound in ``pyproject.toml``; moving it means
 #: reading ``python -m tckdb_schemas.contract --since <old>`` first.
-TARGET_SCHEMAS_LINE = (0, 64)
+TARGET_SCHEMAS_LINE = (0, 67)
 
 #: Adapter upload endpoints and the contract surface each one posts.
 ROUTE_SCHEMAS = {

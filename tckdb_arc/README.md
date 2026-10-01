@@ -4,7 +4,7 @@ Convert ARC `output/output.yml` and portable parser evidence into TCKDB
 species, reaction, and transition-state uploads. Payloads and upload metadata
 are written locally before any network request, allowing inspection and replay.
 
-Requires Python 3.11+, `tckdb-client` 0.102.x and `tckdb-schemas` 0.64.x.
+Requires Python 3.11+, `tckdb-client` 0.104.x and `tckdb-schemas` 0.67.x.
 For development with sibling checkouts:
 
 ```bash
@@ -267,6 +267,7 @@ what ARC states (details in `docs/contract/CURRENT_ARC_INTEGRATION.md`, A14):
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 
 <!-- tckdb-drift:changelog -->
+- Adapter 0.8.2: tracked TCKDB ff90889 (schemas 0.67.0, client 0.104.0).
 - Adapter 0.6.9: tracked TCKDB f22d3a8 (schemas 0.64.0, client 0.102.0).
 - Adapter 0.6.8: tracked TCKDB a515fb9 (schemas 0.58.0, client 0.98.0).
 
