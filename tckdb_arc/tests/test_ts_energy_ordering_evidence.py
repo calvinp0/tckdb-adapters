@@ -146,6 +146,25 @@ def test_a_failed_verdict_is_sent_as_a_failure():
     contract_validate(ComputedReactionUploadRequest, payload)
 
 
+def test_a_false_verdict_the_stated_numbers_satisfy_is_omitted_as_stale():
+    """ARC's verdict was computed on stale energies: the stated sp energies put the TS above both wells."""
+    payload, warnings = _reaction(_doc(ts_energy=-154.0, e_elect=False))
+    assert _ordering(payload) == []
+    [warning] = [w for w in warnings if w["code"] == CODE]
+    assert "failure is contradicted by its own numbers" in warning["message"]
+    assert warning["context"]["ts_checks_e_elect"] == "false"
+    assert warning["context"]["reason"] == "verdict_contradicted_by_stated_energies"
+    assert warning["context"]["action"] == "validation_evidence_omitted"
+    contract_validate(ComputedReactionUploadRequest, payload)
+
+
+def test_a_false_verdict_just_inside_arcs_margin_is_sent_as_stated():
+    payload, warnings = _reaction(_doc(ts_energy=REACTANTS + 0.5 / HARTREE_TO_KJ, e_elect=False))
+    [record] = _ordering(payload)
+    assert record["passed"] is False
+    assert CODE not in _codes(warnings)
+
+
 @pytest.mark.parametrize("ts_energy,reason", [
     pytest.param(-154.5, "reactant", id="below_both_wells"),
     pytest.param(-154.25, "reactant", id="between_the_wells_above_the_products_only"),

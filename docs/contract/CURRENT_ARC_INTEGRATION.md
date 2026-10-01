@@ -465,7 +465,9 @@ which job types the adaptive levels name.
     its stated numbers do not support (strictly above each side summed) and a positive energy, and a passing
     record needs every participant, so a `True` verdict the stated hartree values contradict (ARC's 1 kJ/mol
     margin), a participant with no finite non-positive `sp_energy_hartree`, or one with no `sp` calculation in the
-    upload, leaves the record out with `ts_energy_ordering_evidence_not_sent`. A `False` verdict is sent as stated.
+    upload, leaves the record out with `ts_energy_ordering_evidence_not_sent`. A `False` verdict is re-derived the same way: one the
+    stated numbers do satisfy (TS above both sides by ARC's margin) was computed on stale energies and is left out with the same
+    warning (context `reason: verdict_contradicted_by_stated_energies`); otherwise it is sent as stated.
   - Neither kind silences `transition_state_missing_irc_evidence`; only a passing `irc` record does.
 
 Upgrading changes the payload hash, and so the idempotency key, of every TS upload

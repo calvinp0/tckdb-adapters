@@ -10602,7 +10602,8 @@ def _ts_energy_ordering_validation_evidence(
     species repeats its entry, as the bundle repeats the key). TCKDB refuses a passing record whose
     stated numbers do not put the saddle point above each side, so a ``True`` verdict is first
     re-derived from the stated hartree values with ARC's margin; when they contradict it the record is
-    not sent. A participant without a stated finite non-positive energy, or without an ``sp``
+    not sent. A ``False`` verdict whose stated numbers do satisfy the ordering was computed on stale
+    energies and is likewise not sent. A participant without a stated finite non-positive energy, or without an ``sp``
     calculation in the upload, also leaves the record out (a passing record needs every participant).
     """
     checks = ts_record.get("ts_checks")
@@ -10611,9 +10612,10 @@ def _ts_energy_ordering_validation_evidence(
         return []
     context = {"ts_checks_e_elect": str(verdict).lower()}
 
-    def omit(reason: str) -> list[dict[str, Any]]:
+    def omit(reason: str, *, reason_code: str | None = None) -> list[dict[str, Any]]:
         _warn_ts_evidence_not_sent(
-            warnings, code=_W_TS_ENERGY_ORDERING_NOT_SENT, ts_label=ts_label, context=context,
+            warnings, code=_W_TS_ENERGY_ORDERING_NOT_SENT, ts_label=ts_label,
+            context={**context, **({"reason": reason_code} if reason_code else {})},
             message=(f"ARC recorded ts_checks['e_elect'] = {verdict} for {ts_label!r}, but {reason}; "
                      "the energy_ordering evidence was not sent."))
         return []
@@ -10640,16 +10642,24 @@ def _ts_energy_ordering_validation_evidence(
             return omit(f"{participant} ({label!r}) has no sp calculation in this upload to cite")
         energies.append({"participant": participant, "energy_kind": "electronic",
                          "energy_hartree": energy, "source_calculation_key": key})
+    from tckdb_arc._vendor import E_h_kJmol
+    ts_energy = energies[0]["energy_hartree"]
+    wells = {side: sum(e["energy_hartree"] for e in energies if e["participant"].startswith(f"{side}:"))
+             for side in ("reactant", "product")}
     if verdict is True:
-        from tckdb_arc._vendor import E_h_kJmol
-        ts_energy = energies[0]["energy_hartree"]
-        for side in ("reactant", "product"):
-            well = sum(e["energy_hartree"] for e in energies if e["participant"].startswith(f"{side}:"))
+        for side, well in wells.items():
             if not (ts_energy - well) * E_h_kJmol > _ENERGY_ORDERING_MARGIN_KJ_MOL:
                 return omit(
                     f"the stated sp energies do not put the saddle point more than "
                     f"{_ENERGY_ORDERING_MARGIN_KJ_MOL:g} kJ/mol above the {side} side "
                     f"({ts_energy} vs {well} hartree), so the pass is contradicted by its own numbers")
+    elif all((ts_energy - well) * E_h_kJmol > _ENERGY_ORDERING_MARGIN_KJ_MOL for well in wells.values()):
+        # A False verdict on numbers that satisfy the ordering was computed on stale energies.
+        return omit(
+            f"the stated sp energies put the saddle point more than {_ENERGY_ORDERING_MARGIN_KJ_MOL:g} "
+            "kJ/mol above both sides, so the failure is contradicted by its own numbers (the verdict "
+            "was computed on stale energies)",
+            reason_code="verdict_contradicted_by_stated_energies")
     rationale = f"ARC ts_checks['e_elect'] = {verdict} (electronic energies; sp_energy_hartree of each participant)"
     e0_verdict = checks.get("E0")
     if isinstance(e0_verdict, bool):

@@ -458,6 +458,84 @@ def test_failed_irc_verdict_is_deposited_as_failed_evidence(live_tckdb, tmp_path
     assert (irc, [e["passed"] for e in evidence]) == ("failed", [False])
 
 
+def _evidence_by_kind(live, entry_id):
+    record = live.get(f"/scientific/transition-state-entries/{entry_id}",
+                      include="validation_evidence")["record"]
+    evidence = record["validation_evidence"]
+    kinds = [e["kind"] for e in evidence]
+    assert len(kinds) == len(set(kinds)), kinds  # at most one record per kind
+    return {e["kind"]: e for e in evidence}
+
+
+def _calculation(live, ref_or_id):
+    """The scientific read of one calculation: the public ref, type and owner kind the evidence cites."""
+    record = live.get(f"/scientific/calculations/{ref_or_id}")["record"]
+    return record["calculation"]["calculation_ref"], record["calculation"]["type"], record["owner"]["kind"]
+
+
+def _calculation_ref(live, calculation_id):
+    return _calculation(live, calculation_id)[0]
+
+
+def test_reaction_bundle_deposits_imaginary_mode_and_energy_ordering_evidence(live_tckdb, tmp_path):
+    # The server-only rules (stored-row ownership of each compared energy, the stored-frequency
+    # cross-check, electronic energy from an sp/opt, one level per energy kind) run only here.
+    doc, outcome, response = _submit_reaction(live_tckdb, tmp_path, "golden_ts_evidence")
+    ts = doc["transition_states"][0]
+    keys = response["calculation_keys"]
+    evidence = _evidence_by_kind(live_tckdb, response["transition_state_entry_id"])
+    assert set(evidence) == {"irc", "imaginary_mode", "energy_ordering"}
+    assert all(e["passed"] is True for e in evidence.values())
+    assert "transition_state_missing_irc_evidence" not in _codes(outcome.warnings)
+    assert "transition_state_energy_ordering_mixed_levels" not in _codes(outcome.warnings)
+    assert "ts_energy_ordering_evidence_not_sent" not in _codes(outcome.warnings)
+    assert "ts_imaginary_mode_evidence_not_sent" not in _codes(outcome.warnings)
+
+    mode = evidence["imaginary_mode"]
+    assert mode["imaginary_frequency_count"] == ts["freq_n_imag"] == 1
+    assert mode["imaginary_frequency_cm1"] == pytest.approx(ts["imag_freq_cm1"])
+    assert mode["mode_displacement_agrees"] is None  # NMD unassessed: not a verdict
+    assert mode["reconstruction_calculation_ref"] == _calculation_ref(live_tckdb, keys["ts_freq"])
+
+    ordering = evidence["energy_ordering"]
+    assert ordering["reconstruction_calculation_ref"] is None
+    species = {s["label"]: s for s in doc["species"]}
+    reaction = doc["reactions"][0]
+    expected = [("ts", ts["sp_energy_hartree"])]
+    for side, labels in (("reactant", reaction["reactant_labels"]), ("product", reaction["product_labels"])):
+        for position, label in enumerate(labels, start=1):
+            expected.append((f"{side}:{position}", species[label]["sp_energy_hartree"]))
+    stored = {(e["participant"], e["energy_kind"]): e for e in ordering["compared_energies"]}
+    assert set(stored) == {(participant, "electronic") for participant, _ in expected}
+    for participant, energy in expected:
+        assert stored[(participant, "electronic")]["energy_hartree"] == pytest.approx(energy)
+    # Each energy is cited to its own participant's sp calculation, as stored.
+    assert stored[("ts", "electronic")]["source_calculation_ref"] == _calculation_ref(live_tckdb, keys["ts_sp"])
+    sp_refs = {e["source_calculation_ref"] for p, e in stored.items() if p[0] != "ts"}
+    assert len(sp_refs) == 2  # H2's and H's sp, each cited from both sides
+    for ref in sp_refs:
+        assert _calculation(live_tckdb, ref)[1:] == ("sp", "species_entry")
+
+
+def test_standalone_ts_upload_deposits_imaginary_mode_evidence(live_tckdb, tmp_path):
+    project, doc = materialize(tmp_path, "golden_ts_evidence")
+    adapter = make_adapter(live_tckdb.url, project, "golden_ts_evidence", "computed_ts")
+    outcome = adapter.submit_computed_ts_from_output(
+        output_doc=doc, ts_record=doc["transition_states"][0], reaction_record=doc["reactions"][0])
+    response = _uploaded(live_tckdb, outcome)
+    ts = doc["transition_states"][0]
+    evidence = _evidence_by_kind(live_tckdb, response["id"])
+    # The standalone route refuses energy_ordering; the adapter never sends it there.
+    assert set(evidence) == {"irc", "imaginary_mode"}
+    mode = evidence["imaginary_mode"]
+    assert mode["passed"] is True
+    assert mode["imaginary_frequency_count"] == 1
+    assert mode["imaginary_frequency_cm1"] == pytest.approx(ts["imag_freq_cm1"])
+    freq = live_tckdb.get("/calculations", transition_state_entry_id=response["id"], type="freq", limit=5)["items"]
+    assert [mode["reconstruction_calculation_ref"]] == [_calculation_ref(live_tckdb, c["id"]) for c in freq]
+    assert "ts_energy_ordering_evidence_not_sent" not in _codes(outcome.warnings)
+
+
 # ---------------------------------------------------------------------------
 # conformer mode + artifacts
 # ---------------------------------------------------------------------------
@@ -587,6 +665,7 @@ REPLAY_MATRIX = [
     ("golden", "computed_species"), ("golden", "conformer"),
     ("golden", "computed_reaction"), ("golden", "computed_ts"),
     ("arc_1_2", "computed_species"), ("arc_1_2", "conformer"),
+    ("golden_ts_evidence", "computed_reaction"), ("golden_ts_evidence", "computed_ts"),
     ("synthetic_reaction", "computed_reaction"), ("synthetic_reaction", "computed_ts"),
 ]
 
