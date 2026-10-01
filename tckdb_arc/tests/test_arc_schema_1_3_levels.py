@@ -153,6 +153,10 @@ def _doc13(*, irc=True, adaptive=False):
         })
         if not record["is_ts"]:
             record.update({"irc_endpoint_of": None, "irc_endpoint_direction": None})
+    # ARC states the participants per occurrence (G's rule: a non-balanced reaction with only sorted
+    # label lists is refused), so these hand-built reactions state them.
+    doc["reactions"][0]["atom_map_reactant_labels"] = list(doc["reactions"][0]["reactant_labels"])
+    doc["reactions"][0]["atom_map_product_labels"] = list(doc["reactions"][0]["product_labels"])
     ts = doc["transition_states"][0]
     ts["levels"]["irc"] = LVL
     ts["irc_log_levels"] = [LVL, LVL] if irc else []

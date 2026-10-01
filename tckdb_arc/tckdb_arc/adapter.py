@@ -29,7 +29,8 @@ import math
 import os
 import re
 import time
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -2816,6 +2817,12 @@ class TCKDBAdapter:
         """
         species_index = _index_species(output_doc)
         ts_index = _index_transition_states(output_doc)
+        reaction_record = _with_stated_participants(
+            reaction_record,
+            ts_record=ts_index.get(reaction_record.get("ts_label")),
+            species_index=species_index,
+            warnings=warnings,
+        )
 
         reactant_labels = list(reaction_record.get("reactant_labels") or [])
         product_labels = list(reaction_record.get("product_labels") or [])
@@ -2900,7 +2907,10 @@ class TCKDBAdapter:
                     species_index=species_index,
                 ),
                 warnings=warnings,
+                reaction_record=reaction_record,
+                species_index=species_index,
             )
+            _warn_atom_map_not_sent(reaction_record, ts_label=ts_label, warnings=warnings)
 
         # Kinetics. ARC produces at most one fit per reaction today.
         kinetics_payload = reaction_record.get("kinetics")
@@ -3289,6 +3299,8 @@ class TCKDBAdapter:
         unmapped_smiles: str | None = None,
         include_artifacts: bool = True,
         warnings: list[dict[str, Any]] | None = None,
+        reaction_record: Mapping[str, Any] | None = None,
+        species_index: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, str]]:
         """Build one ``BundleTransitionStateIn`` dict + a calc-role → key map.
 
@@ -3723,6 +3735,9 @@ class TCKDBAdapter:
             irc_calc_key=calc_keys.get(_CALC_KEY_IRC),
             ts_label=ts_label,
             warnings=warnings,
+            reaction_record=reaction_record,
+            species_index=species_index,
+            ts_xyz_text=conformer_xyz_text,
         )
         if validation_evidence:
             ts_block["validation_evidence"] = validation_evidence
@@ -3878,6 +3893,9 @@ class TCKDBAdapter:
           calc, so no scientific data the endpoint can store is lost.
         """
         species_index = _index_species(output_doc)
+        reaction_record = _with_stated_participants(
+            reaction_record, ts_record=ts_record, species_index=species_index,
+            warnings=warnings)
 
         ts_label = (
             ts_record.get("label") or ts_record.get("original_label") or "unlabeled-ts"
@@ -3908,7 +3926,12 @@ class TCKDBAdapter:
             # (potentially multi-MB) read+base64 rather than build+strip.
             include_artifacts=False,
             warnings=ts_warnings,
+            reaction_record=reaction_record,
+            species_index=species_index,
         )
+        _warn_atom_map_not_sent(
+            reaction_record, ts_label=str(ts_label), warnings=ts_warnings,
+            route_has_atom_map=False)
         # The standalone request drops the TS's applied energy corrections
         # (below), so findings about them do not describe this upload.
         if warnings is not None:
@@ -10272,6 +10295,9 @@ def _ts_irc_validation_evidence(
     irc_calc_key: str | None,
     ts_label: Any,
     warnings: list[dict[str, Any]] | None = None,
+    reaction_record: Mapping[str, Any] | None = None,
+    species_index: Mapping[str, Mapping[str, Any]] | None = None,
+    ts_xyz_text: str | None = None,
 ) -> list[dict[str, Any]]:
     """Map ARC's ``ts_checks['IRC']`` verdict to TCKDB ``validation_evidence``.
 
@@ -10289,8 +10315,12 @@ def _ts_irc_validation_evidence(
     is required and non-empty: it states the source of ``passed``. ARC's
     ``ts_checks['warnings']`` are not used: they come only from the E0/e_elect
     and normal-mode-displacement checks (``arc/checks/ts.py``,
-    ``arc/checks/nmd.py``), never from the IRC. The participant mappings are
-    not exported by ARC and are omitted.
+    ``arc/checks/nmd.py``), never from the IRC.
+
+    ARC output schema 1.3 states the participant mappings
+    (``irc_participant_mapping``); :func:`_irc_participant_mappings` turns them
+    into ``reactant_participant_mapping`` / ``product_participant_mapping`` on
+    a passed record, or sends neither side and says why.
     """
     checks = ts_record.get("ts_checks")
     verdict = checks.get("IRC") if isinstance(checks, Mapping) else None
@@ -10315,12 +10345,296 @@ def _ts_irc_validation_evidence(
             })
         return []
     rationale = f"ARC ts_checks['IRC'] = {verdict}"
-    return [{
+    evidence: dict[str, Any] = {
         "kind": "irc",
         "passed": verdict,
         "rationale": rationale,
         "source_calculation_key": irc_calc_key,
-    }]
+    }
+    if verdict is True and reaction_record is not None and species_index is not None:
+        mappings = _irc_participant_mappings(
+            ts_record,
+            reaction_record=reaction_record,
+            species_index=species_index,
+            ts_xyz_text=ts_xyz_text,
+            ts_label=ts_label,
+            warnings=warnings,
+        )
+        if mappings is not None:
+            evidence["reactant_participant_mapping"] = mappings[0]
+            evidence["product_participant_mapping"] = mappings[1]
+    return [evidence]
+
+
+_W_IRC_PARTICIPANT_MAPPING_NOT_SENT = "ts_irc_participant_mapping_not_sent"
+_W_ATOM_MAP_TS_ORDER_NOT_STATED = "reaction_atom_map_ts_order_not_stated"
+
+
+_W_REACTION_STOICHIOMETRY_NOT_STATED = "reaction_stoichiometry_not_stated"
+
+
+def _with_stated_participants(
+    reaction_record: Mapping[str, Any],
+    *,
+    ts_record: Mapping[str, Any] | None,
+    species_index: Mapping[str, Mapping[str, Any]],
+    warnings: list[dict[str, Any]] | None = None,
+) -> Mapping[str, Any]:
+    """The reaction record with one label per participant occurrence.
+
+    ARC's ``reactant_labels`` / ``product_labels`` are ``list(rxn.reactants)``
+    after ``remove_dup_species`` sorted and de-duplicated them, so ``HO2 + HO2
+    <=> H2O2 + O2`` is exported as ``['HO2'] <=> ['H2O2', 'O2']`` and TCKDB
+    refuses the unbalanced reaction. The occurrences are taken, in this
+    order, from (a) ``atom_map_reactant_labels`` / ``atom_map_product_labels``
+    (output 1.3, one label per occurrence, present when ``atom_map`` is), then
+    (b) the participants of the TS's ``irc_participant_mapping`` (repeats
+    expanded, in ``position`` order); each must name exactly the species of
+    the collapsed lists. Otherwise (c) the collapsed lists are used when their
+    elements balance (from the species geometries; not checked when a geometry
+    is missing), and the reaction is refused when they do not, with
+    ``reaction_stoichiometry_not_stated``. The reaction label string is never
+    parsed.
+    """
+    collapsed = {side: [str(x) for x in reaction_record.get(key) or []]
+                 for side, key in (("reactants", "reactant_labels"), ("products", "product_labels"))}
+
+    def from_atom_map() -> dict[str, list[str]] | None:
+        found = {side: reaction_record.get(f"atom_map_{side[:-1]}_labels")
+                 for side in collapsed}
+        return found if all(isinstance(v, list) and v for v in found.values()) else None
+
+    def from_irc() -> dict[str, list[str]] | None:
+        mapping = (ts_record or {}).get("irc_participant_mapping")
+        if not isinstance(mapping, Mapping):
+            return None
+        found: dict[str, list[str]] = {}
+        for side in collapsed:
+            part = (mapping.get(side) or {}).get("participants") if isinstance(
+                mapping.get(side), Mapping) else None
+            if not isinstance(part, list) or not part or not all(
+                    isinstance(p, Mapping) and isinstance(p.get("position"), int) for p in part):
+                return None
+            found[side] = [p.get("label") for p in sorted(part, key=lambda p: p["position"])]
+        return found
+
+    for source in (from_atom_map, from_irc):
+        stated = source()
+        if stated is None:
+            continue
+        stated = {side: [str(x) for x in labels] for side, labels in stated.items()}
+        if all(sorted(set(stated[side])) == sorted(set(collapsed[side])) for side in collapsed):
+            if all(Counter(stated[side]) == Counter(collapsed[side]) for side in collapsed):
+                return reaction_record       # no repeat was lost; keep the exported order
+            return {**reaction_record, "reactant_labels": stated["reactants"],
+                    "product_labels": stated["products"]}
+
+    counts = {}
+    for side, labels in collapsed.items():
+        symbols = [_xyz_element_symbols((species_index.get(label) or {}).get("xyz")) for label in labels]
+        if not labels or any(sym is None for sym in symbols):
+            return reaction_record           # nothing to check against
+        counts[side] = Counter(sym for syms in symbols for sym in syms)
+    if counts["reactants"] == counts["products"]:
+        return reaction_record
+    message = (
+        f"reaction {reaction_record.get('label')!r}: ARC's reactant_labels {collapsed['reactants']} and "
+        f"product_labels {collapsed['products']} are sorted and de-duplicated, are not atom-balanced, and "
+        "ARC states no per-occurrence participants (atom_map_*_labels and irc_participant_mapping are "
+        "absent), so a repeated species cannot be recovered; the reaction was not uploaded."
+    )
+    logger.warning("TCKDB %s: %s", _W_REACTION_STOICHIOMETRY_NOT_STATED, message)
+    if warnings is not None:
+        warnings.append({"code": _W_REACTION_STOICHIOMETRY_NOT_STATED, "message": message,
+                         "field": "reactant_keys",
+                         "context": {"source": "tckdb_arc_self_check",
+                                     "action": "reaction_not_uploaded"}})
+    raise ValueError(message)
+
+
+def _participant_slots(labels: Sequence[Any]) -> list[tuple[str, int]]:
+    """``(label, occurrence)`` of each participant slot, in the order of ``labels``.
+
+    TCKDB numbers a side's participants by their position in ``reactant_keys``
+    / ``product_keys``, which the adapter builds from the reaction record's
+    ``reactant_labels`` / ``product_labels``. ARC numbers the participants of
+    ``irc_participant_mapping`` in the order of ``atom_map_reactant_labels`` /
+    ``atom_map_product_labels`` (``r_species`` order), and ``reactant_labels``
+    is sorted instead, so the two orders differ and ARC's ``position`` is not
+    TCKDB's ``participant_index``. The label and its occurrence (the 1-based
+    count of that label up to the slot, as ARC states it) identify the same
+    participant in both.
+    """
+    seen: dict[str, int] = {}
+    slots: list[tuple[str, int]] = []
+    for label in labels:
+        seen[str(label)] = seen.get(str(label), 0) + 1
+        slots.append((str(label), seen[str(label)]))
+    return slots
+
+
+def _irc_participant_mappings(
+    ts_record: Mapping[str, Any],
+    *,
+    reaction_record: Mapping[str, Any],
+    species_index: Mapping[str, Mapping[str, Any]],
+    ts_xyz_text: str | None,
+    ts_label: Any,
+    warnings: list[dict[str, Any]] | None = None,
+) -> tuple[dict[str, list[int]], dict[str, list[int]]] | None:
+    """Translate ARC's ``irc_participant_mapping`` to TCKDB's two participant mappings.
+
+    TCKDB's ``reactant_participant_mapping`` / ``product_participant_mapping``
+    are ``{"reactant:N": [1-based transition-state atom indices]}`` and cover
+    every transition-state atom exactly once on each side. ARC's mapping
+    (output schema 1.3, ``irc_participant_mapping``) gives 0-based indices into
+    each optimized IRC endpoint geometry, and those are transition-state atom
+    indices only when ``atom_order_matches_ts`` is ``True``. Nothing is sent
+    unless every claim TCKDB checks can be stated from what ARC says:
+
+    * ``atom_order_matches_ts`` is ``True`` (otherwise the indices are not
+      transition-state atoms);
+    * ``sides_distinguishable`` is ``True`` (otherwise which endpoint is the
+      reactants is only a convention ARC states it made);
+    * each side's participants are exactly the participant slots of the
+      reaction the upload declares, matched by label and occurrence, never by
+      ARC's ``position``;
+    * each side's indices partition the transition-state atoms, and each
+      participant's atoms have the element counts of its species.
+
+    Both sides are sent or neither (TCKDB refuses one side). ARC states the
+    mapping only when the IRC verdict was established by graph isomorphism, so
+    an absent mapping (``null``, or a pre-1.3 document) sends nothing and is not
+    reported.
+    """
+    mapping = ts_record.get("irc_participant_mapping")
+    if not isinstance(mapping, Mapping):
+        return None
+
+    def refuse(reason: str, **context: Any) -> None:
+        message = (
+            f"ARC states an IRC participant mapping for {ts_label!r} but it cannot be "
+            f"sent as TCKDB participant mappings: {reason}. Neither side was sent."
+        )
+        logger.warning("TCKDB %s: %s", _W_IRC_PARTICIPANT_MAPPING_NOT_SENT, message)
+        if warnings is not None:
+            warnings.append({
+                "code": _W_IRC_PARTICIPANT_MAPPING_NOT_SENT,
+                "message": message,
+                "field": "transition_state.validation_evidence",
+                "context": {"source": "tckdb_arc_self_check",
+                            "action": "irc_participant_mapping_omitted",
+                            **{key: str(value) for key, value in context.items()}},
+            })
+        return None
+
+    if mapping.get("atom_order_matches_ts") is not True:
+        return refuse(
+            "atom_order_matches_ts is not true, so the endpoint atom indices are not "
+            "transition-state atom indices",
+            atom_order_matches_ts=mapping.get("atom_order_matches_ts"))
+    if mapping.get("sides_distinguishable") is not True:
+        return refuse(
+            "the reactants and products are graph-isomorphic, so which IRC endpoint is the "
+            "reactants is a convention, not something ARC established",
+            sides_distinguishable=mapping.get("sides_distinguishable"))
+    ts_symbols = _xyz_element_symbols(ts_xyz_text)
+    if ts_symbols is None:
+        return refuse("the transition-state geometry has no readable atoms")
+
+    sides: list[dict[str, list[int]]] = []
+    for side_name, prefix, labels_key in (
+            ("reactants", "reactant", "reactant_labels"),
+            ("products", "product", "product_labels")):
+        side = mapping.get(side_name)
+        participants = side.get("participants") if isinstance(side, Mapping) else None
+        if not isinstance(participants, list) or not participants:
+            return refuse(f"the {side_name} side states no participants")
+        slots = _participant_slots(reaction_record.get(labels_key) or [])
+        by_slot: dict[tuple[str, int], Mapping[str, Any]] = {}
+        for participant in participants:
+            if not isinstance(participant, Mapping):
+                return refuse(f"a {side_name} participant is not a record")
+            key = (str(participant.get("label")), participant.get("occurrence"))
+            if key in by_slot:
+                return refuse(f"{side_name} participant {key[0]!r} occurrence {key[1]} is listed twice")
+            by_slot[key] = participant
+        if set(by_slot) != set(slots):
+            return refuse(
+                f"the {side_name} participants (label, occurrence) "
+                f"{sorted(map(str, by_slot))} are not the participants of the uploaded reaction "
+                f"{sorted(map(str, slots))}")
+        result: dict[str, list[int]] = {}
+        claimed: list[int] = []
+        for index, slot in enumerate(slots, start=1):
+            atoms = by_slot[slot].get("atom_indices")
+            if (not isinstance(atoms, list) or not atoms
+                    or not all(isinstance(i, int) and not isinstance(i, bool)
+                               and 0 <= i < len(ts_symbols) for i in atoms)):
+                return refuse(f"{side_name} participant {slot[0]!r} has atom indices that are not "
+                              f"0-based indices into the {len(ts_symbols)}-atom transition state")
+            species_symbols = _xyz_element_symbols(
+                (species_index.get(slot[0]) or {}).get("xyz"))
+            if species_symbols is None or Counter(species_symbols) != Counter(
+                    ts_symbols[i] for i in atoms):
+                return refuse(f"the atoms assigned to {side_name} participant {slot[0]!r} are not "
+                              "the elements of that species")
+            result[f"{prefix}:{index}"] = sorted(i + 1 for i in atoms)
+            claimed.extend(atoms)
+        if sorted(claimed) != list(range(len(ts_symbols))):
+            return refuse(f"the {side_name} participants do not cover every transition-state "
+                          "atom exactly once")
+        sides.append(result)
+    return sides[0], sides[1]
+
+
+def _warn_atom_map_not_sent(
+    reaction_record: Mapping[str, Any],
+    *,
+    ts_label: Any,
+    warnings: list[dict[str, Any]] | None,
+    route_has_atom_map: bool = True,
+) -> None:
+    """Report ARC's reaction ``atom_map`` (schema 1.3) that cannot be sent as TCKDB's ``atom_map``.
+
+    TCKDB's ``ReactionAtomMapIn`` is ``{participant atom: transition-state atom}``
+    for every participant, both sides 1-based, against the transition state
+    geometry. ARC's ``atom_map`` is reactant-atom to product-atom, and its
+    schema states that it "says nothing about the atom order of the transition
+    state". No ARC key relates any participant atom to a transition-state atom
+    one by one: ``irc_participant_mapping`` records only which atoms belong to
+    which participant ("only atom-set membership is recorded, not the
+    atom-to-atom correspondence inside a participant"). Writing TS atom ``i`` =
+    reactant atom ``i`` would claim a TS order ARC does not state, and TCKDB
+    never derives a map (ADR 0011). So no ``atom_map`` is built, and TCKDB
+    reports ``reaction_atom_map_absent`` for the reaction.
+    """
+    atom_map = reaction_record.get("atom_map")
+    if not isinstance(atom_map, list) or not atom_map:
+        return
+    reason = (
+        f"TCKDB's atom_map maps each participant atom to an atom of the transition-state "
+        f"geometry {ts_label!r} and ARC states no relation between its map and the "
+        "transition-state atom order"
+    )
+    if not route_has_atom_map:
+        reason += ", and this route has no atom_map field"
+    message = (
+        f"ARC states a reactant-to-product atom_map for {reaction_record.get('label')!r} "
+        f"(source {reaction_record.get('atom_map_source')!r}), but {reason}, so no atom_map "
+        "was sent. TCKDB will report reaction_atom_map_absent."
+    )
+    logger.warning("TCKDB %s: %s", _W_ATOM_MAP_TS_ORDER_NOT_STATED, message)
+    if warnings is not None:
+        warnings.append({
+            "code": _W_ATOM_MAP_TS_ORDER_NOT_STATED,
+            "message": message,
+            "field": "atom_map",
+            "context": {"source": "tckdb_arc_self_check",
+                        "action": "atom_map_omitted",
+                        "atom_map_source": str(reaction_record.get("atom_map_source")),
+                        "atom_map_method": str(reaction_record.get("atom_map_method"))},
+        })
 
 
 _W_IRC_DIRECTION_NOT_STATED = "irc_direction_not_stated"

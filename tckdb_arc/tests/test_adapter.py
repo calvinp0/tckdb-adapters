@@ -3243,6 +3243,14 @@ def _reaction_record(*, with_kinetics=True, ts_label="TS0"):
 NEB_LEVEL = {"method": "wb97xd", "basis": "def2tzvp", "software": "orca"}
 
 
+_REACTION_FIXTURE_XYZ = {
+    "CHO": "C 0.0 0.0 0.0\nH 1.0 0.0 0.0\nO 0.0 1.0 0.0",
+    "CH4": "C 0.0 0.0 0.0\nH 1.0 0.0 0.0\nH -1.0 0.0 0.0\nH 0.0 1.0 0.0\nH 0.0 -1.0 0.0",
+    "CH2O": "C 0.0 0.0 0.0\nH 1.0 0.0 0.0\nH -1.0 0.0 0.0\nO 0.0 1.0 0.0",
+    "CH3": "C 0.0 0.0 0.0\nH 1.0 0.0 0.0\nH -1.0 0.0 0.0\nH 0.0 1.0 0.0",
+}
+
+
 def _reaction_output_doc(*, with_irc=False):
     """Output document with the four species, one TS, and one reaction populated."""
     doc = _fake_output_doc()
@@ -3254,7 +3262,8 @@ def _reaction_output_doc(*, with_irc=False):
             "charge": 0,
             "multiplicity": mult,
             "is_ts": False,
-            "xyz": "C 0.0 0.0 0.0\nH 1.0 0.0 0.0",
+            # element-balanced across CHO + CH4 <=> CH2O + CH3 (the adapter checks)
+            "xyz": _REACTION_FIXTURE_XYZ[label],
             "opt_n_steps": 10,
             "opt_final_energy_hartree": -100.0,
             "opt_converged": True,
@@ -8771,12 +8780,14 @@ class TestComputedReactionDependencyEdges(unittest.TestCase):
             self.assertNotIn("unmapped_smiles", spc["species_entry"])
 
     def test_atom_map_and_mapping_history_never_leak_to_payload(self):
-        # ARC carries ``reaction.atom_map`` (an integer permutation
-        # array used internally for geometry alignment), and may have
-        # mapping/template metadata on the reaction record. None of
-        # these belong in TCKDB. Stage every plausible key on the
-        # input record and assert the wire payload contains none of
-        # them, at any depth.
+        # ARC carries ``reaction.atom_map`` (a reactant-to-product integer
+        # permutation) and may have mapping/template metadata on the
+        # reaction record. TCKDB's ``atom_map`` is participant atom ->
+        # transition-state atom, and ARC states no relation between its map
+        # and the TS atom order (adapter 0.7.2, test_arc_1_3_reactions.py), so
+        # none of these is sent. Stage every plausible key on the input
+        # record and assert the wire payload contains none of them, at any
+        # depth.
         doc = _reaction_output_doc()
         ts = doc["transition_states"][0]
         # Stage atom-map / mapping-history / template metadata anywhere

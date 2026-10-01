@@ -39,6 +39,8 @@ and schema versions; their percentages are not current coverage measurements.
 - **Adapter 0.8.0, batch F:** corrections, statmech, kinetics provenance,
   TS frequencies and parsed properties. See
   [Output schema 1.3: corrections, statmech, kinetics, TS frequencies (adapter 0.8.0, batch F)](#output-schema-13-corrections-statmech-kinetics-ts-frequencies-adapter-080-batch-f).
+- **Adapter 0.8.0, batch G:** reaction atom map and IRC participant mapping. See
+  [Reaction atom map and IRC participant mapping (adapter 0.8.0, batch G)](#reaction-atom-map-and-irc-participant-mapping-adapter-080-batch-g).
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
@@ -619,7 +621,7 @@ write no record at all (ARC docs: the list "is empty when the corrections came f
 `data/AEC.yml` rather than Arkane's database").
 
 **Scheme identity sets.** Scheme rows now have up to three identities for the same table content: no
-tool (<= 0.6.2), the Arkane build (0.6.3-0.7.0) and `RMG-database` (0.7.1). The new rows on first
+tool (<= 0.6.2), the Arkane build (0.6.3-0.6.9) and `RMG-database` (0.8.0). The new rows on first
 upload are expected. TCKDB's `WorkflowToolReleaseRef` has no content-digest field, so a database of
 unknown origin is identified by `version: "sha256:<digest>"`, a stand-in (see BRIDGE_ROADMAP C10).
 
@@ -676,3 +678,68 @@ Upgrading changes the payload hash, and so the idempotency key, of 1.3 uploads t
 BAC, a different treatment, torsions without a treatment, a scheme release, a kinetics note, a
 stated `reversible`, ESS-ordered modes or a T1 diagnostic. Documents before 1.3 are unchanged, and the
 golden corpus hashes are unchanged.
+
+## Reaction atom map and IRC participant mapping (adapter 0.8.0, batch G)
+
+ARC output schema 1.3 (ARC PR #1059 @ bc731fb4) exports the reaction's `atom_map`,
+`atom_map_reactant_labels`, `atom_map_product_labels`, `atom_map_source` and
+`atom_map_method` (`arc/output.py:_get_reaction_atom_map`), and the TS-only
+`irc_participant_mapping` (`arc/output.py:_irc_participant_mapping_to_dict`). The
+fixture `tckdb_arc/tests/fixtures/arc_1_3_reactions` is written by ARC's writer, with the map
+from ARC's mapper and the IRC mapping from ARC's IRC check.
+
+- **IRC participant mapping is sent (B10, A14).** On a passed IRC verdict
+  (`ts_checks.IRC` true) the evidence record carries `reactant_participant_mapping` and
+  `product_participant_mapping`: `{"reactant:N": [1-based TS atoms]}`. ARC's indices are
+  0-based indices into each IRC endpoint geometry (add 1), and are TS atom indices only when
+  `atom_order_matches_ts` is `true`. TCKDB's participant index is the slot in
+  `reactant_keys`, which follows the reaction's `reactant_labels`, **sorted**; ARC counts
+  `position` in `atom_map_reactant_labels` order (`r_species`), so participants are matched by
+  `(label, occurrence)` and never by `position`. Neither side is sent (and
+  `ts_irc_participant_mapping_not_sent` names why) when `atom_order_matches_ts` is not `true`,
+  when `sides_distinguishable` is not `true` (ARC states that which endpoint is the
+  reactants is then a convention), when the participants are not exactly the slots of the
+  uploaded reaction (a repeated species collapsed in `reactant_labels` has fewer slots than
+  ARC's per-occurrence participants), when an index is out of range, when a side does not
+  cover every TS atom exactly once, or when a participant's atoms are not the elements of
+  its species. A `null` or absent mapping (pre-1.3, bond-list fallback, IRC not validated)
+  sends nothing and says nothing. Both TS routes.
+- **The reaction atom map is not sent (B8).** TCKDB's `ReactionAtomMapIn` is, per
+  participant, `{participant atom: TS atom}`, 1-based, against the TS geometry key
+  (`ts_geometry_key`, `participants[].geometry_key`, `participant_index`); ARC's `atom_map` is
+  reactant atom to product atom, and its schema says it "says nothing about the atom order
+  of the transition state". `irc_participant_mapping` records only atom-set membership, "not
+  the atom-to-atom correspondence inside a participant". No ARC key relates a participant
+  atom to a TS atom one by one, so `atom_to_ts` cannot be stated; writing TS atom `i` =
+  reactant atom `i` would assert an order ARC does not (the fixture's TS lists CH4 before OH,
+  ARC's map counts OH first). TCKDB never derives a map (ADR 0011), so the adapter reports
+  `reaction_atom_map_ts_order_not_stated` (context: `atom_map_source`, `atom_map_method`)
+  whenever ARC states a map and a TS exists, and TCKDB reports `reaction_atom_map_absent`. The
+  standalone TS request has no `atom_map` field in the contract (C9). If ARC later exports the
+  TS atom each reactant and product atom corresponds to: `source` is ARC's
+  `atom_map_source` (`declared` or `inferred`; a `null` source is refused, TCKDB has no
+  default), an `inferred` map's required `note` is ARC's `atom_map_method`
+  (`atom_map_inferred_requires_note`), and `ts_geometry_key` is the TS block's `ts_geom`.
+- **Consistency.** With no atom map sent, `atom_map_contradicts_irc_mapping` (TCKDB's
+  partition-refinement check, `app/services/reaction_atom_map.py`) cannot arise. The
+  offline-checkable rules on the mapping that is sent (every participant named, every TS atom
+  once per side, `transition_state_irc_mapping_element_mismatch`) run in
+  `test_arc_1_3_reactions.py` against the fixture, and the conftest contract hook checks the
+  published models. The fixture's atom map and IRC partition agree participant by participant;
+  that is a property of the fixture, not a gate, because ARC's map is arbitrary among
+  symmetry-equivalent atoms.
+- **`kinetics.ts_validation` (1.3) and `ts_checks`.** `ts_checks` has the same five verdicts
+  as 1.1 (`E0`, `e_elect`, `IRC`, `freq`, `NMD`); only IRC has a TCKDB home (validation kind
+  is `irc`), unchanged since 0.6.4, so the other four are still not sent. `ts_validation`
+  is ARC's text marker on a rate computed from a TS whose `ts_checks.IRC` is `false`; that
+  verdict is already sent as `validation_evidence[].passed = false`, TCKDB has no per-rate
+  validation field, and `BundleKineticsIn.note` carries only ARC's
+  `long_kinetic_description`, so it is not sent.
+- **`reversible` (1.3) is not read here.** Out of this batch.
+- **Repeated species (B16).** ARC's `reactant_labels` / `product_labels` are sorted and
+  de-duplicated, so `HO2 + HO2 <=> H2O2 + O2` would upload as `HO2 <=> H2O2 + O2` and TCKDB would
+  refuse it as unbalanced. When `atom_map_*_labels` (else the IRC participants) list a repeat the
+  collapsed lists lack, the expanded lists define the participants (one species block, the key
+  repeated per slot); with neither stated, collapsed lists that do not balance by the species
+  geometries refuse the upload with `reaction_stoichiometry_not_stated` (a missing geometry skips
+  the check). The label string is not parsed.

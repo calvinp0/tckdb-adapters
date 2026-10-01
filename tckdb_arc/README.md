@@ -100,7 +100,7 @@ workflow tool; the older null-tool row remains). An `atom_energy` scheme now car
 atomic energies) with `scheme.units` set to that table's own unit; a table with
 a missing or unrecognized unit, or unusable values, is not sent.
 
-Adapter 0.7.0 reads output.yml 1.3 (ARC PR #1059): each record's `levels` (the level of its
+Adapter 0.8.0 (ARC output 1.3, batch E) reads output.yml 1.3 (ARC PR #1059): each record's `levels` (the level of its
 opt, freq, sp, composite and IRC jobs, also under `adaptive_levels`) replaces the `restart.yml`
 replay, programs come from `ess_software` (including `composite`, `irc` and the xtb GSM) and
 each rotor scan's own program, the header `gsm_level` files the GSM path search again, screened
@@ -144,6 +144,16 @@ derived reference; `stable` only for ARC's `stable` verdict; never on freq/sp). 
 rotors as torsions carrying `invalidated_reason`; it sends no rotor scan (the route accepts
 only freq and sp as additional calculations). See `docs/contract/CURRENT_ARC_INTEGRATION.md`.
 
+Adapter 0.8.0 (batch G) reads ARC output schema 1.3's reaction atom map and IRC participant mapping.
+`irc_participant_mapping` becomes the IRC validation evidence's `reactant_participant_mapping`
+/ `product_participant_mapping` (1-based TS atoms, participants matched by label and
+occurrence), and only when ARC states that the IRC endpoints follow the TS atom order and the
+sides are distinguishable; otherwise neither side is sent
+(`ts_irc_participant_mapping_not_sent`). ARC's reactant-to-product `atom_map` is **not** sent:
+TCKDB's `atom_map` is participant atom to TS atom and ARC states no relation to the TS atom
+order, so the adapter reports `reaction_atom_map_ts_order_not_stated` (TCKDB then warns
+`reaction_atom_map_absent`). See `docs/contract/CURRENT_ARC_INTEGRATION.md`.
+
 Adapter 0.6.5 targets tckdb-schemas 0.54 (no wire model change; only the
 bundles dry-run route, which the adapter never calls, gained rules) and states
 Arkane's full atom-energy convention in the `atom_energy` scheme note: the atomic
@@ -174,7 +184,7 @@ Adapter 0.6.7:
 Upgrading changes the payload hash, and so the idempotency key, of reaction uploads that
 had a repeated species or gained conformer labels or scan logs.
 
-Adapter 0.7.1 reads ARC output schema 1.3 (batch F; the keys are read from 1.3 documents
+Adapter 0.8.0 (batch F) reads ARC output schema 1.3 (the keys are read from 1.3 documents
 only, and a document before 1.3 gives the payload it gave before):
 
 - A partial Petersson BAC is sent with the bonds Arkane applied (`components`, which must
@@ -195,7 +205,7 @@ only, and a document before 1.3 gives the payload it gave before):
   and polarizability have no home on these routes (TCKDB holds them only on the standalone
   transport record), and the E0 switches gate nothing since no E0 is deposited.
 
-Scheme rows get a third identity set (no tool <= 0.6.2, the Arkane build 0.6.3, `RMG-database` 0.7.1); the
+Scheme rows get a third identity set (no tool <= 0.6.2, the Arkane build 0.6.3, `RMG-database` 0.8.0); the
 new rows are expected. Upgrading changes the payload hash, and so the idempotency key, of 1.3 uploads that gain any of
 the above. See `docs/contract/CURRENT_ARC_INTEGRATION.md`.
 

@@ -19,7 +19,8 @@ from tckdb_arc.config import TCKDBConfig
 def _species(label, smiles, mult, sp_e):
     return {
         "label": label, "smiles": smiles, "charge": 0, "multiplicity": mult,
-        "is_ts": False, "xyz": "H 0.0 0.0 0.0\nH 0.74 0.0 0.0",
+        "is_ts": False,
+        "xyz": "H 0.0 0.0 0.0" if label == "H" else "H 0.0 0.0 0.0\nH 0.74 0.0 0.0",
         "opt_n_steps": 3, "opt_final_energy_hartree": sp_e, "opt_converged": True,
         "freq_n_imag": 0, "zpe_hartree": 0.01, "sp_energy_hartree": sp_e,
         "ess_versions": {"opt": "Gaussian 16, Revision A.03"},
