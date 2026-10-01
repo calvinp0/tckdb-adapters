@@ -19,7 +19,8 @@ from tckdb_arc.config import TCKDBConfig
 def _species(label, smiles, mult, sp_e):
     return {
         "label": label, "smiles": smiles, "charge": 0, "multiplicity": mult,
-        "is_ts": False, "xyz": "H 0.0 0.0 0.0\nH 0.74 0.0 0.0",
+        "is_ts": False,
+        "xyz": "H 0.0 0.0 0.0" if label == "H" else "H 0.0 0.0 0.0\nH 0.74 0.0 0.0",
         "opt_n_steps": 3, "opt_final_energy_hartree": sp_e, "opt_converged": True,
         "freq_n_imag": 0, "zpe_hartree": 0.01, "sp_energy_hartree": sp_e,
         "ess_versions": {"opt": "Gaussian 16, Revision A.03"},
@@ -60,9 +61,13 @@ def test_degenerate_reaction_declares_each_species_once():
     assert payload["product_keys"] == ["r1_H", "r0_H2"]
     assert payload["kinetics"][0]["reactant_keys"] == payload["reactant_keys"]
     assert payload["kinetics"][0]["product_keys"] == payload["product_keys"]
-    # One sp calculation per species, however many slots reference it.
-    sp_calcs = [c for s in payload["species"] for c in s["calculations"] if c["type"] == "sp"]
-    assert len(sp_calcs) == 2
+    # One sp calculation per species, however many slots reference it. The atom's sp is
+    # its primary calculation (tckdb-schemas 0.59); the molecule's is an additional one.
+    sp_calcs = [c for s in payload["species"]
+                for c in [s["conformers"][0]["calculation"], *s["calculations"]] if c["type"] == "sp"]
+    assert [c["key"] for c in sp_calcs] == ["r0_sp", "r1_sp"]
+    atom = payload["species"][1]
+    assert atom["conformers"][0]["calculation"]["type"] == "sp" and atom["calculations"] == []
     links = _assert_kinetics_links_resolve(payload)
     by_role = {}
     for link in links:

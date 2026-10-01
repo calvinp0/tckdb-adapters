@@ -1,0 +1,4 @@
+ |                           x T B                           |
+      * xtb version 6.7.1 (edcfbbe) compiled by 'conda@fixture' on 2024-01-01
+      program call               : xtb 0000.01.xyz --chrg 0 --uhf 1 --gfn 2
+          Hamiltonian                  GFN2-xTB

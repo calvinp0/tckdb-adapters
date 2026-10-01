@@ -38,7 +38,7 @@ SAMPLE_LOG = Path(__file__).resolve().parents[2] / "testing" / "irc" / "rxn_1_ir
 
 ARKANE_GIT_COMMIT = "7f4e9c2a1b3d5e6f708192a3b4c5d6e7f8091a2b"
 
-# ARC kinetics with T0 = 300 K: the stored prefactor must be A / T0**n.
+# ARC kinetics with T0 = 300 K: the prefactor is stored as sent (A), with ``t0_k`` = 300 (tckdb-schemas 0.63).
 KINETICS_T0 = {
     "A": 2.5e13, "A_units": "cm^3/(mol*s)", "n": 1.5, "T0_k": 300.0,
     "Ea": 40.0, "Ea_units": "kJ/mol", "Tmin_k": 300.0, "Tmax_k": 2000.0,
@@ -135,11 +135,25 @@ def _golden_with_irc_verdict(verdict):
 
     ``irc_converged`` only says the IRC jobs finished (ARC ``arc/output.py``
     ``_ts_checks_to_dict``); ``ts_checks['IRC']`` is ARC's verdict on whether
-    the IRC connects the declared reactants and products.
+    the IRC connects the declared reactants and products. ``freq`` is left unassessed: a stated verdict
+    would also deposit an ``imaginary_mode`` record (0.64), and these corpora read back the IRC evidence alone.
     """
     doc, sidecars = golden_kinetics()
     doc["transition_states"][0]["ts_checks"] = {
-        "E0": None, "e_elect": None, "IRC": verdict, "freq": True, "NMD": None, "warnings": "",
+        "E0": None, "e_elect": None, "IRC": verdict, "freq": None, "NMD": None, "warnings": "",
+    }
+    return doc, sidecars
+
+
+def golden_ts_evidence():
+    """golden + kinetics with every TS verdict ARC states, so each evidence kind is sent (tckdb-schemas 0.64).
+
+    ``freq`` and ``e_elect`` are True: the TS carries one imaginary mode (-900 cm^-1) and its sp energy
+    (-1.6 Eh) is above both sides' summed participant sp energies (-1.67 Eh), at the one shared sp level.
+    """
+    doc, sidecars = golden_kinetics()
+    doc["transition_states"][0]["ts_checks"] = {
+        "E0": None, "e_elect": True, "IRC": True, "freq": True, "NMD": None, "warnings": "",
     }
     return doc, sidecars
 
@@ -164,6 +178,9 @@ def arc_1_2_corrections():
     ch4 = next(s for s in doc["species"] if s["label"] == "CH4")
     ch4["sp_energy_hartree"] = -40.51
     ch4["ess_versions"]["sp"] = "Gaussian 16"
+    # Before output 1.3 the thermo block says which correction record its run applied, and the adapter
+    # deposits no record the run did not apply; the shipped CH4 states bond corrections off.
+    ch4["thermo"]["bond_corrections_applied"] = True
     ch4["energy_corrections"] = [
         {"correction_type": "atom_energy", "model": "arkane_atom_energy",
          "level_of_theory": lot, "total": {"value": -0.0234, "unit": "hartree"},
@@ -253,6 +270,7 @@ def synthetic_species_as_shipped():
 CORPORA = {
     "golden": golden,
     "golden_kinetics": golden_kinetics,
+    "golden_ts_evidence": golden_ts_evidence,
     "golden_irc_passed": golden_irc_passed,
     "golden_irc_failed": golden_irc_failed,
     "arc_1_2": arc_1_2,

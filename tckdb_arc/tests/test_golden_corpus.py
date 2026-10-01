@@ -293,6 +293,59 @@ class TestGoldenCorpus(unittest.TestCase):
 
         # Canonical snapshots make any wire-shape change an explicit review.
         #
+        # computed_reaction changed (computed_species and transition_state did not)
+        # for adapter 0.8.0 / tckdb-schemas 0.59 (TCKDB#610), for one reason: the
+        # single atom H is no longer filed as a placeholder ``opt`` plus an additional
+        # ``sp``. Its primary calculation is its own ``sp``. Restoring exactly the old
+        # H block (below) reproduces the previous snapshot, so no other leaf changed.
+        self.assertEqual(
+            {
+                "computed_species": "9e0749f3fe9d6476c63006e029401618edaabce8e14e919f720bd4adc793b908",
+                "computed_reaction": "2207da2919837a422180ae8fd59fb7df5b1574382922b45aa8bdfbf54a316de4",
+                "transition_state": "9bc66ae3b6894e9776df427601f8d8377f72c94c50abc4a8042aee092d7bd679",
+            },
+            {
+                "computed_species": self._canonical_sha256(species),
+                "computed_reaction": self._canonical_sha256(reaction),
+                "transition_state": self._canonical_sha256(transition_state),
+            },
+        )
+
+        def with_atom_placeholder_opt_restored(payload):
+            restored = copy.deepcopy(payload)
+            atoms = 0
+            for block in restored["species"]:
+                conformer = block["conformers"][0]
+                sp = conformer["calculation"]
+                if sp["type"] != "sp":
+                    continue
+                atoms += 1
+                xyz = conformer["geometry"]["xyz_text"]
+                self.assertEqual(xyz.splitlines()[0], "1")
+                opt_key = sp["key"][: -len("sp")] + "opt"
+                opt_level = output_doc["opt_level"]
+                conformer["calculation"] = {
+                    "key": opt_key,
+                    "level_of_theory": {"basis": opt_level["basis"], "method": opt_level["method"]},
+                    "opt_converged": next(
+                        r["opt_converged"] for r in output_doc["species"] if r["xyz"].split()[0] == "H"
+                        and len(r["xyz"].splitlines()) == 1),
+                    "output_geometries": [{"geometry": {"xyz_text": xyz}, "role": "final"}],
+                    "quality": "raw",
+                    "software_release": {"name": sp["software_release"]["name"]},
+                    "type": "opt",
+                    "workflow_tool_release": sp["workflow_tool_release"],
+                }
+                sp = {**sp, "depends_on": [{"parent_calculation_key": opt_key, "role": "single_point_on"}],
+                      "geometry_key": conformer["geometry"]["key"]}
+                block["calculations"] = [sp, *block["calculations"]]
+            self.assertEqual(atoms, 1)
+            return restored
+
+        reaction = with_atom_placeholder_opt_restored(reaction)
+
+        # The sections below describe the snapshots before that change.
+        #
         # computed_reaction / transition_state changed (computed_species did
         # not) for adapter 0.6.4, for one reason: TS0's chosen guess is an
         # xtb-gsm path search, and ARC exports no level for it (only the ORCA

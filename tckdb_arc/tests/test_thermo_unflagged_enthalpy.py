@@ -368,10 +368,10 @@ def test_species_route_reads_the_composition(tmp_path):
     assert _shape(warnings) == [_warning("enthalpy_formation_unverifiable_light_species", HEADER)]
 
 
-def _submit_reaction(tmp_path, doc):
+def _submit_reaction(tmp_path, doc, **reaction_keys):
     with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
         outcome = _adapter(tmp_path).submit_computed_reaction_from_output(
-            output_doc=doc, reaction_record=_reaction_record())
+            output_doc=doc, reaction_record={**_reaction_record(), **reaction_keys})
     payload = json.loads(outcome.payload_path.read_text())
     contract_validate(ComputedReactionUploadRequest, payload)
     return payload, outcome.warnings
@@ -403,10 +403,14 @@ def test_reaction_route_reads_the_header_level_and_composition(tmp_path):
 
     doc = _reaction_doc_1_1()
     doc["species"][0]["xyz"] = XYZ["H"]
-    payload, warnings = _submit_reaction(tmp_path / "light", doc)
-    # The atom also draws the placeholder-opt warning (A6); this test is about thermo.
-    assert [w["code"] for w in warnings].count("monatomic_species_primary_opt_placeholder") == 1
-    warnings = [w for w in warnings if w["code"] != "monatomic_species_primary_opt_placeholder"]
+    # ARC states the participants (1.3), so the adapter does not balance-check the
+    # deliberately unbalanced light-species swap.
+    payload, warnings = _submit_reaction(
+        tmp_path / "light", doc,
+        atom_map_reactant_labels=_reaction_record()["reactant_labels"],
+        atom_map_product_labels=_reaction_record()["product_labels"])
+    # The atom's primary is its sp (tckdb-schemas 0.59), so it draws no placeholder-opt warning.
+    assert not any("placeholder" in w["code"] for w in warnings)
     light = [sp for sp in payload["species"] if "h298_kj_mol" not in sp["thermo"]]
     assert light and len(light) < len(payload["species"])
     assert {w["code"] for w in warnings} == {"enthalpy_formation_unverifiable_light_species"}

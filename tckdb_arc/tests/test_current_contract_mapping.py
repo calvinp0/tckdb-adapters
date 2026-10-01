@@ -64,14 +64,19 @@ def test_ts_scan_survives_reaction_bundle_with_distinct_namespace(adapter):
     contract_validate(ComputedReactionUploadRequest, payload)
 
 
-def test_standalone_ts_reports_unsupported_scan_without_rejecting_ts(adapter, caplog):
+def test_standalone_ts_carries_its_rotor_scan_with_the_points(adapter, caplog):
+    """tckdb-schemas 0.64: the standalone request accepts ``scan`` calculations and their ``scan_result``."""
     doc = _scan_doc()
     payload = adapter._compose_transition_state_request(
         output_doc=doc, ts_record=doc["transition_states"][0],
         reaction_record=doc["reactions"][0],
     )
-    assert all(c["type"] != "scan" for c in payload["additional_calculations"])
-    assert "use computed_reaction mode to retain them" in caplog.text
+    (scan,) = [c for c in payload["additional_calculations"] if c["type"] == "scan"]
+    assert scan["scan_result"]["points"][1]["relative_energy_kj_mol"] == 2.0
+    assert scan["constraints"][0]["atom1_index"] == 1
+    # the bundle-only keys are stripped, as for every standalone calculation
+    assert not {"key", "depends_on", "geometry_key", "artifacts"} & set(scan)
+    assert "use computed_reaction mode to retain them" not in caplog.text
     contract_validate(TransitionStateUploadRequest, payload)
 
 

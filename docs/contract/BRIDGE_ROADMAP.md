@@ -151,6 +151,14 @@ Each item is one of three things:
 
 ### A1. Petersson `bac_total` without a bond component (**breaking**; top 10 #1)
 
+**Status (adapter 0.8.0, output 1.3): a partial BAC is now sent.** ARC 1.3 (B13) writes
+the bonds a Petersson BAC applied as `components` (they sum to `total`) and the bonds with
+no parameter as `skipped_components`. On a 1.3 document the adapter sends that partial
+decomposition (after checking that the components sum to the total within
+1e-3 kcal/mol, `components_do_not_sum` otherwise) and states the skipped bonds in the
+correction's `note`, not in the scheme. The omission rules above remain for documents
+before 1.3 and for a 1.3 record with no usable bond component.
+
 **Status (adapter 0.6.3): done.** See CURRENT_ARC_INTEGRATION.md, "Corrections and statmech evidence".
 
 **What to change.** Before emitting a `bac_total` from a `bac_petersson` scheme, require
@@ -240,6 +248,20 @@ that assertion.
 
 ### A2b. Interim detection of `adaptive_levels` runs (**wrong**; top 10 #6)
 
+**Status (adapter 0.8.0): consumed from output.yml 1.3.** The record's `levels` (the level of
+the opt, freq, sp, composite and IRC jobs whose logs it exports, under `adaptive_levels` too) is
+authoritative and replaces the `restart.yml` replay for every job it states; the header
+`adaptive_levels` names the adaptive job types, so a job whose level a 1.3 record does not
+state (a `null` level beside an exported log, a header `scan_level` left `null` because an
+entry names `scan`) is still omitted rather than filled from a run-level header level. The
+thermo and statmech energy level is the record's `levels.composite`, else `levels.sp`. A
+header frequency scale factor stays attached with its own (header) level, since Arkane applies
+the one run-wide factor to every species; a record whose `levels.freq` differs is reported
+(`freq_scale_factor_fitted_for_other_level`). The `restart.yml` replay below remains for output
+1.2 and older, and for a 1.3 record that states no level. Tests:
+`test_arc_schema_1_3_levels.py`.
+
+
 **Status (adapter 0.6.4): done, exact where `restart.yml` allows, else refuse or omit.**
 `tckdb_arc/adaptive.py` reads the project's `restart.yml` and `input.yml` (and the CLI's
 parsed `input.yml`). When `restart.yml` holds the adaptive spec (`arc/main.py:438-442`)
@@ -281,6 +303,29 @@ has the project directory.
 **Effort.** S.
 
 ### A3. The TS-guess and IRC calculations carry the opt level (**wrong**; top 10 #3)
+
+**Status (adapter 0.8.0): consumed from output.yml 1.3.** The IRC level is the record's
+`levels.irc` (or the one level every `irc_log_levels` entry shares), else the header
+`irc_level`, and its program is `ess_software.irc`, the program of the IRC logs. Jobs at two
+levels (`levels.irc` null, `irc_log_levels` different) or no stated level file no IRC
+calculation (`irc_level_not_stated`); a 1.3 record with no stated program files none
+(`irc_software_not_stated`). Nothing is assumed to be the opt level for 1.3 output
+(`irc_level_assumed_opt_level` and the `restart.yml` `irc_level` remain for 1.2 and older). The
+GSM path search is filed again when the header `gsm_level` (`gfn2`, xtb) is stated, with the
+program `ess_software.gsm` and the banner `ess_versions.gsm` (`xtb version 6.7.1 (edcfbbe)` is
+sent as version `6.7.1`, build `edcfbbe`); a null `gsm_level` or a missing
+`ess_software.gsm` omits it with `ts_guess_level_not_stated` / `ts_guess_software_not_stated`.
+Each rotor scan's program and banner are its own (`rotor_scans[].ess_software` /
+`ess_version`); a scan whose program ARC could not identify is not filed at the header
+`scan_level`'s deduced one. The IRC route lines (`irc_log_routes`) are sent as parameters. `levels` are requested and
+`*_route` observed: when a Gaussian route's single `method/basis` token clearly contradicts the
+calculation's level (`ub3lyp/cbsb7` vs `uhf/3-21g`; a `u`/`ro` prefix is spin treatment), the
+calculation is not built (`level_contradicted_by_route`); composite, Orca and ambiguous routes
+are never flagged. A record with an sp/freq log but no opt job (no `opt_log`, no `levels.opt`)
+files the required primary opt as a marked placeholder at the header opt level
+(`placeholder_primary_opt_no_opt_job`, warning `primary_opt_placeholder_no_opt_job`, only ARC's
+stated `converged`).
+
 
 **Status (adapter 0.6.4): TS guess done; IRC exact when `restart.yml` records it.** The
 NEB path search uses `neb_level` and `ess_software.neb` / `ess_versions.neb`; the program is
@@ -330,6 +375,24 @@ field. That is exactly the case the matrix cannot judge (see `GAP_MATRIX.md`, "W
 
 ### A4. Screened alternative conformers are filed at `opt_level` (**wrong**; top 10 #2)
 
+**Status (adapter 0.8.0): consumed from output.yml 1.3.** Each conformer is filed at the level
+its own `conformer_levels` entry states (the level of the optimization that produced the
+geometry). A level inside a record states no program, so the program is the header
+`conformer_opt_level`'s, accepted only when that names the same level; otherwise the conformer
+is not filed (`conformer_program_not_stated`; this program is a deterministic deduction, ARC's
+`Level.software`, accepted as an interim until ARC states the program of conformer jobs; e.g. an adaptive `conf_opt`, which leaves the
+header level null). An entry that is `null` (a force-field geometry, a user-supplied
+conformer, a restart without level recording) is not an ESS calculation and is omitted with
+`conformer_geometry_not_esss_optimized`, naming `conformer_force_field` when stated.
+`conformer_level_not_stated` and the `restart.yml` path remain for 1.2 and older. The
+conformer's electronic energy (`conformer_energies`, kJ/mol, absolute) is sent only when
+`conformer_energy_kind` is `electronic_kj_mol` and `conformer_energy_level` is the
+conformer's own level (`opt_result.final_energy_hartree`), or, when conformer single points
+overwrote it, as an `sp` at `conformer_energy_level` with the program of the header
+`conformer_sp_level` when that names the same level; force-field energies (kcal/mol, no level)
+are never sent.
+
+
 **Status (adapter 0.6.4): done, at the `restart.yml` conformer level when it is stated.**
 output.yml exports no conformer level (header, species or conformer). The screened
 conformers are filed as bare opts at the `conformer_opt_level` `restart.yml` records, with
@@ -362,6 +425,13 @@ level, then use it.
 **Effort.** S.
 
 ### A5. `statmech_treatment` can claim rotors Arkane dropped (**wrong**, conditional; top 10 #8)
+
+**Status (adapter 0.8.0, output 1.3): retired for 1.3.** `statmech.arkane_treatment` (B4)
+is the treatment Arkane applied, read from its own `output.py`; it is sent as
+`statmech_treatment` with no Hessian gate and no inference from the rotor list
+(`null` is omitted with `statmech_treatment_not_stated`, reason `arkane_treatment_not_recorded`;
+a rotor treatment with no torsion sent is withheld because TCKDB refuses it). The Hessian
+gate above remains for documents before 1.3.
 
 **Status (adapter 0.6.3): done.** `torsions[]` are still sent. See CURRENT_ARC_INTEGRATION.md, "Corrections and statmech evidence".
 
@@ -404,6 +474,14 @@ atom through this root (C6).
 **What to change.** Skip atoms in computed-species mode with a sidecar reason until C6
 provides a form without an opt.
 
+**Status (adapter 0.8.0, batch H): done.** tckdb-schemas 0.59 (TCKDB#610, which fixed #600) accepts
+`type: "sp"` as the primary calculation of a conformer whose own XYZ has exactly one atom, on
+the computed-species, computed-reaction and conformer routes. An atom now sends its real sp as
+its primary (its own log, level, program and energy; no `converged`, since an sp result has none), with no
+placeholder opt and no warning; thermo, statmech and corrections link that one sp. The placeholder opt
+remains only for molecules (`primary_opt_placeholder_no_opt_job`, `composite_geometry_level_not_stated`).
+Tests: `test_monatomic_sp_primary.py`. The history below is the 0.6.7 state.
+
 **Status (adapter 0.6.7): atoms uploaded with a placeholder opt + warning, pending TCKDB
 #600.** Atoms are needed for reactions and have real sp (often freq) calculations, so no
 route refuses them. A single-atom species (exactly one atom in its xyz, else its
@@ -414,7 +492,7 @@ requires a primary opt, ARC runs no optimisation for a single atom, so that opt 
 placeholder (https://github.com/TCKDB/TCKDB/issues/600 asks for an sp primary). The
 calculation model has no `note` field, so the warning is the only place the statement
 lives. The standalone TS route names atoms as participants only and needs no opt. Tests:
-`test_monatomic_placeholder_opt.py`.
+`test_monatomic_placeholder_opt.py` (renamed `test_monatomic_sp_primary.py` in batch H).
 
 **Effort.** S to skip; M with C6.
 
@@ -580,7 +658,8 @@ reaction bundle; omitted on the standalone route). The rationale is exactly
 `ARC ts_checks['IRC'] = <verdict>`: ARC's `ts_checks['warnings']` come only from the
 e_elect and NMD checks (`arc/checks/ts.py:175`, `arc/checks/nmd.py:93-131`), never the IRC.
 `None` or an absent `ts_checks` sends nothing. A verdict with no IRC calculation in the
-upload is not sent (`ts_irc_evidence_without_irc_calculation`).
+upload is not sent (`ts_irc_evidence_without_irc_calculation`). Adapter 0.8.0 adds the
+participant mappings from output 1.3's `irc_participant_mapping` (B10).
 
 **What to build.** `validation_evidence[]` as follows:
 
@@ -590,7 +669,8 @@ upload is not sent (`ts_irc_evidence_without_irc_calculation`).
 - `source_calculation_key` pointing at the IRC calculation.
 - `rationale` from `ts_checks.warnings`. That string is often `""` while TCKDB requires
   `min_length=1`, so use a fixed factual sentence when it is empty.
-- The participant mappings are latent in ARC (B10); omit them.
+- The participant mappings: **sent since adapter 0.8.0 when ARC output 1.3 states them** (B10);
+  omitted for earlier output.
 
 **Never use `irc_converged`.** It "reports that the IRC jobs completed, not that the IRC
 validated anything" (`ARC:arc/output.py:2789-2791`). The adapter is right not to use it.
@@ -600,8 +680,8 @@ and is gone.
 **Why it matters to TCKDB.** Demand paths: `reaction_upload.transition_state.validation_evidence[]`
 and `ts_upload.validation_evidence[]` (6 `ADAPTER_GAP`, 6 `ARC_LATENT`). Without them TCKDB
 warns `transition_state_missing_irc_evidence` on every TS
-(`TCKDB:…/services/transition_state_validation.py:41`). Only the IRC check has a TCKDB
-home (C7). No real-ARC fixture sets `ts_checks.IRC` (E1).
+(`TCKDB:…/services/transition_state_validation.py:41`). Only the IRC check had a TCKDB
+home until 0.64 (C7). No real-ARC fixture sets `ts_checks.IRC` (E1).
 
 **Effort.** S–M.
 
@@ -641,6 +721,12 @@ hash changes; the test restores the duplicate blocks to reproduce the previous h
 **Effort.** M.
 
 ### A17. IRC endpoint species are uploaded as ordinary species
+
+**Status (adapter 0.8.0): consumed from output.yml 1.3.** `irc_endpoint_of` (the TS label, or
+`null` for an ordinary species) and `irc_endpoint_direction` mark the endpoint species in
+`output.yml`; the key is authoritative both ways, so `restart.yml` is not consulted for a record
+that carries it. The 0.6.7 `restart.yml` path stays for 1.2 and older output.
+
 
 **What happens.** ARC exports `IRC_<ts>_<n>` endpoint optimizations as plain `species[]`
 records with no marker (`ARC:arc/scheduler.py:4167`), and the sweep uploads every
@@ -729,6 +815,10 @@ adapter's "unverifiable if dispersion or solvation is set" rule (A2) could be re
 
 ### B2. Per-species level under `adaptive_levels` (**wrong data**)
 
+**Status: exported by ARC 1.3 (`levels`, header `adaptive_levels`); consumed since adapter
+0.8.0 (A2b).**
+
+
 **What.** Export the opt, freq and sp level each species actually ran at, or at least a
 run-level `adaptive_levels` marker in `output.yml`.
 
@@ -743,6 +833,15 @@ run-level `adaptive_levels` marker in `output.yml`.
 **Effort.** M.
 
 ### B3. Levels for scans, IRCs, conformers and TS guesses; versions for scans and IRCs
+
+**Status: exported by ARC 1.3; consumed since adapter 0.8.0 (A3, A4).** Header `scan_level`,
+`irc_level`, `conformer_opt_level`, `conformer_sp_level`, `ts_guess_level`, `gsm_level`,
+`neb_level`; per record `levels.irc`, `irc_log_levels`, `conformer_levels`,
+`conformer_energy_*`; `ess_software` / `ess_versions` for `irc`, `composite` and `gsm`; each rotor
+scan's own `ess_software` / `ess_version`. Used: all but `ts_guess_level` (the level at which TS
+guesses are optimized and compared; TCKDB has no calculation for that comparison, so it is not
+sent) and `conformer_sp_level` outside the conformer single-point case above.
+
 
 **What.** Pass `scan_level`, `irc_level`, the conformer levels and the TS-guess level to
 `write_output_yml` (`ARC:arc/main.py:673`). Key `ess_versions` and `ess_software` for scan
@@ -759,6 +858,10 @@ fixture and a version bump.
 
 ### B4. The statmech treatment Arkane actually applied
 
+**Status: exported by ARC 1.3 (PR #1059), consumed by adapter 0.8.0.**
+`statmech.arkane_rotors_applied` (count, no TCKDB home), `statmech.arkane_treatment` and a
+nullable `torsions[].treatment` (`arc/output.py`, `get_arkane_treatment`). See A5.
+
 **What.** Capture, during `process_arc_project`, whether Arkane kept or dropped the
 rotors. It drops them when there is no force-constant matrix
 (`RMG-Py:arkane/statmech.py:647-667`). `torsions[].treatment` is always `hindered_rotor`.
@@ -768,6 +871,16 @@ rotors. It drops them when there is no force-constant matrix
 **Effort.** M. The value lives in Arkane's `output.py`, which is overwritten.
 
 ### B5. Correction markers on E0 and kinetics
+
+**Status: exported by ARC 1.3, partly consumed by adapter 0.8.0.** `statmech.e0_atom_corrections_applied`
+and `e0_bond_corrections_applied` (per E0, so a well's and its TS's can differ) and
+`kinetics.atom_corrections_applied`. The kinetics switch is stated in the kinetics `note`.
+The adapter deposits no E0 (`e0_kj_mol` has no TCKDB statmech field, and the species'
+`enthalpy_formation_0k_kj_mol` would additionally need the energy-level check that
+`atom_corrections_level` gives only for thermo), so the E0 switches gate nothing and are not
+sent; they are the guard for that deposit when it is built. 1.3 also drops an
+`energy_corrections` record whose switch is false, so what the adapter forwards already follows
+the run.
 
 **What.** An atom-correction flag on `statmech.e0_kj_mol` and on the kinetics run. The
 marker must be per E0 and include the BAC flag: `statmech.e0_kj_mol` has three writers
@@ -788,6 +901,10 @@ barrier between a BAC-corrected well E0 and a BAC-free TS E0 would.
 
 ### B6. Mark IRC endpoint species
 
+**Status: exported by ARC 1.3 (`irc_endpoint_of`, `irc_endpoint_direction`); consumed since
+adapter 0.8.0 (A17).**
+
+
 (The adapter already skips them from `restart.yml`'s `irc_label` (A17); an `output.yml` marker is for consumers without `restart.yml`.)
 
 **What.** Export an `irc_label` or a role on `IRC_<ts>_<n>` records (A17).
@@ -795,6 +912,30 @@ barrier between a BAC-corrected well E0 and a BAC-free TS E0 would.
 **Effort.** S.
 
 ### B7. Make the composite-method calculation visible
+
+**Status: exported by ARC 1.3 (`composite_log`, `composite_input`, `composite_route`,
+`ess_software.composite`, `ess_versions.composite`, `levels.composite`); consumed since adapter
+0.8.0.** TCKDB's calculation types are `opt`, `freq`, `sp`, `irc`, `scan`, `path_search` and
+`conf`: there is no composite type, only a `composite` source-calculation role for thermo and
+statmech ("describes a scientific origin rather than a specific job type" and accepts any
+type). A composite run (a stated `composite_log`) is therefore filed as the record's primary
+`opt` calculation (the bundle requires one, and the composite job produced the geometry) at the
+composite level with the composite program, banner, route, log and input deck; the energy is an
+`sp` at the same level marked as reused from that job (`source_job: composite`); thermo and
+statmech link the primary calculation under the `composite` role as well as `opt`, and the
+declared `energy_level_of_theory` is the composite level (the linked sp's). The composite
+job's own frequencies are at a level the composite level does not name (`levels.freq` is
+null), so no freq calculation is filed for it. The primary `opt` is a **marked placeholder**
+(`tckdb_origin.origin_detail = placeholder_primary_opt_composite`, warning
+`composite_geometry_level_not_stated`): Gaussian optimizes a CBS-QB3 geometry at an internal
+level (B3LYP/CBSB7, see `arc/testing/composite/SO2OO_CBS-QB3.log`) that ARC states nowhere
+(`composite_route` is only the first keyword line), so the opt carries the composite level
+ARC states and no invented internal level.
+
+Requests. **ARC B17:** export `composite_step_routes` (the Link1 route lines) or a
+`composite_geometry_level`. **TCKDB:** a `composite` CalculationType, or let a composite run's
+primary calculation be typed as one.
+
 
 **What.** For CBS-QB3 or G4 runs only `paths['composite']` is set, and `output.yml` has no
 log, deck, ESS version or spin diagnostic for it.
@@ -819,7 +960,32 @@ note.
 
 **Effort.** S for the raw map; M for the participant→TS shape.
 
+**Status (adapter 0.8.0): ARC 1.3 exports the map; the adapter does not send it.** Output 1.3
+states `atom_map`, `atom_map_reactant_labels`, `atom_map_product_labels`, `atom_map_source`
+(`declared` / `inferred`) and `atom_map_method` (`ARC:arc/output.py:_get_reaction_atom_map`),
+which settles provenance. It does not settle the TS atom order: ARC's map is reactant atom to
+product atom and "says nothing about the atom order of the transition state", and no 1.3 key
+relates a participant atom to a TS atom (`irc_participant_mapping` is atom-set membership only).
+TCKDB's `ReactionAtomMapIn` needs `atom_to_ts` for every participant atom against the TS
+geometry, so the block is refused rather than filled with "TS order = concatenated reactants"
+(CLAUDE.md: refuse a block whose required convention the source does not state). The adapter
+reports `reaction_atom_map_ts_order_not_stated`, and TCKDB warns `reaction_atom_map_absent`.
+**Still wanted from ARC:** each participant's atom-to-TS-atom correspondence, exported from the
+IRC isomorphism (`_assign_fragments_to_species`, `ARC:arc/checks/ts.py:559-591`). The adapter
+would send it as `inferred` with a `note` naming the method, and saying that symmetry-equivalent
+atoms are assigned arbitrarily; `source`/`note` otherwise follow ARC's `atom_map_source` (null
+refused) and `atom_map_method`, and participants are numbered by slot as for B10. Known limit:
+isomorphism-based membership is stereo-blind (E/Z isomers can have their labels swapped), which
+applies to the B10 participant mapping too. Tests: `test_arc_1_3_reactions.py`.
+
 ### B9. TS frequency order and the reaction-mode index
+
+**Status: exported by ARC 1.3, consumed by adapter 0.8.0.** `freq_frequencies_cm1_ess_order`
+and `reaction_coordinate_mode_index` (null unless the normal mode displacement check genuinely
+passed). On a 1.3 document the modes are the ESS-order list, numbered by position, and the
+designated mode is ARC's index; the other imaginary modes are `unassigned`. A TS with several
+imaginary modes and no stated index is refused. The (75, 10000) cm-1 window
+remains for documents before 1.3.
 
 **What.** Export `spc.freqs` in ESS order, and the index of the reaction-coordinate mode.
 Today the adapter re-inserts the TS negatives (`adapter.py:4660-4684`) and designates the
@@ -836,6 +1002,17 @@ atom mapping: `_match_fragments_to_species` (`ARC:arc/checks/ts.py:670-710`) ret
 a bool, so no mapping exists to export. ARC would have to produce one.
 
 **Effort.** M, because the writer cannot reach the value today.
+
+**Status (adapter 0.8.0): done for output 1.3.** ARC now records the mapping
+(`ARC:arc/output.py:_irc_participant_mapping_to_dict`, from `arc/checks/ts.py`) when the IRC
+verdict was reached by graph isomorphism. The adapter sends it as
+`reactant_participant_mapping` / `product_participant_mapping` on passed evidence on both TS
+routes: 1-based, matched to the uploaded participants by label and occurrence (ARC's `position`
+follows `atom_map_reactant_labels`, TCKDB's slot follows the sorted `reactant_labels`), and
+only when `atom_order_matches_ts` and `sides_distinguishable` are `true` and every TCKDB rule
+(full cover, element composition) holds; otherwise neither side is sent, with
+`ts_irc_participant_mapping_not_sent`. See CURRENT_ARC_INTEGRATION.md, "Reaction atom map and
+IRC participant mapping".
 
 ### B11. Cheaper latent exports
 
@@ -856,6 +1033,17 @@ about its runtime; do not export requested resources as runtime facts.
 
 ### B12. Export the RMG-database commit behind Arkane's correction tables
 
+**Status: exported by ARC 1.3 (`rmg_database`, `arc_aec_yml_sha256`), consumed by adapter 0.8.0 as
+`scheme.data_revision` (tckdb-schemas 0.62, batch H).** The revision is the git commit (path_kind `git`), else the
+package `version`, else the `data.py` SHA-256 as a plain hex string; the Arkane build stays on
+`scheme.workflow_tool_release` as provenance only. A revised table is a new scheme identity and an unrelated RMG-Py
+commit is not. Without the block, or on a document before 1.3, no revision is sent and the scheme keeps its
+pre-0.62 identity (the Arkane build). The first draft of batch F put the table in a `RMG-database`
+`workflow_tool_release` instead (0.61 had no field for it); that identity set was never deposited (it existed only
+on an unmerged branch).
+`arc_aec_yml_sha256` is not a scheme release: ARC writes no `atom_energy` record for energies it
+rendered from `data/AEC.yml`.
+
 **What.** Export what identifies the RMG-database tables Arkane read
 (`RMG_DB_PATH/input/quantum_corrections/data.py`, `ARC:arc/statmech/arkane.py`
 ~817-821), for example into `WorkflowToolReleaseRef.notes` or a dedicated field. Here
@@ -872,6 +1060,9 @@ a new scheme row.
 **Effort.** S.
 
 ### B13. Export the Petersson components Arkane did apply
+
+**Status: exported by ARC 1.3 (`components` = applied bonds, `skipped_components`), consumed by
+adapter 0.8.0.** See A1.
 
 **What.** When some bonds lack Petersson parameters, export the components Arkane did
 apply (they sum exactly to the applied total) instead of dropping the whole list
@@ -897,6 +1088,9 @@ complete, exact decomposition of the applied total exists.
 
 ### B15. Export the correct rigid-rotor kind
 
+**Status: exported by ARC 1.3 (`symmetric_top`, `spherical_top`, null when unclassifiable), consumed
+by adapter 0.8.0:** the adapter already sent the stated kind and omits a null.
+
 **What.** ARC exports `rigid_rotor_kind` only as `atom`, `linear` or `asymmetric_top`,
 so benzene (D6h, an oblate symmetric top) is exported as `asymmetric_top`. Export the
 correct kind, including symmetric tops, from the principal moments.
@@ -907,6 +1101,23 @@ symmetric top.
 **Also needs an output.yml schema change (ARC-side, 1.3).** The 1.2 schema enumerates
 `rigid_rotor_kind` as `["linear", "asymmetric_top"]`, so exporting symmetric tops needs
 the 1.3 schema; making a torsion's treatment nullable needs it too.
+
+**Effort.** S.
+
+---
+
+### B16. Export ordered reactant/product label lists with repeats, unconditionally
+
+**What.** ARC's `reactant_labels` / `product_labels` are `list(rxn.reactants)` after
+`remove_dup_species` sorted and de-duplicated them (`ARC:arc/reaction/reaction.py:827-832`,
+`arc/output.py:3819-3820`), so `HO2 + HO2 <=> H2O2 + O2` is exported as `['HO2'] <=> ['H2O2', 'O2']`.
+One label per occurrence exists today only as `atom_map_*_labels` when `atom_map` is non-null, and in
+`irc_participant_mapping` when the IRC was validated by isomorphism.
+
+**Adapter (0.8.0).** The occurrences are taken from `atom_map_*_labels`, else from the IRC
+participants; with neither, the collapsed lists are used if their elements balance, and the
+reaction is refused with `reaction_stoichiometry_not_stated` if not. The label string is never
+parsed. ARC must export the ordered lists with repeats unconditionally.
 
 **Effort.** S.
 
@@ -983,19 +1194,36 @@ hint. The adapter should keep sending ARC's string verbatim.
 
 ### C6. Atoms and the computed-species primary opt ([gate])
 
-**Status (adapter 0.6.7): atoms uploaded with placeholder opt + warning, pending TCKDB #600** (see A6).
+**Status (adapter 0.8.0, batch H): done by tckdb-schemas 0.59 (TCKDB#610)** for atoms (see A6). A molecule
+with no opt job still has no form: the adapter files a marked placeholder opt (`primary_opt_placeholder_no_opt_job`).
+(0.6.7: atoms uploaded with placeholder opt + warning, pending TCKDB #600.)
 
 **What happens.** The primary calculation must be type `opt`
-(`TCKDB:…/computed_species_upload.py:327`).
+(`TCKDB:…/computed_species_upload.py:327`); since 0.59 a one-atom conformer may send `sp`.
 
-**What to change.** Provide a form for a species that had no optimization (A6).
+**What to change.** Provide a form for a species that had no optimization (A6): done for atoms, open for molecules.
 
 **Effort.** M.
 
-### C7. TS validation evidence accepts only `kind: 'irc'`
+### C7. TS validation evidence accepted only `kind: 'irc'` (done in 0.64 / adapter 0.8.1)
 
-**What happens.** `ts_validation_evidence.py:58` is `Literal["irc"]`, so ARC's E0,
-e_elect, freq and NMD verdicts have no home.
+**Status (adapter 0.8.1, batch I): done for `imaginary_mode` (both routes) and `energy_ordering` (bundle only).**
+TCKDB 0.64 added both kinds. `ts_checks['freq']` becomes `imaginary_mode` (count and the designated
+reaction-coordinate frequency read from the TS `freq_result` the same upload sends, so TCKDB's cross-check against
+that result cannot refuse it; `mode_displacement_agrees` only from ARC 1.3's `reaction_coordinate_mode_index` or a
+failed `ts_checks['NMD']`). `ts_checks['e_elect']` becomes `energy_ordering` with each participant's
+`sp_energy_hartree` cited to its own `sp` calculation, electronic energies only: ARC's `e0_kj_mol` carries
+corrections and is not one calculation's energy, so `e0` is never sent and ARC's `E0` verdict is only in the
+rationale. A `True` verdict the stated numbers contradict (ARC's 1 kJ/mol margin), a participant without a usable
+energy or `sp` calculation, or a pass with several imaginary modes and no designated coordinate is not sent
+(`ts_energy_ordering_evidence_not_sent`, `ts_imaginary_mode_evidence_not_sent`), because TCKDB refuses such a pass and
+the whole upload would 422. Neither kind silences `transition_state_missing_irc_evidence`. What is sent obeys the
+0.64 rules (`test_ts_validation_evidence_rules.py`, `test_ts_energy_ordering_evidence.py`,
+`test_ts_imaginary_mode_evidence.py`). ARC leaves `e_elect` unset whenever its `E0` check passed, so a TS that
+passed on E0 carries no `energy_ordering` (`passed` is required; ARC states no electronic verdict then).
+
+**What happens (0.51).** `ts_validation_evidence.py:58` is `Literal["irc"]`, so ARC's E0,
+e_elect, freq and NMD verdicts have no home. (Since 0.64 and adapter 0.8.1: see the status above.)
 
 **Effort.** M.
 
@@ -1003,10 +1231,11 @@ e_elect, freq and NMD verdicts have no home.
 
 Highest value first:
 
-- the kinetics reference temperature `T0` (the adapter normalizes `a = A/T0^n` correctly,
-  but the reported T0 is lost);
-- TS statmech;
-- tunneling application and interpretation fields;
+- the kinetics reference temperature `T0` (**done in batch H**: tckdb-schemas 0.63 `t0_k`; `a` is ARC's A
+  and `t0_k` its T0; before, the adapter normalized `a = A/T0^n` and lost the T0);
+- TS statmech (0.64 `BundleTransitionStateIn.statmech`; not wired);
+- tunneling application and interpretation fields (0.63 has the fields, but every reference in them is a record
+  deposited earlier, which a bundle cannot cite for the TS or statmech it creates; not sent);
 - `statmech.e0_kj_mol` with its correction marker;
 - rejected-rotor pivots and barriers;
 - constraint `target_value_units`;
@@ -1014,15 +1243,26 @@ Highest value first:
 
 ### C9. Standalone-TS route asymmetries
 
-`ts_upload` has three:
+**Status (adapter 0.8.0, batch H): TCKDB 0.64 closed two of the three.** `ts_upload` had three:
 
-- no `atom_map`, so it always warns `reaction_atom_map_absent`;
-- no slot for TS applied corrections;
-- the async `/jobs/transition-state` route drops every warning.
+- no `atom_map` field in the contract, so it always warned `reaction_atom_map_absent`. **0.64 added the slot**
+  (with `geometry_key` and a `key`/`geometry` on each participant). The adapter still sends no map, because ARC states
+  no participant-atom to TS-atom relation (B8, `reaction_atom_map_ts_order_not_stated`), so TCKDB still reports
+  `reaction_atom_map_absent` on both routes;
+- no slot for TS applied corrections. **0.64 added `applied_energy_corrections`** (no source keys, no frequency scale
+  factor); the adapter sends them. Likewise `scan` calculations with `scan_result` are accepted and sent;
+- the async `/jobs/transition-state` route drops every warning (still open).
 
 Separately, `conformer_upload` runs no provenance warnings for its nested statmech.
 
 ### C10. Correction-scheme provenance for tool-table schemes ([gate])
+
+**Adapter 0.8.0 (batch H): the request below was met by tckdb-schemas 0.62's `data_revision`.** The adapter's
+`sha256:<digest>` stand-in in a `RMG-database` tool release (the first batch-F draft; never deposited, it existed
+only on an unmerged branch) is replaced by `scheme.data_revision`. Deposited scheme rows carry two identities (none
+and the Arkane build) plus, from 0.8.0, `data_revision` ones. A plain SHA-256 is sent as a 64-hex `data_revision`,
+which TCKDB reads as a git commit and lower-cases; the contract has no digest-specific field. `atom_params_applied_as`
+(0.62) is sent as `subtracted` for `atom_energy` schemes with `atom_params`, as ARC states it.
 
 **Status (adapter 0.6.1):** `scheme.software` now names the program in the record's
 `matched_arkane_key` (`gaussian`), without a release, and is omitted when the key names
@@ -1055,6 +1295,14 @@ identify the scheme through `workflow_tool_release` = Arkane/RMG.
 workflow-tool refusal. None of these changes the adapter's payloads today.
 
 ---
+
+### C13. Normalise the `<name> version X (build)` banner shape
+
+The adapter splits the xtb banner `xtb version 6.7.1 (edcfbbe) compiled by ...` locally
+(version `6.7.1`, build `edcfbbe`; `_split_ess_version_banner`), because
+`SoftwareReleaseRef.normalize_composite_version` would keep the word "version" in `version`.
+This is a local rule pending a TCKDB change: extend that normaliser with the
+`<name> version X (build)` shape.
 
 ## D. Decisions for you
 
@@ -1094,10 +1342,10 @@ your behalf. Nothing is inferred today.
 | `depends_on` edges and freq/sp `input_geometries` = the optimized geometry | `:1158-1265`, `:1614-1621` | Keep; they are ARC's workflow invariant |
 | `opt_coarse` `converged: true`; `path_search_result.converged`, `is_double_ended`, `source_endpoint_count: 2` | `:4435`, `:7749`, `:486-489` | Recommend omitting `converged` where ARC exported no flag |
 | IRC TS marker point synthesized; `direction: both` when unresolved | `:7222-7244`, `:7205-7212` | Mark the point; omit `direction` when unknown |
-| Imaginary mode designated by a (75, 10000) cm⁻¹ window | `:4462-4503` | Keep until B9 |
+| Imaginary mode designated by a (75, 10000) cm⁻¹ window | `:4462-4503` | Output 1.3 states the mode (B9); the window is kept only for earlier documents (adapter 0.8.0) |
 | `scale_kind: fundamental`; FSF `software.name` = the opt software | `:5843`, `:5851-5856` | Confirm with ARC's FSF source |
 | `model_kind: modified_arrhenius`, `a_uncertainty_kind: multiplicative` | `:6742`, `:6928` | Keep |
-| `ts_upload.reaction.reversible: true` (always) | `:3175` | Replace with B11 |
+| `ts_upload.reaction.reversible: true` (always) | `:3175` | Output 1.3 states `reversible` and the adapter sends it (0.8.0); `true` remains for earlier documents and a null |
 | Kinetics `T0 = 1 K` when absent | `:6797` | Keep |
 | Freq/sp level falls back to `opt_level`; software falls back to the requested level's | `:4383-4404`, `:3400` | Keep for freq/sp; scan is already refused |
 | Correction scheme `software` / `workflow_tool_release` | `software` = `{name: <matched_arkane_key's software>}` since 0.6.1; `workflow_tool_release` = Arkane (recorded version/commit) on atom-energy, Petersson and Melius schemes since 0.6.3 | See C10. **Never Arkane as `scheme.software`, never ARC as `scheme.workflow_tool_release`** (MR-2, AP-8) |

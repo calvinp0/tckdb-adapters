@@ -90,7 +90,9 @@ applied it, not deposited; false: no note; absent: the note states only that
 ARC exported a Petersson BAC total that is not deposited). Atom-energy,
 Petersson and Melius schemes carry Arkane as `workflow_tool_release`. Its
 `git_commit` is the RMG-Py commit Arkane ran from; the correction tables come
-from RMG-database, whose commit ARC does not record. So a database-only
+from RMG-database, whose commit output 1.3 records (since adapter 0.8.0, batch H,
+it travels as `scheme.data_revision`, which stops the Arkane build from splitting
+schemes). Before output 1.3 a database-only
 revision of a table value for the same key still conflicts with the stored
 scheme (a parameter-conflict 422), and each new RMG-Py commit makes a new
 scheme row even when the tables are unchanged. The first 0.6.3 upload of an
@@ -99,6 +101,17 @@ workflow tool; the older null-tool row remains). An `atom_energy` scheme now car
 `scheme.atom_params` from ARC's `reference_atom_energies` (Arkane's per-element
 atomic energies) with `scheme.units` set to that table's own unit; a table with
 a missing or unrecognized unit, or unusable values, is not sent.
+
+Adapter 0.8.0 (ARC output 1.3, batch E) reads output.yml 1.3 (ARC PR #1059): each record's `levels` (the level of its
+opt, freq, sp, composite and IRC jobs, also under `adaptive_levels`) replaces the `restart.yml`
+replay, programs come from `ess_software` (including `composite`, `irc` and the xtb GSM) and
+each rotor scan's own program, the header `gsm_level` files the GSM path search again, screened
+conformers are filed at their `conformer_levels` (force-field geometries are not calculations),
+IRC endpoint species are skipped by `irc_endpoint_of`, a composite run's job is filed as the
+primary calculation at the composite level and linked under the `composite` role, stated
+isotopes ride on the geometries (a species whose stated isotopes contradict its SMILES is
+refused), and the observed `*_route` lines become `parameters`. Pre-1.3 output behaves as
+before. See `docs/contract/CURRENT_ARC_INTEGRATION.md`, "Levels, programs and isotopes".
 
 Adapter 0.6.4 states a level only when ARC's output or the project's `restart.yml`
 supports it. Under `adaptive_levels`, `restart.yml` (adaptive spec, each species'
@@ -133,6 +146,16 @@ derived reference; `stable` only for ARC's `stable` verdict; never on freq/sp). 
 rotors as torsions carrying `invalidated_reason`; it sends no rotor scan (the route accepts
 only freq and sp as additional calculations). See `docs/contract/CURRENT_ARC_INTEGRATION.md`.
 
+Adapter 0.8.0 (batch G) reads ARC output schema 1.3's reaction atom map and IRC participant mapping.
+`irc_participant_mapping` becomes the IRC validation evidence's `reactant_participant_mapping`
+/ `product_participant_mapping` (1-based TS atoms, participants matched by label and
+occurrence), and only when ARC states that the IRC endpoints follow the TS atom order and the
+sides are distinguishable; otherwise neither side is sent
+(`ts_irc_participant_mapping_not_sent`). ARC's reactant-to-product `atom_map` is **not** sent:
+TCKDB's `atom_map` is participant atom to TS atom and ARC states no relation to the TS atom
+order, so the adapter reports `reaction_atom_map_ts_order_not_stated` (TCKDB then warns
+`reaction_atom_map_absent`). See `docs/contract/CURRENT_ARC_INTEGRATION.md`.
+
 Adapter 0.6.5 targets tckdb-schemas 0.54 (no wire model change; only the
 bundles dry-run route, which the adapter never calls, gained rules) and states
 Arkane's full atom-energy convention in the `atom_energy` scheme note: the atomic
@@ -144,9 +167,10 @@ Adapter 0.6.7:
 - A species on both sides of a reaction (or repeated on one side) is deposited once; the
   computed-reaction bundle repeats its key in `reactant_keys` / `product_keys`, and the
   kinetics `reactant_energy` / `product_energy` links point at its sp once per role.
-- A single-atom species is uploaded with the placeholder primary opt both routes require
-  and a `monatomic_species_primary_opt_placeholder` warning (ARC runs no optimisation for
-  an atom; TCKDB #600 asks for an sp primary).
+- A single-atom species was uploaded with a placeholder primary opt and a
+  `monatomic_species_primary_opt_placeholder` warning (TCKDB#600). Superseded in batch H: an atom
+  now sends its real `sp` as its primary calculation (TCKDB#610, tckdb-schemas 0.59), with no
+  placeholder and no warning.
 - Each calculation's artifact batch is sent through `TCKDBClient.request_json`, so the
   artifact sidecar (and `ArtifactUploadOutcome.warnings`) carries the server's warnings,
   the HTTP status, the request id and the replay flag.
@@ -162,6 +186,83 @@ Adapter 0.6.7:
 
 Upgrading changes the payload hash, and so the idempotency key, of reaction uploads that
 had a repeated species or gained conformer labels or scan logs.
+
+Adapter 0.8.0 (batch F) reads ARC output schema 1.3 (the keys are read from 1.3 documents
+only, and a document before 1.3 gives the payload it gave before):
+
+- A partial Petersson BAC is sent with the bonds Arkane applied (`components`, which must
+  sum to the total) and its skipped bonds in the correction's note, instead of being omitted.
+- `statmech_treatment` is `statmech.arkane_treatment`, the treatment Arkane applied, with no
+  Hessian gate; a torsion's `treatment` is sent as recorded and a null one sends the torsion
+  without a treatment. The rigid-rotor kind (now including symmetric and spherical tops) is
+  sent as stated.
+- The kinetics `note` carries Arkane's comment, the `ts_validation` text and the kinetics run's
+  atom-correction switch; the reaction's `reversible` is sent as stated.
+- A correction scheme names the RMG-database table Arkane loaded. Batch F did that with a
+  `RMG-database` `workflow_tool_release` (commit, package version or `sha256:`); that stand-in is
+  replaced in batch H by `scheme.data_revision` (tckdb-schemas 0.62), see below.
+- A TS's modes are its frequencies in ESS order and its reaction-coordinate mode is the one ARC's
+  normal mode displacement check validated; with none stated, TCKDB's 50 cm-1 noise floor picks the one
+  mode above it (the others `unassigned`), and two or more above it refuse the record.
+- `sp_t1_diagnostic` becomes the sp calculation's `wavefunction_diagnostic`. The dipole moment
+  and polarizability have no home on these routes (TCKDB holds them only on the standalone
+  transport record), and the E0 switches gate nothing since no E0 is deposited.
+
+Upgrading changes the payload hash, and so the idempotency key, of 1.3 uploads that gain any of
+the above. See `docs/contract/CURRENT_ARC_INTEGRATION.md`.
+
+Adapter 0.8.0 (batch H) uses what tckdb-schemas 0.59 to 0.64 added:
+
+- **Atoms (0.59).** A conformer whose own XYZ has exactly one atom sends `type: "sp"` as its
+  primary calculation (computed-species, computed-reaction and conformer routes): the atom's own
+  log, level, program and energy (`sp_energy_hartree`, else the `opt_final_energy_hartree` ARC
+  parsed from the same one log), no `opt`, no `converged` (an sp result has none), no placeholder, no
+  warning, no `freq`, no coarse opt, no rotor scans and no alternative conformers. Thermo and statmech
+  link that one sp once (`thermo_role_duplicate` / `statmech_role_duplicate` need two on one
+  geometry). An atom with neither energy is refused (`ValueError`), never relabelled as an opt. The
+  placeholder opt stays only for a molecule with no opt job (`primary_opt_placeholder_no_opt_job`) or
+  a composite run (`composite_geometry_level_not_stated`).
+- **Scheme provenance (0.62).** `scheme.data_revision` is the RMG-database revision Arkane read:
+  the git commit for `path_kind: git`, else the package version, else the `data.py` SHA-256 as a
+  plain hex string. It joins the scheme's identity, so the Arkane build (still stamped as
+  `scheme.workflow_tool_release`, provenance only) stops splitting schemes. The `RMG-database`
+  tool-release identity set of the first batch-F draft was never deposited (it existed only on an
+  unmerged branch), so no deposited scheme has it; a scheme deposited with a revision never
+  matches one without, so the first upload of each table under 0.8.0 makes a new row. An
+  `atom_energy` scheme with `atom_params` also sends `atom_params_applied_as` as ARC states it
+  (`subtracted`); the scheme note keeps only Arkane's per-atom addend (`atom_hf - atom_thermal`),
+  which that field does not cover.
+- **Kinetics (0.63).** ARC's `A` is sent as it is with `t0_k` = ARC's `T0_k` (omitted when 1 K,
+  the contract default), instead of `A / T0**n`; a `T0_k` that is null, invalid or outside
+  `0 < t0_k <= 10000` omits `a`/`a_units`. `tunneling_application`, `interpretation_assignments`
+  and `network_kinetics_ref` are not sent: every reference in them is a record deposited earlier,
+  and the bundle cannot cite the transition state or statmech it is itself creating. The tunnelling
+  label is still ARC's `tunneling` as `tunneling_model`.
+- **Rejected rotors (0.61).** ARC's rejected rotors go out as torsions with `invalidated_reason` on the bundle
+  routes too (they were conformer-route only).
+- **Standalone transition-state route (0.64).** Rotor scans (with `scan_result`) and
+  `applied_energy_corrections` (without source keys) are now sent; its `atom_map` slot stays unset
+  because ARC states no participant-atom to TS-atom relation (`reaction_atom_map_ts_order_not_stated`).
+- Not built, no source in ARC or a decision needed: statmech `electronic_levels` (ARC 1.3 exports no
+  electronic level, term or spin-orbit data), bundle `transport` (ARC's dipole and polarizability keys
+  could feed it) and TS `statmech` on the reaction bundle. An IRC result whose
+  direction ARC does not state is still withheld although 0.64 made `direction` and the flags optional.
+
+Adapter 0.8.1 (batch I) sends the two other TS validation evidence kinds tckdb-schemas 0.64 added, only from
+what ARC states (details in `docs/contract/CURRENT_ARC_INTEGRATION.md`, A14):
+
+- **`imaginary_mode`** (both TS routes) from `ts_checks['freq']`: `imaginary_frequency_count` and
+  `imaginary_frequency_cm1` (the designated reaction-coordinate mode, written negative) are read from the TS
+  frequency result sent in the same upload, so TCKDB's cross-check against it passes; `mode_displacement_agrees`
+  is `True` only when ARC 1.3 states `reaction_coordinate_mode_index`, `False` only for a failed
+  `ts_checks['NMD']` with no index, otherwise omitted. A passing record with several imaginary modes and no
+  designated coordinate is not sent (`ts_imaginary_mode_evidence_not_sent`).
+- **`energy_ordering`** (reaction bundle only; the standalone route refuses it) from `ts_checks['e_elect']`,
+  with every participant's own `sp_energy_hartree` cited to its `sp` calculation (`reactant:N` / `product:N` in
+  the declared order, a repeated species repeated). Electronic energies only: `e0` is never sent. A `True`
+  verdict the stated numbers contradict (ARC's 1 kJ/mol margin), or a participant with no usable energy or `sp`,
+  leaves the record out (`ts_energy_ordering_evidence_not_sent`). ARC leaves `e_elect` unset when its `E0`
+  check passed, and then nothing is sent.
 
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 

@@ -1,0 +1,14 @@
+{
+  "document_id": "6b9d7effe3f44e87b568f1f1f02190b7",
+  "output_schema_version": "1.3",
+  "producer": {
+    "arkane_git_commit": "6b1368de6c19204c7ce4fda6fbecb05da4a0fe0e",
+    "arkane_version": "3.3.0",
+    "git_commit": "bc731fb45d560f5afe6383a7da0c8c3f68c678fd",
+    "name": "ARC",
+    "version": "1.1.0"
+  },
+  "records": [],
+  "schema_name": "arc-parser-evidence",
+  "schema_version": "1.0"
+}

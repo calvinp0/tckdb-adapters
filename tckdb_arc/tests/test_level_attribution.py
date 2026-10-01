@@ -62,7 +62,9 @@ def _codes(outcome):
 # A14: TS validation evidence from ts_checks['IRC']
 # ---------------------------------------------------------------------------
 
-IRC_CHECKS = {"E0": None, "e_elect": None, "freq": True, "NMD": None}
+# ``freq`` is left unassessed: these tests are about the IRC verdict, and a stated freq verdict would
+# add an ``imaginary_mode`` record of its own (test_ts_imaginary_mode_evidence.py).
+IRC_CHECKS = {"E0": None, "e_elect": None, "freq": None, "NMD": None}
 
 
 def _ts_doc(*, irc, warnings="", irc_converged=True, irc_logs=True, checks=True):
