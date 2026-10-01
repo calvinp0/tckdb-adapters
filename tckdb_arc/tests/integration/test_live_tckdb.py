@@ -537,6 +537,159 @@ def test_standalone_ts_upload_deposits_imaginary_mode_evidence(live_tckdb, tmp_p
 
 
 # ---------------------------------------------------------------------------
+# reaction atom map (ARC 1.3 ts_atom_map -> TCKDB atom_map, adapter 0.9.0)
+# ---------------------------------------------------------------------------
+
+# Warnings that would mean the map did not reach TCKDB, or reached it contradicted. The first three are
+# the adapter's own (it omits the map and says why); the rest are the server's: the absence warning, the
+# partial-map warnings and the IRC cross-check's refusal code.
+_ATOM_MAP_WARNINGS = {
+    "reaction_atom_map_absent",
+    "reaction_ts_atom_map_not_sent",
+    "reaction_species_labels_contradicted",
+    "reaction_atom_map_ts_order_not_stated",
+    "reaction_atom_map_participants_incomplete",
+    "reaction_atom_map_atoms_incomplete",
+    "atom_map_contradicts_irc_mapping",
+}
+
+# (corpus, reaction index): the real ARC sample, then the derived fixture's two reactions.
+ATOM_MAP_CASES = [
+    pytest.param("ts_atom_map_sample", 0, id="real_sample_nC3H7_iC3H7"),
+    pytest.param("ts_atom_map_derived", 0, id="derived_OH_CH4_ts_order_unlike_reactants"),
+    pytest.param("ts_atom_map_derived", 1, id="derived_CH3_CH3_repeated_reactant"),
+]
+
+
+def _atom_count(xyz):
+    return len([line for line in xyz.splitlines() if line.strip()])
+
+
+def _stored_atom_map(live, reaction_entry_id):
+    """The one stored atom map of a reaction entry, with its participants (``include=atom_map``)."""
+    full = live.get(f"/scientific/reaction-entries/{reaction_entry_id}/full", include="species,atom_map")
+    assert len(full["atom_map"]) == 1, full["atom_map"]
+    badges = full["reaction_entry"]["atom_maps"]
+    assert len(badges) == 1 and badges[0]["transition_state_entry_ref"] == full["atom_map"][0]["transition_state_entry_ref"]
+    return full["atom_map"][0], full["species"]
+
+
+def _assert_atom_map_stored(live, outcome, response, *, doc, reaction, ts_entry_id, reaction_entry_id):
+    """Read back the map the adapter sent from ``ts_atom_map`` and compare it with what TCKDB stored.
+
+    Reaching ``uploaded`` already means the server's own atom-map rules passed (a failure is a 422, which
+    ``_uploaded`` reports as a setup failure). They are, in the standalone route's
+    ``persist_transition_state_upload`` and the bundle's ``persist_computed_reaction_upload`` (both through
+    ``app/services/reaction_atom_map.py``): ``atom_map_participant_not_declared`` (a map names a slot the
+    reaction does not declare), ``atom_map_indices_not_geometry_relative`` (an atom or TS atom the geometry
+    does not have, or a geometry key the deposit does not define), ``atom_map_element_not_conserved``
+    (a participant atom mapped onto a TS atom of another element), ``atom_map_contradicts_irc_mapping`` (the
+    map against the IRC evidence's participant mapping) and ``atom_map_without_transition_state``; and, at
+    the schema boundary, ``atom_map_not_a_bijection``, ``atom_map_atoms_unaccounted_for`` and
+    ``atom_map_inferred_requires_note``. A map the adapter did not send is only a warning, which is
+    asserted absent below.
+    """
+    payload_file = outcome.sidecar_path.with_name(outcome.sidecar_path.name.replace(".meta.json", ".payload.json"))
+    sent = json.loads(payload_file.read_text())["atom_map"]
+    stored, species = _stored_atom_map(live, reaction_entry_id)
+    ts_map = reaction["ts_atom_map"]
+
+    # Nothing about the map was withheld, contradicted or reported incomplete, by the adapter or the server.
+    sidecar = json.loads(outcome.sidecar_path.read_text())
+    assert not _ATOM_MAP_WARNINGS & _codes(outcome.warnings), outcome.warnings
+    assert not _ATOM_MAP_WARNINGS & _codes(sidecar["warnings"]), sidecar["warnings"]
+    assert sidecar["response_status_code"] in (200, 201)
+
+    # Stored as an algorithm's claim, on this transition state, with the adapter's note.
+    assert stored["source"] == sent["source"] == "inferred"
+    assert stored["note"] == sent["note"] and "symmetry-equivalent" in stored["note"]
+    assert stored["equivalent_map_count"] is None
+    entry = live.get(f"/scientific/transition-state-entries/{ts_entry_id}")["record"]
+    assert stored["transition_state_entry_ref"] == entry["transition_state_entry"]["transition_state_entry_ref"]
+
+    # Every participant's atom_to_ts is what was sent: one block per participant, repeats included.
+    by_slot = {}
+    for pair in stored["pairs"]:
+        by_slot.setdefault((pair["side"], pair["participant_index"]), []).append(pair)
+    assert set(by_slot) == {(p["side"], p["participant_index"]) for p in sent["participants"]}
+    for participant in sent["participants"]:
+        block = by_slot[(participant["side"], participant["participant_index"])]
+        assert {p["atom_index"]: p["ts_atom_index"] for p in block} == {
+            int(atom): ts for atom, ts in participant["atom_to_ts"].items()}, participant
+
+    # ...and it is ARC's own map: the TS atoms of the concatenated reactants / products, in the order of the
+    # species labels, counted from the species' geometries (an oracle independent of the adapter).
+    species_by_label = {s["label"]: s for s in doc["species"]}
+    ts_symbols = [line.split()[0] for line in next(
+        t for t in doc["transition_states"] if t["label"] == reaction["ts_label"])["xyz"].splitlines() if line.strip()]
+    for side, labels in (("reactant", reaction["reactant_species_labels"]),
+                         ("product", reaction["product_species_labels"])):
+        offset = 0
+        for position, label in enumerate(labels, start=1):
+            symbols = [line.split()[0] for line in species_by_label[label]["xyz"].splitlines() if line.strip()]
+            block = sorted(by_slot[(side, position)], key=lambda p: p["atom_index"])
+            assert [p["atom_index"] for p in block] == list(range(1, len(symbols) + 1)), (side, position, label)
+            assert [p["ts_atom_index"] for p in block] == [
+                i + 1 for i in ts_map[f"{side}s"][offset:offset + len(symbols)]], (side, position, label)
+            assert [(p["element"], ts_symbols[p["ts_atom_index"] - 1]) for p in block] == [
+                (symbol, symbol) for symbol in symbols], (side, position, label)
+            offset += len(symbols)
+    total = len(reaction["atom_map"])
+    assert stored["reactant_atoms_mapped"] == stored["product_atoms_mapped"] == total
+    # Whether the TS atom order follows the reactants is ARC's own statement; the stored indices agree.
+    identity = all(p["ts_atom_index"] == i for i, p in enumerate(
+        sorted((p for p in stored["pairs"] if p["side"] == "reactant"),
+               key=lambda p: (p["participant_index"], p["atom_index"])), start=1))
+    assert identity is ts_map["ts_atom_order_follows_reactants"]
+
+    # The participants the map points at are the reaction's: a repeated reactant is two participants of one
+    # species entry, each with its own block and its own TS atoms.
+    for side, labels in (("reactant", reaction["reactant_species_labels"]),
+                         ("product", reaction["product_species_labels"])):
+        members = species[f"{side}s"]
+        assert [m["participant_index"] for m in members] == list(range(1, len(labels) + 1))
+        assert [m["smiles"] for m in members] == [species_by_label[label]["smiles"] for label in labels]
+        for label, count in Counter(labels).items():
+            slots = [i for i, name in enumerate(labels, start=1) if name == label]
+            assert len({members[i - 1]["species_entry_ref"] for i in slots}) == 1
+            assert len(slots) == count
+            if count > 1:
+                blocks = [{p["ts_atom_index"] for p in by_slot[(side, i)]} for i in slots]
+                assert all(len(block) == _atom_count(species_by_label[label]["xyz"]) for block in blocks)
+                assert not set.intersection(*blocks)  # two molecules, not one counted twice
+                assert {p["geometry_ref"] for i in slots for p in by_slot[(side, i)]} <= {
+                    p["geometry_ref"] for p in by_slot[(side, slots[0])]}
+    return stored
+
+
+@pytest.mark.parametrize("name,index", ATOM_MAP_CASES)
+def test_reaction_bundle_stores_the_ts_atom_map(live_tckdb, tmp_path, name, index):
+    project, doc = materialize(tmp_path, name)
+    reaction = doc["reactions"][index]
+    adapter = make_adapter(live_tckdb.url, project, name, "computed_reaction")
+    outcome = adapter.submit_computed_reaction_from_output(output_doc=doc, reaction_record=reaction)
+    response = _uploaded(live_tckdb, outcome)
+    assert response["atom_map_id"] is not None
+    _assert_atom_map_stored(
+        live_tckdb, outcome, response, doc=doc, reaction=reaction,
+        ts_entry_id=response["transition_state_entry_id"], reaction_entry_id=response["reaction_entry_id"])
+
+
+@pytest.mark.parametrize("name,index", ATOM_MAP_CASES)
+def test_standalone_ts_stores_the_ts_atom_map(live_tckdb, tmp_path, name, index):
+    project, doc = materialize(tmp_path, name)
+    reaction = doc["reactions"][index]
+    ts_record = next(t for t in doc["transition_states"] if t["label"] == reaction["ts_label"])
+    adapter = make_adapter(live_tckdb.url, project, name, "computed_ts")
+    outcome = adapter.submit_computed_ts_from_output(
+        output_doc=doc, ts_record=ts_record, reaction_record=reaction)
+    response = _uploaded(live_tckdb, outcome)
+    _assert_atom_map_stored(
+        live_tckdb, outcome, response, doc=doc, reaction=reaction,
+        ts_entry_id=response["id"], reaction_entry_id=response["reaction_entry_id"])
+
+
+# ---------------------------------------------------------------------------
 # conformer mode + artifacts
 # ---------------------------------------------------------------------------
 
@@ -667,6 +820,8 @@ REPLAY_MATRIX = [
     ("arc_1_2", "computed_species"), ("arc_1_2", "conformer"),
     ("golden_ts_evidence", "computed_reaction"), ("golden_ts_evidence", "computed_ts"),
     ("synthetic_reaction", "computed_reaction"), ("synthetic_reaction", "computed_ts"),
+    ("ts_atom_map_sample", "computed_reaction"), ("ts_atom_map_sample", "computed_ts"),
+    ("ts_atom_map_derived", "computed_reaction"), ("ts_atom_map_derived", "computed_ts"),
 ]
 
 

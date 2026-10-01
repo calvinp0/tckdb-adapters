@@ -33,6 +33,8 @@ FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 GOLDEN = FIXTURES / "golden"
 CURRENT_ARC = FIXTURES / "current_arc"
 ARC_1_2 = FIXTURES / "arc_1_2" / "output.yml"
+TS_ATOM_MAP_DERIVED = FIXTURES / "arc_1_3_ts_atom_map" / "output.yml"
+TS_ATOM_MAP_SAMPLE = FIXTURES / "arc_1_3_samples_ebc88ec8" / "reaction_kinetics.output.yml"
 # A real Gaussian log shipped with the package, used only as artifact bytes.
 SAMPLE_LOG = Path(__file__).resolve().parents[2] / "testing" / "irc" / "rxn_1_irc_1.out"
 
@@ -166,6 +168,33 @@ def golden_irc_failed():
     return _golden_with_irc_verdict(False)
 
 
+def _without_staged_routes(doc):
+    """Drop the route lines of a fixture whose logs are other levels' logs (not part of this gate's question).
+
+    The ARC 1.3 fixtures name calculation logs that do not exist, and their recorded routes are the
+    placeholders ARC's sample writer chose, so the adapter would report ``level_contradicted_by_route``.
+    The atom-map corpora are about the reaction mapping, not routes (as in ``test_arc_1_3_ts_atom_map``).
+    """
+    for record in (*doc["species"], *doc["transition_states"]):
+        for key in ("opt_route", "freq_route", "sp_route"):
+            if key in record:
+                record[key] = None
+        if record.get("irc_log_routes"):
+            record["irc_log_routes"] = [None] * len(record["irc_log_routes"])
+    return doc
+
+
+def ts_atom_map_sample():
+    """ARC's own writer at ebc88ec8: ``nC3H7 <=> iC3H7`` with a real ``ts_atom_map`` (TS order follows the reactants)."""
+    return _without_staged_routes(_load_yaml(TS_ATOM_MAP_SAMPLE)), []
+
+
+def ts_atom_map_derived():
+    """The derived fixture: ``OH + CH4 <=> H2O + CH3`` (TS order unlike the reactants') and ``CH3 + CH3 <=> C2H6``
+    (a repeated reactant), both with a ``ts_atom_map`` and ``reactant_species_labels``."""
+    return _without_staged_routes(_load_yaml(TS_ATOM_MAP_DERIVED)), []
+
+
 def arc_1_2():
     return _load_yaml(ARC_1_2), []
 
@@ -273,6 +302,8 @@ CORPORA = {
     "golden_ts_evidence": golden_ts_evidence,
     "golden_irc_passed": golden_irc_passed,
     "golden_irc_failed": golden_irc_failed,
+    "ts_atom_map_sample": ts_atom_map_sample,
+    "ts_atom_map_derived": ts_atom_map_derived,
     "arc_1_2": arc_1_2,
     "arc_1_2_corrections": arc_1_2_corrections,
     "current_arc_h2o": current_arc_h2o,
