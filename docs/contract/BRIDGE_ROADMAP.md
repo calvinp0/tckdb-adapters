@@ -151,6 +151,14 @@ Each item is one of three things:
 
 ### A1. Petersson `bac_total` without a bond component (**breaking**; top 10 #1)
 
+**Status (adapter 0.7.1, output 1.3): a partial BAC is now sent.** ARC 1.3 (B13) writes
+the bonds a Petersson BAC applied as `components` (they sum to `total`) and the bonds with
+no parameter as `skipped_components`. On a 1.3 document the adapter sends that partial
+decomposition (after checking that the components sum to the total within
+1e-3 kcal/mol, `components_do_not_sum` otherwise) and states the skipped bonds in the
+correction's `note`, not in the scheme. The omission rules above remain for documents
+before 1.3 and for a 1.3 record with no usable bond component.
+
 **Status (adapter 0.6.3): done.** See CURRENT_ARC_INTEGRATION.md, "Corrections and statmech evidence".
 
 **What to change.** Before emitting a `bac_total` from a `bac_petersson` scheme, require
@@ -417,6 +425,13 @@ level, then use it.
 **Effort.** S.
 
 ### A5. `statmech_treatment` can claim rotors Arkane dropped (**wrong**, conditional; top 10 #8)
+
+**Status (adapter 0.7.1, output 1.3): retired for 1.3.** `statmech.arkane_treatment` (B4)
+is the treatment Arkane applied, read from its own `output.py`; it is sent as
+`statmech_treatment` with no Hessian gate and no inference from the rotor list
+(`null` is omitted with `statmech_treatment_not_stated`, reason `arkane_treatment_not_recorded`;
+a rotor treatment with no torsion sent is withheld because TCKDB refuses it). The Hessian
+gate above remains for documents before 1.3.
 
 **Status (adapter 0.6.3): done.** `torsions[]` are still sent. See CURRENT_ARC_INTEGRATION.md, "Corrections and statmech evidence".
 
@@ -833,6 +848,10 @@ fixture and a version bump.
 
 ### B4. The statmech treatment Arkane actually applied
 
+**Status: exported by ARC 1.3 (PR #1059), consumed by adapter 0.7.1.**
+`statmech.arkane_rotors_applied` (count, no TCKDB home), `statmech.arkane_treatment` and a
+nullable `torsions[].treatment` (`arc/output.py`, `get_arkane_treatment`). See A5.
+
 **What.** Capture, during `process_arc_project`, whether Arkane kept or dropped the
 rotors. It drops them when there is no force-constant matrix
 (`RMG-Py:arkane/statmech.py:647-667`). `torsions[].treatment` is always `hindered_rotor`.
@@ -842,6 +861,16 @@ rotors. It drops them when there is no force-constant matrix
 **Effort.** M. The value lives in Arkane's `output.py`, which is overwritten.
 
 ### B5. Correction markers on E0 and kinetics
+
+**Status: exported by ARC 1.3, partly consumed by adapter 0.7.1.** `statmech.e0_atom_corrections_applied`
+and `e0_bond_corrections_applied` (per E0, so a well's and its TS's can differ) and
+`kinetics.atom_corrections_applied`. The kinetics switch is stated in the kinetics `note`.
+The adapter deposits no E0 (`e0_kj_mol` has no TCKDB statmech field, and the species'
+`enthalpy_formation_0k_kj_mol` would additionally need the energy-level check that
+`atom_corrections_level` gives only for thermo), so the E0 switches gate nothing and are not
+sent; they are the guard for that deposit when it is built. 1.3 also drops an
+`energy_corrections` record whose switch is false, so what the adapter forwards already follows
+the run.
 
 **What.** An atom-correction flag on `statmech.e0_kj_mol` and on the kinetics run. The
 marker must be per E0 and include the BAC flag: `statmech.e0_kj_mol` has three writers
@@ -923,6 +952,13 @@ note.
 
 ### B9. TS frequency order and the reaction-mode index
 
+**Status: exported by ARC 1.3, consumed by adapter 0.7.1.** `freq_frequencies_cm1_ess_order`
+and `reaction_coordinate_mode_index` (null unless the normal mode displacement check genuinely
+passed). On a 1.3 document the modes are the ESS-order list, numbered by position, and the
+designated mode is ARC's index; the other imaginary modes are `unassigned`. A TS with several
+imaginary modes and no stated index is refused. The (75, 10000) cm-1 window
+remains for documents before 1.3.
+
 **What.** Export `spc.freqs` in ESS order, and the index of the reaction-coordinate mode.
 Today the adapter re-inserts the TS negatives (`adapter.py:4660-4684`) and designates the
 mode by a frequency window.
@@ -958,6 +994,14 @@ about its runtime; do not export requested resources as runtime facts.
 
 ### B12. Export the RMG-database commit behind Arkane's correction tables
 
+**Status: exported by ARC 1.3 (`rmg_database`, `arc_aec_yml_sha256`), consumed by adapter 0.7.1.**
+`scheme.workflow_tool_release` is `RMG-database` with `git_commit` (path_kind `git`), `version`
+(`package`) or `version: sha256:<digest>` (neither), and the digest, the path kind and the Arkane
+build in `notes`. A revised table is therefore a new scheme identity and an unrelated RMG-Py
+commit is not. Without the block, or on a document before 1.3, it stays the Arkane build.
+`arc_aec_yml_sha256` is not a scheme release: ARC writes no `atom_energy` record for energies it
+rendered from `data/AEC.yml`.
+
 **What.** Export what identifies the RMG-database tables Arkane read
 (`RMG_DB_PATH/input/quantum_corrections/data.py`, `ARC:arc/statmech/arkane.py`
 ~817-821), for example into `WorkflowToolReleaseRef.notes` or a dedicated field. Here
@@ -974,6 +1018,9 @@ a new scheme row.
 **Effort.** S.
 
 ### B13. Export the Petersson components Arkane did apply
+
+**Status: exported by ARC 1.3 (`components` = applied bonds, `skipped_components`), consumed by
+adapter 0.7.1.** See A1.
 
 **What.** When some bonds lack Petersson parameters, export the components Arkane did
 apply (they sum exactly to the applied total) instead of dropping the whole list
@@ -998,6 +1045,9 @@ complete, exact decomposition of the applied total exists.
   method of any GSM path) cannot be trusted or stated.
 
 ### B15. Export the correct rigid-rotor kind
+
+**Status: exported by ARC 1.3 (`symmetric_top`, `spherical_top`, null when unclassifiable), consumed
+by adapter 0.7.1:** the adapter already sent the stated kind and omits a null.
 
 **What.** ARC exports `rigid_rotor_kind` only as `atom`, `linear` or `asymmetric_top`,
 so benzene (D6h, an oblate symmetric top) is exported as `asymmetric_top`. Export the
@@ -1126,6 +1176,11 @@ Separately, `conformer_upload` runs no provenance warnings for its nested statme
 
 ### C10. Correction-scheme provenance for tool-table schemes ([gate])
 
+**Adapter 0.7.1 request to TCKDB.** `WorkflowToolReleaseRef` / `WorkflowToolReleaseIdentity` are
+`(name, version, git_commit)` with no content-digest field. For a correction table of unknown origin
+the adapter puts `sha256:<digest>` in `version` as a stand-in; a digest field would be the honest home.
+Scheme rows now carry up to three identities (none, Arkane build, `RMG-database`), as expected.
+
 **Status (adapter 0.6.1):** `scheme.software` now names the program in the record's
 `matched_arkane_key` (`gaussian`), without a release, and is omitted when the key names
 none or disagrees with ARC's level; the release and literature remain open.
@@ -1204,10 +1259,10 @@ your behalf. Nothing is inferred today.
 | `depends_on` edges and freq/sp `input_geometries` = the optimized geometry | `:1158-1265`, `:1614-1621` | Keep; they are ARC's workflow invariant |
 | `opt_coarse` `converged: true`; `path_search_result.converged`, `is_double_ended`, `source_endpoint_count: 2` | `:4435`, `:7749`, `:486-489` | Recommend omitting `converged` where ARC exported no flag |
 | IRC TS marker point synthesized; `direction: both` when unresolved | `:7222-7244`, `:7205-7212` | Mark the point; omit `direction` when unknown |
-| Imaginary mode designated by a (75, 10000) cm⁻¹ window | `:4462-4503` | Keep until B9 |
+| Imaginary mode designated by a (75, 10000) cm⁻¹ window | `:4462-4503` | Output 1.3 states the mode (B9); the window is kept only for earlier documents (adapter 0.7.1) |
 | `scale_kind: fundamental`; FSF `software.name` = the opt software | `:5843`, `:5851-5856` | Confirm with ARC's FSF source |
 | `model_kind: modified_arrhenius`, `a_uncertainty_kind: multiplicative` | `:6742`, `:6928` | Keep |
-| `ts_upload.reaction.reversible: true` (always) | `:3175` | Replace with B11 |
+| `ts_upload.reaction.reversible: true` (always) | `:3175` | Output 1.3 states `reversible` and the adapter sends it (0.7.1); `true` remains for earlier documents and a null |
 | Kinetics `T0 = 1 K` when absent | `:6797` | Keep |
 | Freq/sp level falls back to `opt_level`; software falls back to the requested level's | `:4383-4404`, `:3400` | Keep for freq/sp; scan is already refused |
 | Correction scheme `software` / `workflow_tool_release` | `software` = `{name: <matched_arkane_key's software>}` since 0.6.1; `workflow_tool_release` = Arkane (recorded version/commit) on atom-energy, Petersson and Melius schemes since 0.6.3 | See C10. **Never Arkane as `scheme.software`, never ARC as `scheme.workflow_tool_release`** (MR-2, AP-8) |

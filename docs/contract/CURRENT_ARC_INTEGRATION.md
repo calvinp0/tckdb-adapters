@@ -33,9 +33,12 @@ and schema versions; their percentages are not current coverage measurements.
   hashes change only by the declared `energy_level_of_theory`, proved by strip-and-restore.
 - **Adapter 0.6.7:** roadmap A6, A8, A15, A16, A17 (via restart.yml) and A19. See
   [Reaction species, atoms and artifacts (adapter 0.6.7)](#reaction-species-atoms-and-artifacts-adapter-067).
-- **Adapter 0.7.0 (batch E):** output.yml 1.3 levels, programs, conformers, IRC endpoints,
+- **Adapter 0.8.0 (ARC output schema 1.3), batch E:** output.yml 1.3 levels, programs, conformers, IRC endpoints,
   composite job, isotopes and routes; roadmap A2b, A3, A4, A17, B2, B3, B6 and B7 consumed. See
-  [Levels, programs and isotopes (adapter 0.7.0)](#levels-programs-and-isotopes-adapter-070).
+  [Levels, programs and isotopes (adapter 0.8.0, batch E)](#levels-programs-and-isotopes-adapter-080-batch-e).
+- **Adapter 0.8.0, batch F:** corrections, statmech, kinetics provenance,
+  TS frequencies and parsed properties. See
+  [Output schema 1.3: corrections, statmech, kinetics, TS frequencies (adapter 0.8.0, batch F)](#output-schema-13-corrections-statmech-kinetics-ts-frequencies-adapter-080-batch-f).
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
@@ -514,7 +517,7 @@ statmech.
 - **1.0 documents (A19).** `thermo.cp_data` and the atom-energy `parameter_table` are
   still read when `schema_version` is `1.0`.
 
-## Levels, programs and isotopes (adapter 0.7.0)
+## Levels, programs and isotopes (adapter 0.8.0, batch E)
 
 Output.yml 1.3 (ARC PR #1059) states what 0.6.4-0.6.7 had to infer. Where a 1.3 record states a
 value the adapter uses it; where it states nothing the 1.2 behaviour (header levels,
@@ -566,3 +569,110 @@ which are requested levels with a deduced software).
 Upgrading changes the payload hash, and so the idempotency key, of every 1.3 upload with a
 route line (each calculation gains `parameters`), a stated isotope, a composite run, a GSM guess
 or a changed level; pre-1.3 output is byte-identical.
+
+## Output schema 1.3: corrections, statmech, kinetics, TS frequencies (adapter 0.8.0, batch F)
+
+`evidence.SUPPORTED_OUTPUT_SCHEMA_VERSIONS` gains `1.3`. Every 1.3 key below is read from a
+document whose `schema_version` is 1.3 or later (`_is_output_schema_1_3_or_later`), and only
+there: an earlier document never states them (A19), so the same record relabelled `1.2` gives
+the pre-1.3 payload. Fixtures: `tests/fixtures/arc_1_3_thermo` (written by ARC's real writer,
+with a partial BAC, a null torsion treatment, a symmetric top and a two-imaginary-mode TS) and
+`tests/fixtures/arc_1_3_samples` (ARC's own hand-off documents; their numbers are placeholders).
+Tests: `test_arc_schema_1_3_thermo.py`, `test_arc_1_3_samples.py`.
+
+| 1.3 key | Payload field | Rule |
+|---|---|---|
+| `energy_corrections[].components` (Petersson: the bonds applied), `skipped_components` | `applied_energy_corrections[].components`, correction `note` | A partial BAC is sent. The components must sum to `total` within 1e-3 kcal/mol (`components_do_not_sum`); skipped bonds are named in the correction `note`, never in the scheme. Omitted, as before, with no usable bond component, an unusable component or no component on a bonded species or a TS |
+| `statmech.arkane_treatment` | `statmech.statmech_treatment` | Sent as stated, with no freq Hessian gate and no inference from the rotor list. `null` omits it (`statmech_treatment_not_stated`, reason `arkane_treatment_not_recorded`); a rotor treatment with no torsion sent is withheld (`no_torsion_sent_for_rotor_treatment`) |
+| `statmech.torsions[].treatment` (nullable) | `torsions[].treatment_kind` | As recorded; a null treatment sends the torsion without one, never `hindered_rotor` |
+| `statmech.rigid_rotor_kind` (adds `symmetric_top`, `spherical_top`, null) | `statmech.rigid_rotor_kind` | As stated; null is omitted |
+| `statmech.e0_*_applied`, `arkane_rotors_applied` | none | No TCKDB statmech field for E0 or a rotor count, and the adapter deposits no E0 |
+| `kinetics.comment`, `ts_validation`, `atom_corrections_applied` | kinetics `note` | After the reaction description, one line each: Arkane's comment verbatim, the `ts_validation` text when the comment does not already carry it, and `Arkane kinetics run atom energy corrections: applied.` / `not applied (E0 values are absolute electronic energy plus ZPE).` |
+| `reactions[].reversible` | computed-reaction `reversible`; standalone TS `reaction.reversible` | A stated bool is sent. A null omits it on the bundle (the schema default, `true`) and sends `true` on the TS route (required, no default; the 0.6.0 maintainer decision) |
+| `rmg_database`, `arc_aec_yml_sha256` | `scheme.workflow_tool_release` | See below |
+| TS `freq_frequencies_cm1_ess_order`, `reaction_coordinate_mode_index` | `freq_result.modes` and `reaction_coordinate_mode_index` (flat: `freq_frequencies_cm1`, `freq_reaction_coordinate_mode_index`) | See below |
+| `sp_t1_diagnostic` | the sp calculation's `wavefunction_diagnostic.t1_diagnostic` | Finite and non-negative only |
+| `sp_spin_diagnostic.s_squared_expected`, `s_squared_annihilated` | `spin_diagnostic` | Already mapped before 1.3; unchanged |
+| `freq_hessian_method` | freq calculation `parameters` (`freq.hessian_method`) | Already mapped; unchanged |
+| `opt_dipole_moment_debye`, `opt_dipole_moment_density`, `freq_polarizability_angstrom3` | none | See below |
+
+**Correction-scheme identity (B12).** The producer contract's `WorkflowToolReleaseRef` is
+`{name, version, git_commit (1-40 characters), release_date, notes}`; `WorkflowToolReleaseIdentity`,
+what identifies a release, is `(name, version, git_commit)` only, so `notes` never separates two
+tables. With a usable `rmg_database` the scheme's release is `RMG-database` with the table's
+identity in an identifying field: `git_commit` for `path_kind: git`, `version` for `package`, and
+`version: sha256:<digest>` for a path of unknown origin. The digest, the path kind, the package
+version or commit, the Arkane version and commit that looked the table up, and a
+`matches_arc_rmg_db_path: false` remark are repeated in `notes`. This replaces the Arkane build on
+atom-energy, Petersson and Melius schemes: a database revised in place now gives a new scheme
+instead of a parameter-conflict 422, and an unrelated RMG-Py commit no longer forks one. A
+`git`/`package`/`unknown` block with none of commit, version or a 64-hex digest, a commit over 40
+characters, an absent block or a document before 1.3 keep the Arkane build (0.6.3 behaviour).
+`arc_aec_yml_sha256` is not sent as a release. ARC renders Arkane's `atomEnergies` from `data/AEC.yml`
+whenever `_match_aec_yml_key` matches (even if `data.py` also matches, `arkane.py:410-419`) but recomputes
+the exported `atom_energy` record from `data.py` (`get_species_corrections.py:92`), so for a level both
+files cover the record would describe a table other than the one applied. When the digest is non-null
+the `atom_energy` record is therefore not deposited
+(`atom_energy_record_not_deposited_aec_yml`); the Petersson/Melius schemes are unaffected. A
+safety net today (AEC.yml holds only gfn2/torchani levels). Energies that came only from `AEC.yml`
+write no record at all (ARC docs: the list "is empty when the corrections came from ARC's own
+`data/AEC.yml` rather than Arkane's database").
+
+**Scheme identity sets.** Scheme rows now have up to three identities for the same table content: no
+tool (<= 0.6.2), the Arkane build (0.6.3-0.7.0) and `RMG-database` (0.7.1). The new rows on first
+upload are expected. TCKDB's `WorkflowToolReleaseRef` has no content-digest field, so a database of
+unknown origin is identified by `version: "sha256:<digest>"`, a stand-in (see BRIDGE_ROADMAP C10).
+
+**TS frequencies and the reaction coordinate (B9).** The producer contract: `freq_result.modes[].mode_index`
+is the "1-based ordering from the ESS output", and `reaction_coordinate_mode_index` is the "`mode_index`
+of the mode the depositor designates the reaction coordinate"; a TS with more than one imaginary mode
+"is accepted only if it says which one". On a 1.3 TS the modes are `freq_frequencies_cm1_ess_order`,
+numbered by position (imaginary modes in place, no re-insertion that would shift ARC's index), and the
+designated mode is ARC's `reaction_coordinate_mode_index` when it names an imaginary listed mode (sent
+for one imaginary mode too: it is ARC's normal-mode-displacement verdict). Every other imaginary mode is
+declared `unassigned`. With no usable index (ARC's is null whenever the normal mode displacement check did not genuinely
+pass, including `skip_nmd` runs) TCKDB's own noise floor decides: `tckdb_schemas.stationary_point`
+`TAU_PROTOCOL_NOT_RECORDED_CM1 = 50` cm-1 (ARC states no tau). Exactly one imaginary mode at or above it
+is designated and the others, below it, are `unassigned` (the contract's `ImaginaryModeDisposition` has no
+below-tau value; TCKDB warns `transition_state_extra_imaginary_modes_below_tau`). Two or more at or above
+tau, or none, is refused with `TSReactionCoordinateNotDesignated` (a `ValueError` whose message starts
+with `[ts_reaction_coordinate_not_designated]` and which carries the structured `.warning`; with no outcome
+there is no sidecar, so the sweep's failure line is where it shows). The (75, 10000) cm-1
+window and the re-insertion remain for documents before 1.3. A null index with one imaginary mode needs
+no designation and is uploaded without one. ARC's null index does not say why (README open question 2: a
+forced normal-mode check cannot be told from an unrecorded frequency); the adapter treats every null the
+same, as "not established".
+
+**Parsed properties.** `sp_t1_diagnostic` has a home on `CalculationInBundle` and the reaction and
+standalone TS calculation models: `wavefunction_diagnostic` (`t1_diagnostic >= 0`). ARC states it only
+for a coupled-cluster or QCISD sp level. The dipole moment and polarizability exist in the contract only
+as `dipole_debye` and `polarizability_angstrom3` on the standalone `TransportUploadRequest`
+(`POST /uploads/transport`, with Lennard-Jones, one record per species entry, calculation roles
+`dipole`/`polarizability`), which the adapter does not call; on the computed-species, conformer,
+computed-reaction and transition-state routes they have no home and are not sent.
+
+**E0 and the e0 switches.** The adapter sends no `statmech.e0_kj_mol` (TCKDB's statmech has no such
+field) and no `enthalpy_formation_0k_kj_mol`, so nothing decides formation-ness for an E0-only species or a
+TS E0, and the switches `e0_atom_corrections_applied` / `e0_bond_corrections_applied` are not consumed.
+A well's E0 can carry a BAC that its TS's does not, and a TS E0 is never a formation enthalpy; a future
+0 K deposit must read them and still compare levels, which the statmech block does not state.
+
+**Thermo flags unchanged.** `atom_corrections_applied`, `bond_corrections_applied` and
+`atom_corrections_level` have the same shape in 1.3 as in 1.2 (a level dict, the cross-field rules the
+JSON schema enforces), and the thermo block built from the same record is identical under both labels
+(test). Energy-correction records now follow the run's switches in 1.3 (dropped when the switch is false),
+so a 1.3 species whose atom corrections were off carries none; the adapter forwarded what ARC exported and
+had no gate that assumed otherwise. Before 1.3 ARC kept the record of a correction its thermo run did not apply, so the adapter now drops an
+`atom_energy` / `bond_additivity` record when the same species' `thermo.atom_corrections_applied` /
+`bond_corrections_applied` is false.
+
+**README open questions touching these items** (ARC hand-off notes): (2) a null
+`reaction_coordinate_mode_index` as above; (5) `bond_corrections_applied: true` is not linked to a
+requested `bac_type` by the schema, and the adapter does not use `bac_type`: the switch only words the
+omitted-BAC note; (6) a null `standard_state_pressure_pa` keeps omitting `reference_pressure_bar`
+(`thermo_reference_pressure_not_stated`), never a default.
+
+Upgrading changes the payload hash, and so the idempotency key, of 1.3 uploads that gain a partial
+BAC, a different treatment, torsions without a treatment, a scheme release, a kinetics note, a
+stated `reversible`, ESS-ordered modes or a T1 diagnostic. Documents before 1.3 are unchanged, and the
+golden corpus hashes are unchanged.

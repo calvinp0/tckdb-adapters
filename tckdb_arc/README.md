@@ -174,6 +174,31 @@ Adapter 0.6.7:
 Upgrading changes the payload hash, and so the idempotency key, of reaction uploads that
 had a repeated species or gained conformer labels or scan logs.
 
+Adapter 0.7.1 reads ARC output schema 1.3 (batch F; the keys are read from 1.3 documents
+only, and a document before 1.3 gives the payload it gave before):
+
+- A partial Petersson BAC is sent with the bonds Arkane applied (`components`, which must
+  sum to the total) and its skipped bonds in the correction's note, instead of being omitted.
+- `statmech_treatment` is `statmech.arkane_treatment`, the treatment Arkane applied, with no
+  Hessian gate; a torsion's `treatment` is sent as recorded and a null one sends the torsion
+  without a treatment. The rigid-rotor kind (now including symmetric and spherical tops) is
+  sent as stated.
+- The kinetics `note` carries Arkane's comment, the `ts_validation` text and the kinetics run's
+  atom-correction switch; the reaction's `reversible` is sent as stated.
+- A correction scheme's `workflow_tool_release` names the RMG-database table Arkane loaded
+  (`git_commit`, package `version` or a SHA-256) instead of the Arkane build, so a revised table
+  is a new scheme identity.
+- A TS's modes are its frequencies in ESS order and its reaction-coordinate mode is the one ARC's
+  normal mode displacement check validated; with none stated, TCKDB's 50 cm-1 noise floor picks the one
+  mode above it (the others `unassigned`), and two or more above it refuse the record.
+- `sp_t1_diagnostic` becomes the sp calculation's `wavefunction_diagnostic`. The dipole moment
+  and polarizability have no home on these routes (TCKDB holds them only on the standalone
+  transport record), and the E0 switches gate nothing since no E0 is deposited.
+
+Scheme rows get a third identity set (no tool <= 0.6.2, the Arkane build 0.6.3, `RMG-database` 0.7.1); the
+new rows are expected. Upgrading changes the payload hash, and so the idempotency key, of 1.3 uploads that gain any of
+the above. See `docs/contract/CURRENT_ARC_INTEGRATION.md`.
+
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 
 <!-- tckdb-drift:changelog -->

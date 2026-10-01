@@ -16,3 +16,6 @@ stand-in Arkane level (bmk/cbsb7). The IRC logs and IRC endpoint geometries of
 No sample carries a `parser_evidence.json`; the adapter must (and does) build from
 them without the sidecar. No calculation logs are shipped: the paths inside are
 run-relative and the tests that read the documents do not upload artifacts.
+
+The thermo, correction and kinetics batch tests use the same files for structure and plumbing
+checks, and numeric invariants only on synthetic records.
