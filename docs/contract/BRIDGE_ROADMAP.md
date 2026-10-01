@@ -240,6 +240,20 @@ that assertion.
 
 ### A2b. Interim detection of `adaptive_levels` runs (**wrong**; top 10 #6)
 
+**Status (adapter 0.7.0): consumed from output.yml 1.3.** The record's `levels` (the level of
+the opt, freq, sp, composite and IRC jobs whose logs it exports, under `adaptive_levels` too) is
+authoritative and replaces the `restart.yml` replay for every job it states; the header
+`adaptive_levels` names the adaptive job types, so a job whose level a 1.3 record does not
+state (a `null` level beside an exported log, a header `scan_level` left `null` because an
+entry names `scan`) is still omitted rather than filled from a run-level header level. The
+thermo and statmech energy level is the record's `levels.composite`, else `levels.sp`. A
+header frequency scale factor stays attached with its own (header) level, since Arkane applies
+the one run-wide factor to every species; a record whose `levels.freq` differs is reported
+(`freq_scale_factor_fitted_for_other_level`). The `restart.yml` replay below remains for output
+1.2 and older, and for a 1.3 record that states no level. Tests:
+`test_arc_schema_1_3_levels.py`.
+
+
 **Status (adapter 0.6.4): done, exact where `restart.yml` allows, else refuse or omit.**
 `tckdb_arc/adaptive.py` reads the project's `restart.yml` and `input.yml` (and the CLI's
 parsed `input.yml`). When `restart.yml` holds the adaptive spec (`arc/main.py:438-442`)
@@ -281,6 +295,29 @@ has the project directory.
 **Effort.** S.
 
 ### A3. The TS-guess and IRC calculations carry the opt level (**wrong**; top 10 #3)
+
+**Status (adapter 0.7.0): consumed from output.yml 1.3.** The IRC level is the record's
+`levels.irc` (or the one level every `irc_log_levels` entry shares), else the header
+`irc_level`, and its program is `ess_software.irc`, the program of the IRC logs. Jobs at two
+levels (`levels.irc` null, `irc_log_levels` different) or no stated level file no IRC
+calculation (`irc_level_not_stated`); a 1.3 record with no stated program files none
+(`irc_software_not_stated`). Nothing is assumed to be the opt level for 1.3 output
+(`irc_level_assumed_opt_level` and the `restart.yml` `irc_level` remain for 1.2 and older). The
+GSM path search is filed again when the header `gsm_level` (`gfn2`, xtb) is stated, with the
+program `ess_software.gsm` and the banner `ess_versions.gsm` (`xtb version 6.7.1 (edcfbbe)` is
+sent as version `6.7.1`, build `edcfbbe`); a null `gsm_level` or a missing
+`ess_software.gsm` omits it with `ts_guess_level_not_stated` / `ts_guess_software_not_stated`.
+Each rotor scan's program and banner are its own (`rotor_scans[].ess_software` /
+`ess_version`); a scan whose program ARC could not identify is not filed at the header
+`scan_level`'s deduced one. The IRC route lines (`irc_log_routes`) are sent as parameters. `levels` are requested and
+`*_route` observed: when a Gaussian route's single `method/basis` token clearly contradicts the
+calculation's level (`ub3lyp/cbsb7` vs `uhf/3-21g`; a `u`/`ro` prefix is spin treatment), the
+calculation is not built (`level_contradicted_by_route`); composite, Orca and ambiguous routes
+are never flagged. A record with an sp/freq log but no opt job (no `opt_log`, no `levels.opt`)
+files the required primary opt as a marked placeholder at the header opt level
+(`placeholder_primary_opt_no_opt_job`, warning `primary_opt_placeholder_no_opt_job`, only ARC's
+stated `converged`).
+
 
 **Status (adapter 0.6.4): TS guess done; IRC exact when `restart.yml` records it.** The
 NEB path search uses `neb_level` and `ess_software.neb` / `ess_versions.neb`; the program is
@@ -329,6 +366,24 @@ field. That is exactly the case the matrix cannot judge (see `GAP_MATRIX.md`, "W
 **Effort.** S.
 
 ### A4. Screened alternative conformers are filed at `opt_level` (**wrong**; top 10 #2)
+
+**Status (adapter 0.7.0): consumed from output.yml 1.3.** Each conformer is filed at the level
+its own `conformer_levels` entry states (the level of the optimization that produced the
+geometry). A level inside a record states no program, so the program is the header
+`conformer_opt_level`'s, accepted only when that names the same level; otherwise the conformer
+is not filed (`conformer_program_not_stated`; this program is a deterministic deduction, ARC's
+`Level.software`, accepted as an interim until ARC states the program of conformer jobs; e.g. an adaptive `conf_opt`, which leaves the
+header level null). An entry that is `null` (a force-field geometry, a user-supplied
+conformer, a restart without level recording) is not an ESS calculation and is omitted with
+`conformer_geometry_not_esss_optimized`, naming `conformer_force_field` when stated.
+`conformer_level_not_stated` and the `restart.yml` path remain for 1.2 and older. The
+conformer's electronic energy (`conformer_energies`, kJ/mol, absolute) is sent only when
+`conformer_energy_kind` is `electronic_kj_mol` and `conformer_energy_level` is the
+conformer's own level (`opt_result.final_energy_hartree`), or, when conformer single points
+overwrote it, as an `sp` at `conformer_energy_level` with the program of the header
+`conformer_sp_level` when that names the same level; force-field energies (kcal/mol, no level)
+are never sent.
+
 
 **Status (adapter 0.6.4): done, at the `restart.yml` conformer level when it is stated.**
 output.yml exports no conformer level (header, species or conformer). The screened
@@ -642,6 +697,12 @@ hash changes; the test restores the duplicate blocks to reproduce the previous h
 
 ### A17. IRC endpoint species are uploaded as ordinary species
 
+**Status (adapter 0.7.0): consumed from output.yml 1.3.** `irc_endpoint_of` (the TS label, or
+`null` for an ordinary species) and `irc_endpoint_direction` mark the endpoint species in
+`output.yml`; the key is authoritative both ways, so `restart.yml` is not consulted for a record
+that carries it. The 0.6.7 `restart.yml` path stays for 1.2 and older output.
+
+
 **What happens.** ARC exports `IRC_<ts>_<n>` endpoint optimizations as plain `species[]`
 records with no marker (`ARC:arc/scheduler.py:4167`), and the sweep uploads every
 converged record (`sweep.py:111-114`).
@@ -729,6 +790,10 @@ adapter's "unverifiable if dispersion or solvation is set" rule (A2) could be re
 
 ### B2. Per-species level under `adaptive_levels` (**wrong data**)
 
+**Status: exported by ARC 1.3 (`levels`, header `adaptive_levels`); consumed since adapter
+0.7.0 (A2b).**
+
+
 **What.** Export the opt, freq and sp level each species actually ran at, or at least a
 run-level `adaptive_levels` marker in `output.yml`.
 
@@ -743,6 +808,15 @@ run-level `adaptive_levels` marker in `output.yml`.
 **Effort.** M.
 
 ### B3. Levels for scans, IRCs, conformers and TS guesses; versions for scans and IRCs
+
+**Status: exported by ARC 1.3; consumed since adapter 0.7.0 (A3, A4).** Header `scan_level`,
+`irc_level`, `conformer_opt_level`, `conformer_sp_level`, `ts_guess_level`, `gsm_level`,
+`neb_level`; per record `levels.irc`, `irc_log_levels`, `conformer_levels`,
+`conformer_energy_*`; `ess_software` / `ess_versions` for `irc`, `composite` and `gsm`; each rotor
+scan's own `ess_software` / `ess_version`. Used: all but `ts_guess_level` (the level at which TS
+guesses are optimized and compared; TCKDB has no calculation for that comparison, so it is not
+sent) and `conformer_sp_level` outside the conformer single-point case above.
+
 
 **What.** Pass `scan_level`, `irc_level`, the conformer levels and the TS-guess level to
 `write_output_yml` (`ARC:arc/main.py:673`). Key `ess_versions` and `ess_software` for scan
@@ -788,6 +862,10 @@ barrier between a BAC-corrected well E0 and a BAC-free TS E0 would.
 
 ### B6. Mark IRC endpoint species
 
+**Status: exported by ARC 1.3 (`irc_endpoint_of`, `irc_endpoint_direction`); consumed since
+adapter 0.7.0 (A17).**
+
+
 (The adapter already skips them from `restart.yml`'s `irc_label` (A17); an `output.yml` marker is for consumers without `restart.yml`.)
 
 **What.** Export an `irc_label` or a role on `IRC_<ts>_<n>` records (A17).
@@ -795,6 +873,30 @@ barrier between a BAC-corrected well E0 and a BAC-free TS E0 would.
 **Effort.** S.
 
 ### B7. Make the composite-method calculation visible
+
+**Status: exported by ARC 1.3 (`composite_log`, `composite_input`, `composite_route`,
+`ess_software.composite`, `ess_versions.composite`, `levels.composite`); consumed since adapter
+0.7.0.** TCKDB's calculation types are `opt`, `freq`, `sp`, `irc`, `scan`, `path_search` and
+`conf`: there is no composite type, only a `composite` source-calculation role for thermo and
+statmech ("describes a scientific origin rather than a specific job type" and accepts any
+type). A composite run (a stated `composite_log`) is therefore filed as the record's primary
+`opt` calculation (the bundle requires one, and the composite job produced the geometry) at the
+composite level with the composite program, banner, route, log and input deck; the energy is an
+`sp` at the same level marked as reused from that job (`source_job: composite`); thermo and
+statmech link the primary calculation under the `composite` role as well as `opt`, and the
+declared `energy_level_of_theory` is the composite level (the linked sp's). The composite
+job's own frequencies are at a level the composite level does not name (`levels.freq` is
+null), so no freq calculation is filed for it. The primary `opt` is a **marked placeholder**
+(`tckdb_origin.origin_detail = placeholder_primary_opt_composite`, warning
+`composite_geometry_level_not_stated`): Gaussian optimizes a CBS-QB3 geometry at an internal
+level (B3LYP/CBSB7, see `arc/testing/composite/SO2OO_CBS-QB3.log`) that ARC states nowhere
+(`composite_route` is only the first keyword line), so the opt carries the composite level
+ARC states and no invented internal level.
+
+Requests. **ARC B17:** export `composite_step_routes` (the Link1 route lines) or a
+`composite_geometry_level`. **TCKDB:** a `composite` CalculationType, or let a composite run's
+primary calculation be typed as one.
+
 
 **What.** For CBS-QB3 or G4 runs only `paths['composite']` is set, and `output.yml` has no
 log, deck, ESS version or spin diagnostic for it.
@@ -1055,6 +1157,14 @@ identify the scheme through `workflow_tool_release` = Arkane/RMG.
 workflow-tool refusal. None of these changes the adapter's payloads today.
 
 ---
+
+### C13. Normalise the `<name> version X (build)` banner shape
+
+The adapter splits the xtb banner `xtb version 6.7.1 (edcfbbe) compiled by ...` locally
+(version `6.7.1`, build `edcfbbe`; `_split_ess_version_banner`), because
+`SoftwareReleaseRef.normalize_composite_version` would keep the word "version" in `version`.
+This is a local rule pending a TCKDB change: extend that normaliser with the
+`<name> version X (build)` shape.
 
 ## D. Decisions for you
 

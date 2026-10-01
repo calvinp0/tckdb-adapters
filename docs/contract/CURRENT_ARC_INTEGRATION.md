@@ -33,6 +33,9 @@ and schema versions; their percentages are not current coverage measurements.
   hashes change only by the declared `energy_level_of_theory`, proved by strip-and-restore.
 - **Adapter 0.6.7:** roadmap A6, A8, A15, A16, A17 (via restart.yml) and A19. See
   [Reaction species, atoms and artifacts (adapter 0.6.7)](#reaction-species-atoms-and-artifacts-adapter-067).
+- **Adapter 0.7.0 (batch E):** output.yml 1.3 levels, programs, conformers, IRC endpoints,
+  composite job, isotopes and routes; roadmap A2b, A3, A4, A17, B2, B3, B6 and B7 consumed. See
+  [Levels, programs and isotopes (adapter 0.7.0)](#levels-programs-and-isotopes-adapter-070).
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
@@ -510,3 +513,56 @@ statmech.
   `restart.yml` nothing is skipped. B6 (an `output.yml` marker) is still wanted.
 - **1.0 documents (A19).** `thermo.cp_data` and the atom-energy `parameter_table` are
   still read when `schema_version` is `1.0`.
+
+## Levels, programs and isotopes (adapter 0.7.0)
+
+Output.yml 1.3 (ARC PR #1059) states what 0.6.4-0.6.7 had to infer. Where a 1.3 record states a
+value the adapter uses it; where it states nothing the 1.2 behaviour (header levels,
+`restart.yml`) is the fallback, and for a 1.3 record a job whose level it leaves null is never
+filled from a run-level header level when the run is adaptive or the job has no exported log.
+The version gate (`evidence.SUPPORTED_OUTPUT_SCHEMA_VERSIONS`) now accepts `1.3`.
+
+| ARC 1.3 key | TCKDB destination | Behaviour |
+|---|---|---|
+| `levels.{opt,freq,sp,composite,irc}` | `calculation.level_of_theory` | The record's own level, authoritative under `adaptive_levels`; replaces the `restart.yml` replay (`arc13.recorded_level`, `adapter._resolve_level`). `sp` pairs with `opt` when the energy is read from the opt log (`sp_log` absent or equal to `opt_log`; marked `reused_result`) and with `composite` on a composite run. |
+| `ess_software[job]`, `ess_versions[job]` | `calculation.software_release` | The only program source (levels inside a record state no `software`). A job with no observed program is not filed at a deduced one. |
+| header `scan_level` + `rotor_scans[].ess_software` / `ess_version` | scan `level_of_theory`, `software_release` | A scan with no stated program is not filed. A header `scan_level` left null by an adaptive `scan` entry omits scans (`scan_level_adaptive_not_attributable`). |
+| `levels.irc` / `irc_log_levels`, header `irc_level`, `ess_software.irc` | irc calculation | See A3 in the roadmap; no `irc_level_assumed_opt_level` for 1.3. |
+| `gsm_level`, `ess_software.gsm`, `ess_versions.gsm` | `path_search` (method `gsm`) | Filed again. The xtb banner `xtb version X (hash)` becomes version `X`, build `hash`. |
+| `conformer_levels`, `conformer_energy_kind`, `conformer_energy_level`, `conformer_force_field`, `conformer_opt_level`, `conformer_sp_level` | alternative conformers | See A4. Force-field geometries are not calculations (omitted, `conformer_geometry_not_esss_optimized`). |
+| `irc_endpoint_of`, `irc_endpoint_direction` | (species skipped) | `irc_endpoint_species_skipped`; authoritative both ways. |
+| `composite_log`, `composite_input`, `composite_route`, `levels.composite`, `ess_*.composite` | primary `opt` calculation + `composite` role | TCKDB has no composite calculation type (see B7). The composite log and deck are its `output_log` and `input` artifacts. |
+| `xyz_isotopes`, `conformers_isotopes`, `*_input_xyz_isotopes`, `*_output_xyz_isotopes`, sample `geometry_isotopes` | `geometry.isotopes` | Substituted atoms only (below). |
+| `opt_route`, `freq_route`, `sp_route`, `composite_route`, `irc_log_routes` | `calculation.parameters[]` | `{raw_key: "route", raw_value: <line>, section: <job>, value_type: "string"}`; IRC lines with `parameter_index` when the two jobs differ. |
+| `freq_scale_factor` with `levels.freq` | `statmech.freq_scale_factor` | Attached with its own (header) level and program, as Arkane applies the one run-wide factor to every species; `freq_scale_factor_fitted_for_other_level` when the record's `levels.freq` differs. |
+
+**Isotopes.** TCKDB's `GeometryPayload.isotopes` maps a 1-based atom index to a mass number and
+"only substituted atoms need an entry; every unlisted atom is taken to be at its most abundant
+natural isotope"; `species_geometry_isotope_mismatch` refuses a geometry whose substitutions
+differ from those the species entry's SMILES declares. The adapter sends ARC's list as stated,
+dropping atoms at the standard mass, and builds nothing when ARC's stated isotopes and the
+record's SMILES disagree (`ValueError`, naming `species_geometry_isotope_mismatch`); it never
+rewrites the SMILES or drops a stated substitution. For a substituted species a geometry whose
+isotopes ARC did not state (an input geometry from a log that states no masses, a conformer
+with a `null` list, a scan sample) is left out rather than deposited as an unsubstituted one
+(`geometry_isotopes_not_stated` for conformers). Not covered: geometries parsed from logs by the
+adapter itself (IRC points, path-search images, the Hessian frame) carry no isotopes; whether
+TCKDB applies the isotope check to them is not stated in the contract.
+
+**Placeholders and contradictions.** A composite run's primary `opt` (composite level as ARC states
+it) and the primary `opt` of a record with no opt job (header opt level) are marked
+`tckdb_origin.origin_detail = placeholder_primary_opt_{composite,no_opt_job}` with warnings
+`composite_geometry_level_not_stated` / `primary_opt_placeholder_no_opt_job`. A calculation whose
+recorded level a Gaussian route clearly contradicts is not built (`level_contradicted_by_route`).
+The conformer program is a deterministic deduction (header `conformer_opt_level.software`), interim.
+The xtb banner split is a local rule pending a TCKDB normaliser change (roadmap C13).
+
+**No home in the contract.** `ts_guess_level` (the level of the TS-guess optimization/comparison),
+`conformer_sp_level` beyond the conformer single-point case, the composite job as a calculation
+*type*, a per-keyword decomposition of the route lines (the observation is the whole line), and
+the program of conformer jobs (taken from the header `conformer_opt_level`/`conformer_sp_level`,
+which are requested levels with a deduced software).
+
+Upgrading changes the payload hash, and so the idempotency key, of every 1.3 upload with a
+route line (each calculation gains `parameters`), a stated isotope, a composite run, a GSM guess
+or a changed level; pre-1.3 output is byte-identical.

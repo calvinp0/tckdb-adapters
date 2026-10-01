@@ -100,6 +100,17 @@ workflow tool; the older null-tool row remains). An `atom_energy` scheme now car
 atomic energies) with `scheme.units` set to that table's own unit; a table with
 a missing or unrecognized unit, or unusable values, is not sent.
 
+Adapter 0.7.0 reads output.yml 1.3 (ARC PR #1059): each record's `levels` (the level of its
+opt, freq, sp, composite and IRC jobs, also under `adaptive_levels`) replaces the `restart.yml`
+replay, programs come from `ess_software` (including `composite`, `irc` and the xtb GSM) and
+each rotor scan's own program, the header `gsm_level` files the GSM path search again, screened
+conformers are filed at their `conformer_levels` (force-field geometries are not calculations),
+IRC endpoint species are skipped by `irc_endpoint_of`, a composite run's job is filed as the
+primary calculation at the composite level and linked under the `composite` role, stated
+isotopes ride on the geometries (a species whose stated isotopes contradict its SMILES is
+refused), and the observed `*_route` lines become `parameters`. Pre-1.3 output behaves as
+before. See `docs/contract/CURRENT_ARC_INTEGRATION.md`, "Levels, programs and isotopes".
+
 Adapter 0.6.4 states a level only when ARC's output or the project's `restart.yml`
 supports it. Under `adaptive_levels`, `restart.yml` (adaptive spec, each species'
 `adaptive_lot_n_heavy`, rotor scan types) lets the adapter replay ARC's per-species

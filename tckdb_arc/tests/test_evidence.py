@@ -114,6 +114,7 @@ def test_lazy_single_read_and_cached_warning(tmp_path, monkeypatch, caplog):
     {"schema_version": "1.0", "species": [], "transition_states": []},
     {"schema_version": "1.1", "species": [], "transition_states": []},
     {"schema_version": "1.2", "species": [], "transition_states": []},
+    {"schema_version": "1.3", "species": [], "transition_states": []},
 ])
 def test_output_without_descriptor_uses_fallback(tmp_path, output):
     assert EvidenceStore(tmp_path).lookup(output, "species", "x", "freq_hessian").state == "fallback"
@@ -222,6 +223,7 @@ def test_invalid_gsm_value_falls_back(tmp_path, mutate):
 def test_output_schema_validation():
     assert validate_output_schema({"schema_version": "1.0"}) == "1.0"
     assert validate_output_schema({"schema_version": "1.2"}) == "1.2"
+    assert validate_output_schema({"schema_version": "1.3"}) == "1.3"
     with pytest.raises(ValueError, match="Unsupported"):
         validate_output_schema({"schema_version": "9.9"})
 
@@ -254,6 +256,8 @@ def test_current_arc_parser_evidence_all_kinds_without_raw_logs(tmp_path):
 @pytest.mark.parametrize("output_version,sidecar_version,state", [
     ("1.2", "1.2", "available"),   # ARC a10e8ae0: output.yml and sidecar both 1.2
     ("1.2", "1.1", "fallback"),    # a stale sidecar from the previous contract
+    ("1.3", "1.3", "available"),   # ARC PR #1059: output.yml and sidecar both 1.3
+    ("1.3", "1.2", "fallback"),
 ])
 def test_schema_1_2_parser_evidence_pair(tmp_path, output_version, sidecar_version, state):
     store, output, document = write_parser_pair(tmp_path)

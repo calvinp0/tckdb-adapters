@@ -1,0 +1,826 @@
+adaptive_levels: null
+arc_aec_yml_sha256: null
+arc_git_commit: bc731fb45d560f5afe6383a7da0c8c3f68c678fd
+arc_version: 1.1.0
+arkane_git_commit: 6b1368de6c19204c7ce4fda6fbecb05da4a0fe0e
+arkane_level_of_theory:
+  basis: cbsb7
+  method: bmk
+  method_type: dft
+  software: gaussian
+arkane_version: 3.3.0
+atom_energy_corrections:
+  C: -37.8
+  H: -0.5
+bac_type: p
+bond_additivity_corrections:
+  C-C: -0.36
+  C-H: -0.17
+composite_method: null
+conformer_opt_level:
+  basis: 3-21g
+  method: uhf
+  method_type: wavefunction
+  software: gaussian
+conformer_sp_level: null
+datetime_completed: 2026-10-01 01:26
+datetime_started: 2023-11-15 00:13
+freq_level:
+  basis: 3-21g
+  method: uhf
+  method_type: wavefunction
+  software: gaussian
+freq_scale_factor: 1.0
+freq_scale_factor_key: null
+freq_scale_factor_source: null
+gsm_level: null
+irc_level: null
+opt_level:
+  basis: 3-21g
+  method: uhf
+  method_type: wavefunction
+  software: gaussian
+parser_evidence:
+  document_id: c2e7a1960d694acaa4783ec585d14133
+  path: parser_evidence.json
+  schema_name: arc-parser-evidence
+  schema_version: '1.0'
+project: species_thermo
+reactions: []
+rmg_database:
+  git_commit: null
+  matches_arc_rmg_db_path: true
+  path_kind: package
+  quantum_corrections_path: /prefix/share/rmgdatabase/input/quantum_corrections/data.py
+  quantum_corrections_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  version: 4.0.0
+scan_level: null
+schema_version: '1.3'
+sp_level:
+  basis: 3-21g
+  method: uhf
+  method_type: wavefunction
+  software: gaussian
+species:
+- charge: 0
+  coarse_opt_final_energy_hartree: null
+  coarse_opt_final_settings: null
+  coarse_opt_input_xyz: null
+  coarse_opt_input_xyz_isotopes: null
+  coarse_opt_log: null
+  coarse_opt_n_steps: null
+  coarse_opt_output_xyz: null
+  coarse_opt_output_xyz_isotopes: null
+  composite_input: null
+  composite_log: null
+  composite_route: null
+  conformer_energies:
+  - -307146.9602811004
+  conformer_energy_kind: electronic_kj_mol
+  conformer_energy_level:
+    basis: 3-21g
+    method: uhf
+  conformer_force_field: null
+  conformer_levels:
+  - basis: 3-21g
+    method: uhf
+  conformers:
+  - |-
+    C       0.01291800   -0.20518700    1.30205000
+    C       0.01291800    0.55494200    0.00000000
+    C       0.01291800   -0.20518700   -1.30205000
+    H       0.78881400   -0.96534900    1.30358300
+    H       0.18101100    0.45275300    2.14663400
+    H      -0.93849100   -0.71337700    1.46152300
+    H      -0.29518600    1.58454100    0.00000000
+    H      -0.93849100   -0.71337700   -1.46152300
+    H       0.18101100    0.45275300   -2.14663400
+    H       0.78881400   -0.96534900   -1.30358300
+  conformers_isotopes:
+  - - 12
+    - 12
+    - 12
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+  converged: true
+  energy_corrections:
+  - components:
+    - component_kind: atom
+      contribution_value: -0.0153
+      key: C
+      multiplicity: 3
+      parameter_unit: hartree
+      parameter_value: -37.847
+    - component_kind: atom
+      contribution_value: -0.0081
+      key: H
+      multiplicity: 7
+      parameter_unit: hartree
+      parameter_value: -0.4998
+    correction_type: atom_energy
+    level_of_theory: &id001
+      basis: cbsb7
+      method: bmk
+      method_type: dft
+      software: gaussian
+    matched_arkane_key: LevelOfTheory(method='bmk',basis='cbsb7',software='gaussian')
+    model: arkane_atom_energy
+    reference_atom_energies:
+      applied_as: subtracted
+      unit: hartree
+      values:
+        C: -37.8
+        H: -0.5
+    skipped_components: null
+    total:
+      unit: hartree
+      value: -0.0234
+  - components:
+    - component_kind: bond
+      contribution_value: -1.2145
+      key: C-H
+      multiplicity: 7
+      parameter_unit: kcal_mol
+      parameter_value: -0.1735
+    - component_kind: bond
+      contribution_value: -0.7266
+      key: C-C
+      multiplicity: 2
+      parameter_unit: kcal_mol
+      parameter_value: -0.3633
+    correction_type: bond_additivity
+    level_of_theory: *id001
+    matched_arkane_key: LevelOfTheory(method='bmk',basis='cbsb7',software='gaussian')
+    model: petersson
+    parameter_table:
+      unit: kcal_mol
+      values:
+        C-C: -0.36
+        C-H: -0.17
+    skipped_components: []
+    total:
+      unit: kcal_mol
+      value: -1.94
+  ess_software:
+    freq: gaussian
+    opt: gaussian
+    sp: gaussian
+  ess_versions:
+    freq: Gaussian 09, Revision D.01
+    opt: Gaussian 09, Revision D.01
+    sp: Gaussian 09, Revision D.01
+  formula: C3H7
+  freq_constraints: []
+  freq_final_settings: null
+  freq_hessian_method: analytic
+  freq_input: null
+  freq_log: calcs/Species/iC3H7/freq/output.out
+  freq_n_imag: 0
+  freq_polarizability_angstrom3: null
+  freq_route: '#P guess=read uhf/3-21g freq IOp(7/33=1) scf=(tight, direct) integral=(grid=ultrafine,
+    Acc2E=12) IOp(2/9=2000) scf=xqc'
+  imag_freq_cm1: null
+  imaginary_frequencies_cm1: null
+  inchi: InChI=1S/C3H7/c1-3-2/h3H,1-2H3
+  inchi_key: HNUALPPJLMYHDK-UHFFFAOYSA-N
+  irc_endpoint_direction: null
+  irc_endpoint_of: null
+  is_ts: false
+  label: iC3H7
+  levels:
+    composite: null
+    freq:
+      basis: 3-21g
+      method: uhf
+    irc: null
+    opt:
+      basis: 3-21g
+      method: uhf
+    sp:
+      basis: 3-21g
+      method: uhf
+  multiplicity: 2
+  opt_constraints: []
+  opt_converged: true
+  opt_dipole_moment_debye: 0.2355
+  opt_dipole_moment_density: SCF
+  opt_final_energy_hartree: -116.986089069
+  opt_final_settings: null
+  opt_input: null
+  opt_input_xyz: |-
+    C       0.01291800   -0.20518700    1.30205000
+    C       0.01291800    0.55494200    0.00000000
+    C       0.01291800   -0.20518700   -1.30205000
+    H       0.78881400   -0.96534900    1.30358300
+    H       0.18101100    0.45275300    2.14663400
+    H      -0.93849100   -0.71337700    1.46152300
+    H      -0.29518600    1.58454100    0.00000000
+    H      -0.93849100   -0.71337700   -1.46152300
+    H       0.18101100    0.45275300   -2.14663400
+    H       0.78881400   -0.96534900   -1.30358300
+  opt_input_xyz_isotopes:
+  - 12
+  - 12
+  - 12
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  opt_log: calcs/Species/iC3H7/opt/output.out
+  opt_n_steps: 4
+  opt_route: '#P opt=(calcfc) guess=mix uhf/3-21g IOp(2/9=2000) scf=xqc'
+  original_label: null
+  rotor_scans: []
+  scf_reference:
+    declared_number_of_radicals: null
+    freq_reference: null
+    log: null
+    measured_on_ts_guess: null
+    reference_mismatch: null
+    source: null
+    sp_reference: null
+    verdict: null
+    verdict_restricted: null
+  smiles: C[CH]C
+  sp_constraints: []
+  sp_energy_hartree: -116.986089069
+  sp_final_settings: null
+  sp_input: null
+  sp_log: calcs/Species/iC3H7/opt/output.out
+  sp_route: '#P opt=(calcfc) guess=mix uhf/3-21g IOp(2/9=2000) scf=xqc'
+  sp_spin_diagnostic:
+    log: calcs/Species/iC3H7/opt/output.out
+    s_squared: 0.7646
+    s_squared_annihilated: 0.7502
+    s_squared_expected: 0.75
+  sp_t1_diagnostic: null
+  statmech:
+    arkane_rotors_applied: 2
+    arkane_treatment: rrho_1d
+    e0_atom_corrections_applied: true
+    e0_bond_corrections_applied: true
+    e0_kj_mol: -306896.9602811004
+    external_symmetry: 1
+    harmonic_frequencies_cm1:
+    - 123.7161
+    - 147.3535
+    - 356.2644
+    - 423.1096
+    - 889.8239
+    - 1045.3526
+    - 1062.7438
+    - 1153.8839
+    - 1163.8414
+    - 1301.3756
+    - 1482.0387
+    - 1565.0737
+    - 1581.1396
+    - 1650.7497
+    - 1655.9953
+    - 1664.2764
+    - 1667.4408
+    - 3141.8646
+    - 3145.8648
+    - 3204.092
+    - 3207.8055
+    - 3249.9163
+    - 3250.9288
+    - 3325.5107
+    is_linear: false
+    optical_isomers: 1
+    point_group: C1
+    rejected_torsions: []
+    rigid_rotor_kind: asymmetric_top
+    spin_multiplicity: 2
+    torsions:
+    - atom_indices:
+      - 4
+      - 1
+      - 2
+      - 3
+      barrier_kj_mol: null
+      dimension: 1
+      pivot_atoms:
+      - 1
+      - 2
+      source_scan_key: null
+      symmetry_number: null
+      treatment: hindered_rotor
+    - atom_indices:
+      - 1
+      - 2
+      - 3
+      - 8
+      barrier_kj_mol: null
+      dimension: 1
+      pivot_atoms:
+      - 2
+      - 3
+      source_scan_key: null
+      symmetry_number: null
+      treatment: hindered_rotor
+  thermo:
+    atom_corrections_applied: true
+    atom_corrections_level:
+      basis: cbsb7
+      method: bmk
+      method_type: dft
+      software: gaussian
+    bond_corrections_applied: true
+    h298_kj_mol: 88.0
+    nasa_high:
+      coeffs:
+      - 2.0
+      - 2.0
+      - 2.0
+      - 2.0
+      - 2.0
+      - 2.0
+      - 2.0
+      tmax_k: 3000.0
+      tmin_k: 1000.0
+    nasa_low:
+      coeffs:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      tmax_k: 1000.0
+      tmin_k: 300.0
+    s298_j_mol_k: 299.0
+    standard_state_pressure_pa: null
+    thermo_points:
+    - cp_j_mol_k: 91.0
+      g_kj_mol: -1.6
+      h_kj_mol: 88.2
+      s_j_mol_k: 299.4
+      temperature_k: 300.0
+    - cp_j_mol_k: 128.0
+      g_kj_mol: -64.6
+      h_kj_mol: 107.9
+      s_j_mol_k: 345.0
+      temperature_k: 500.0
+    tmax_k: 3000.0
+    tmin_k: 300.0
+  wavefunction_stability: null
+  xyz: |-
+    C       0.01291800   -0.20518700    1.30205000
+    C       0.01291800    0.55494200    0.00000000
+    C       0.01291800   -0.20518700   -1.30205000
+    H       0.78881400   -0.96534900    1.30358300
+    H       0.18101100    0.45275300    2.14663400
+    H      -0.93849100   -0.71337700    1.46152300
+    H      -0.29518600    1.58454100    0.00000000
+    H      -0.93849100   -0.71337700   -1.46152300
+    H       0.18101100    0.45275300   -2.14663400
+    H       0.78881400   -0.96534900   -1.30358300
+  xyz_isotopes:
+  - 12
+  - 12
+  - 12
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  zpe_hartree: 0.0944532
+- charge: 0
+  coarse_opt_final_energy_hartree: null
+  coarse_opt_final_settings: null
+  coarse_opt_input_xyz: null
+  coarse_opt_input_xyz_isotopes: null
+  coarse_opt_log: null
+  coarse_opt_n_steps: null
+  coarse_opt_output_xyz: null
+  coarse_opt_output_xyz_isotopes: null
+  composite_input: null
+  composite_log: null
+  composite_route: null
+  conformer_energies:
+  - null
+  - -2.513877349413768
+  - -2.513877346085253
+  - -2.363860428436441
+  conformer_energy_kind: force_field_kcal_mol
+  conformer_energy_level: null
+  conformer_force_field: MMFF94s (rdkit)
+  conformer_levels:
+  - null
+  - null
+  - null
+  - null
+  conformers:
+  - |-
+    C       1.30429200   -0.29835500   -0.03942500
+    C       0.07546700    0.56971700    0.06371900
+    C      -1.22640700   -0.25297200   -0.04498200
+    H       2.23913800    0.11010100   -0.37442700
+    H       1.31059500   -1.27285400    0.41364800
+    H       0.07582300    1.10364500    1.01373300
+    H       0.09405400    1.32410900   -0.71596400
+    H      -1.27058500   -0.99783400    0.74238300
+    H      -2.09706700    0.38691000    0.04417600
+    H      -1.27206900   -0.76441600   -0.99942000
+  - |-
+    C       1.42545704   -0.14210886   -0.12806884
+    C       0.10018670   -0.33237650    0.52749124
+    C      -0.73383280   -1.39264171   -0.17200828
+    H       1.51985933   -0.17723260   -1.20766325
+    H       2.26319801    0.22915738    0.45146307
+    H      -0.43891261    0.62074592    0.52821015
+    H       0.25580578   -0.62407508    1.57172280
+    H      -0.22349125   -2.36179700   -0.17182524
+    H      -0.93742626   -1.11505882   -1.21182868
+    H      -1.69433274   -1.51590934    0.33854272
+  - |-
+    C       1.41497178   -0.12658380   -0.13632467
+    C       0.08752286   -0.27646284    0.52527891
+    C       0.21485609   -0.81028547    1.94227253
+    H       1.48491306   -0.17352339   -1.21725522
+    H       2.27601737    0.22364099    0.42189786
+    H      -0.53183247   -0.96000714   -0.06539157
+    H      -0.41657832    0.69550522    0.54052167
+    H       0.80149672   -0.13155826    2.57069171
+    H       0.70175926   -1.79135943    1.95361912
+    H      -0.77551736   -0.91878349    2.39592967
+  - |-
+    C       1.39103887   -0.05912605   -0.14002617
+    C       0.07342481   -0.28773898    0.51632150
+    C      -0.16326176   -1.76218177    0.79179661
+    H       1.48290254   -0.12365960   -1.21803792
+    H       2.28631058    0.06069065    0.45901079
+    H      -0.72237975    0.10190554   -0.12745678
+    H       0.03556233    0.27583378    1.45468737
+    H       0.60644779   -2.16991882    1.45594997
+    H      -0.15603165   -2.34488906   -0.13567397
+    H      -1.13576999   -1.90576053    1.27346802
+  conformers_isotopes:
+  - - 12
+    - 12
+    - 12
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+  - - 12
+    - 12
+    - 12
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+  - - 12
+    - 12
+    - 12
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+  - - 12
+    - 12
+    - 12
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+  converged: true
+  energy_corrections: []
+  ess_software:
+    freq: gaussian
+    opt: gaussian
+    sp: gaussian
+  ess_versions:
+    freq: Gaussian 09, Revision D.01
+    opt: Gaussian 09, Revision D.01
+    sp: Gaussian 09, Revision D.01
+  formula: C3H7
+  freq_constraints: []
+  freq_final_settings: null
+  freq_hessian_method: analytic
+  freq_input: null
+  freq_log: calcs/Species/nC3H7/freq/output.out
+  freq_n_imag: 0
+  freq_polarizability_angstrom3: null
+  freq_route: '#P guess=read uhf/3-21g freq IOp(7/33=1) scf=(tight, direct) integral=(grid=ultrafine,
+    Acc2E=12) IOp(2/9=2000) scf=xqc'
+  imag_freq_cm1: null
+  imaginary_frequencies_cm1: null
+  inchi: InChI=1S/C3H7/c1-3-2/h1,3H2,2H3
+  inchi_key: OCBFFGCSTGGPSQ-UHFFFAOYSA-N
+  irc_endpoint_direction: null
+  irc_endpoint_of: null
+  is_ts: false
+  label: nC3H7
+  levels:
+    composite: null
+    freq:
+      basis: 3-21g
+      method: uhf
+    irc: null
+    opt:
+      basis: 3-21g
+      method: uhf
+    sp:
+      basis: 3-21g
+      method: uhf
+  multiplicity: 2
+  opt_constraints: []
+  opt_converged: true
+  opt_dipole_moment_debye: 0.188
+  opt_dipole_moment_density: SCF
+  opt_final_energy_hartree: -116.98248909600001
+  opt_final_settings: null
+  opt_input: null
+  opt_input_xyz: |-
+    C       1.30429200   -0.29835500   -0.03942500
+    C       0.07546700    0.56971700    0.06371900
+    C      -1.22640700   -0.25297200   -0.04498200
+    H       2.23913800    0.11010100   -0.37442700
+    H       1.31059500   -1.27285400    0.41364800
+    H       0.07582300    1.10364500    1.01373300
+    H       0.09405400    1.32410900   -0.71596400
+    H      -1.27058500   -0.99783400    0.74238300
+    H      -2.09706700    0.38691000    0.04417600
+    H      -1.27206900   -0.76441600   -0.99942000
+  opt_input_xyz_isotopes:
+  - 12
+  - 12
+  - 12
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  opt_log: calcs/Species/nC3H7/opt/output.out
+  opt_n_steps: 3
+  opt_route: '#P opt=(calcfc) guess=mix uhf/3-21g IOp(2/9=2000) scf=xqc'
+  original_label: null
+  rotor_scans: []
+  scf_reference:
+    declared_number_of_radicals: null
+    freq_reference: null
+    log: null
+    measured_on_ts_guess: null
+    reference_mismatch: null
+    source: null
+    sp_reference: null
+    verdict: null
+    verdict_restricted: null
+  smiles: '[CH2]CC'
+  sp_constraints: []
+  sp_energy_hartree: -116.98248909600001
+  sp_final_settings: null
+  sp_input: null
+  sp_log: calcs/Species/nC3H7/opt/output.out
+  sp_route: '#P opt=(calcfc) guess=mix uhf/3-21g IOp(2/9=2000) scf=xqc'
+  sp_spin_diagnostic:
+    log: calcs/Species/nC3H7/opt/output.out
+    s_squared: 0.7633
+    s_squared_annihilated: 0.7501
+    s_squared_expected: 0.75
+  sp_t1_diagnostic: null
+  statmech:
+    arkane_rotors_applied: 2
+    arkane_treatment: rrho_1d
+    e0_atom_corrections_applied: false
+    e0_bond_corrections_applied: false
+    e0_kj_mol: -306887.5085524988
+    external_symmetry: 1
+    harmonic_frequencies_cm1:
+    - 123.8542
+    - 263.7707
+    - 400.4405
+    - 470.2337
+    - 832.485
+    - 910.8458
+    - 1006.9725
+    - 1097.3257
+    - 1176.69
+    - 1287.0244
+    - 1421.2504
+    - 1495.1928
+    - 1568.6415
+    - 1595.9661
+    - 1649.7949
+    - 1671.8176
+    - 1674.9457
+    - 3147.8926
+    - 3195.9359
+    - 3215.7422
+    - 3254.9953
+    - 3261.1293
+    - 3283.3885
+    - 3387.9541
+    is_linear: false
+    optical_isomers: 1
+    point_group: C1
+    rejected_torsions: []
+    rigid_rotor_kind: asymmetric_top
+    spin_multiplicity: 2
+    torsions:
+    - atom_indices:
+      - 4
+      - 1
+      - 2
+      - 3
+      barrier_kj_mol: null
+      dimension: 1
+      pivot_atoms:
+      - 1
+      - 2
+      source_scan_key: null
+      symmetry_number: null
+      treatment: hindered_rotor
+    - atom_indices:
+      - 1
+      - 2
+      - 3
+      - 8
+      barrier_kj_mol: null
+      dimension: 1
+      pivot_atoms:
+      - 2
+      - 3
+      source_scan_key: null
+      symmetry_number: null
+      treatment: hindered_rotor
+  thermo:
+    atom_corrections_applied: false
+    atom_corrections_level: null
+    bond_corrections_applied: false
+    h298_kj_mol: -306847.5085524988
+    nasa_high: null
+    nasa_low: null
+    s298_j_mol_k: 300.0
+    standard_state_pressure_pa: null
+    thermo_points: null
+    tmax_k: 3000.0
+    tmin_k: 300.0
+  wavefunction_stability: null
+  xyz: |-
+    C       1.30429200   -0.29835500   -0.03942500
+    C       0.07546700    0.56971700    0.06371900
+    C      -1.22640700   -0.25297200   -0.04498200
+    H       2.23913800    0.11010100   -0.37442700
+    H       1.31059500   -1.27285400    0.41364800
+    H       0.07582300    1.10364500    1.01373300
+    H       0.09405400    1.32410900   -0.71596400
+    H      -1.27058500   -0.99783400    0.74238300
+    H      -2.09706700    0.38691000    0.04417600
+    H      -1.27206900   -0.76441600   -0.99942000
+  xyz_isotopes:
+  - 12
+  - 12
+  - 12
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  zpe_hartree: 0.0943031
+- charge: 0
+  coarse_opt_final_energy_hartree: null
+  coarse_opt_final_settings: null
+  coarse_opt_input_xyz: null
+  coarse_opt_input_xyz_isotopes: null
+  coarse_opt_log: null
+  coarse_opt_n_steps: null
+  coarse_opt_output_xyz: null
+  coarse_opt_output_xyz_isotopes: null
+  composite_input: null
+  composite_log: null
+  composite_route: null
+  conformer_energy_kind: null
+  conformer_energy_level: null
+  conformer_force_field: null
+  conformer_levels: null
+  converged: true
+  energy_corrections: []
+  ess_software:
+    sp: molpro
+  ess_versions:
+    sp: Molpro 2015.1.37
+  formula: CH5N
+  freq_constraints: []
+  freq_final_settings: null
+  freq_hessian_method: null
+  freq_input: null
+  freq_log: null
+  freq_n_imag: null
+  freq_polarizability_angstrom3: null
+  freq_route: null
+  imag_freq_cm1: null
+  imaginary_frequencies_cm1: null
+  inchi: InChI=1S/CH5N/c1-2/h2H2,1H3
+  inchi_key: BAVYZALUXZFZLV-UHFFFAOYSA-N
+  irc_endpoint_direction: null
+  irc_endpoint_of: null
+  is_ts: false
+  label: CH3NH2
+  levels:
+    composite: null
+    freq: null
+    irc: null
+    opt: null
+    sp:
+      basis: cc-pvtz-f12
+      method: ccsd(t)-f12
+  multiplicity: 1
+  opt_constraints: []
+  opt_converged: null
+  opt_dipole_moment_debye: null
+  opt_dipole_moment_density: null
+  opt_final_energy_hartree: null
+  opt_final_settings: null
+  opt_input: null
+  opt_input_xyz: null
+  opt_input_xyz_isotopes: null
+  opt_log: null
+  opt_n_steps: null
+  opt_route: null
+  original_label: null
+  rotor_scans: []
+  scf_reference:
+    declared_number_of_radicals: null
+    freq_reference: null
+    log: null
+    measured_on_ts_guess: null
+    reference_mismatch: null
+    source: null
+    sp_reference: null
+    verdict: null
+    verdict_restricted: null
+  smiles: CN
+  sp_constraints: []
+  sp_energy_hartree: -95.737963362222
+  sp_final_settings: null
+  sp_input: null
+  sp_log: calcs/Species/CH3NH2/sp/output.out
+  sp_route: null
+  sp_spin_diagnostic: null
+  sp_t1_diagnostic: 0.0086766
+  statmech:
+    arkane_rotors_applied: null
+    arkane_treatment: null
+    e0_atom_corrections_applied: null
+    e0_bond_corrections_applied: null
+    e0_kj_mol: null
+    external_symmetry: null
+    harmonic_frequencies_cm1: null
+    is_linear: null
+    optical_isomers: null
+    point_group: C1
+    rejected_torsions: []
+    rigid_rotor_kind: asymmetric_top
+    spin_multiplicity: 1
+    torsions: []
+  thermo: null
+  wavefunction_stability: null
+  xyz: |-
+    C      -0.57380108    0.00329666   -0.03016512
+    N       0.84881709    0.06757731   -0.31341441
+    H      -1.05143180    0.95553303   -0.27694053
+    H      -1.04292735   -0.78251945   -0.62866067
+    H      -0.74607280   -0.21173327    1.02825663
+    H       1.28661526   -0.81460558   -0.05113170
+    H       1.27880067    0.78245130    0.27205580
+  xyz_isotopes:
+  - 12
+  - 14
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  zpe_hartree: null
+transition_states: []
+ts_guess_level: null

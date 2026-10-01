@@ -28,6 +28,7 @@ than the live ARC object — output.yml is the contract.
 import copy
 import os
 
+from tckdb_arc import arc13
 from tckdb_arc._logging import get_logger
 from tckdb_arc._vendor import read_yaml_file
 from tckdb_arc.config import (
@@ -525,6 +526,14 @@ def _resolve_artifact_path(*, kind, calc_type, species_record, output_doc):
     if log_key is None:
         return None
     log_path = species_record.get(log_key)
+    # Output.yml 1.3: a composite run's geometry job (the record's ``opt`` calculation) is
+    # its composite job, so its log and deck are ``composite_log`` / ``composite_input``.
+    composite_opt = (
+        not log_path and str(calc_type).lower() == 'opt'
+        and arc13.is_composite_run(species_record)
+        and arc13.software_job_key(species_record, 'opt') == 'composite')
+    if composite_opt:
+        log_path = species_record.get('composite_log')
     if not log_path:
         return None
     if kind == 'output_log':
@@ -534,7 +543,7 @@ def _resolve_artifact_path(*, kind, calc_type, species_record, output_doc):
         # per-job (so a Gaussian opt + Molpro sp run picks the right
         # deck per calc), and existence on disk has already been
         # verified at output-write time.
-        input_field = _CALC_TYPE_TO_INPUT_KEY.get(str(calc_type).lower())
+        input_field = 'composite_input' if composite_opt else _CALC_TYPE_TO_INPUT_KEY.get(str(calc_type).lower())
         if input_field:
             recorded = species_record.get(input_field)
             if recorded:
