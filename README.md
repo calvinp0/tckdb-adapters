@@ -32,15 +32,15 @@ for verified mappings, validation results, and remaining producer/server gaps.
 
 ## The shared layer (pinned)
 
-The tested contract is `tckdb-client` 0.95.x with `tckdb-schemas` 0.54.x
+The tested contract is `tckdb-client` 0.98.x with `tckdb-schemas` 0.58.x
 (the producer contract ships from 0.52,
 `python -m tckdb_schemas.contract`). CI pins both to the same tested TCKDB
 source revision (`tckdb-pin.toml`):
 
 ```bash
 pip install \
-  "tckdb-client @ git+https://github.com/calvinp0/tckdbv2.git@fd447fa09c11d12ab88a18a1d2d5ccaf09cf5a0e#subdirectory=clients/python" \
-  "tckdb-schemas @ git+https://github.com/calvinp0/tckdbv2.git@fd447fa09c11d12ab88a18a1d2d5ccaf09cf5a0e#subdirectory=schemas/python/tckdb-schemas"
+  "tckdb-client @ git+https://github.com/calvinp0/tckdbv2.git@a515fb96aba7f5f2b82ebb49304955fb16688afd#subdirectory=clients/python" \
+  "tckdb-schemas @ git+https://github.com/calvinp0/tckdbv2.git@a515fb96aba7f5f2b82ebb49304955fb16688afd#subdirectory=schemas/python/tckdb-schemas"
 ```
 
 For local development against a `TCKDB_v2` checkout, install from the local path
