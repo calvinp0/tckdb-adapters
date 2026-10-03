@@ -24,8 +24,6 @@ import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tckdb_core._logging import get_logger
-
 
 class InputError(ValueError):
     """Raised when parsing adapter input/config fails.
@@ -33,9 +31,6 @@ class InputError(ValueError):
     Used for api-key file / config errors; a standalone class so the package
     carries no producer dependency.
     """
-
-
-logger = get_logger()
 
 
 DEFAULT_PAYLOAD_DIR = "tckdb_payloads"

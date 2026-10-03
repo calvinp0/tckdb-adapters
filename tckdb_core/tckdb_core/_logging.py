@@ -1,35 +1,28 @@
-"""Package logger shared by every producer adapter built on ``tckdb_core``.
+"""Loggers for the shared upload code.
 
-Log records are emitted under a configurable logger name so a producer keeps its
-own namespace (its operators filter on it, and its tests ``caplog`` on it). The
-default is ``tckdb_core``; a producer package calls :func:`set_logger_name` once
-at import (before any record is logged) to route the shared code's records to
-its own logger. The module-level :data:`logger` is a thin proxy that resolves
-the name at call time, so modules that did ``logger = get_logger()`` at import
-follow a later :func:`set_logger_name`.
+A producer owns its logger name (its operators filter on it, its tests ``caplog``
+on it), and two producers can live in one process, so the name is **not** process
+state. The pipeline logs through the instance: :class:`~tckdb_core.uploader.TCKDBUploaderBase`
+writes to ``self._log``, which is ``logging.getLogger(self.LOGGER_NAME)`` unless a
+producer overrides the property (the ARC adapter returns its module's ``logger`` so
+a test that patches the producer module's ``logger`` still intercepts every record).
+
+Free functions in this package that log take a keyword ``log=``; when it is
+omitted they use the package's own logger, ``tckdb_core``. A producer's wrapper
+passes its logger so the records land where its operators expect them.
 """
 
 import logging
 
-_logger_name = "tckdb_core"
+#: Name of the logger the shared code uses when no producer passes one.
+CORE_LOGGER_NAME = "tckdb_core"
 
 
-class _LoggerProxy:
-    """Delegate every attribute to ``logging.getLogger(<current name>)``."""
-
-    def __getattr__(self, attr: str):
-        return getattr(logging.getLogger(_logger_name), attr)
+def get_logger(name: str | None = None) -> logging.Logger:
+    """The logger called ``name``, or the package's own (``tckdb_core``)."""
+    return logging.getLogger(name or CORE_LOGGER_NAME)
 
 
-logger = _LoggerProxy()
-
-
-def set_logger_name(name: str) -> None:
-    """Route this package's log records to the logger called ``name``."""
-    global _logger_name
-    _logger_name = name
-
-
-def get_logger():
-    """Return the shared package logger (a proxy; avoids multiple logger entries)."""
-    return logger
+def resolve_log(log: "logging.Logger | None") -> "logging.Logger":
+    """``log`` when a producer passed one, else the package logger."""
+    return log if log is not None else get_logger()

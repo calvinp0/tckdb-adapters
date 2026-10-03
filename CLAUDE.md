@@ -7,10 +7,17 @@ upload payloads. TCKDB decides the contract; the adapter conforms.
 
 `tckdb_core/` (`tckdb-adapters-core`) holds what any producer reuses verbatim: the
 payload writer, upload/sidecar/readiness pipeline, idempotency keys, level-identity
-replica, config fields. It never imports `tckdb_arc` or reads a producer's output
-format (a guard test enforces it). `tckdb_arc/` reads ARC's output and builds the
-payloads, uploading through `tckdb_core`. Install the core first:
-`pip install -e tckdb_core -e tckdb_arc`.
+replica, config fields, the shared numerics (`thermo_numerics`, `rmg_units`,
+`reaction_flatten`, `isotopes`, `composition`, `xyz`), the TCKDB rule pre-checks
+(`rules`, `ts_evidence`, `ts_evidence_rules`), the warning-code registry type
+(`warning_codes`) and the contract test kit (`tckdb_core.testing`: `contract`,
+`contract_hook`, `backend_import`, `live`). It never imports `tckdb_arc` or reads a
+producer's output format (a guard test enforces it). `tckdb_arc/` reads ARC's output
+and builds the payloads, uploading through `tckdb_core`; its own warning codes are
+`tckdb_arc/warning_codes.py` (`docs/contract/WARNING_CODES.md` is generated from it:
+`python tools/gen_warning_codes.py`). Install the core first:
+`pip install -e tckdb_core -e tckdb_arc`. `TARGET_SCHEMAS_LINE` lives once, in
+`tckdb_core/tckdb_core/testing/contract.py`.
 
 ## Read the producer contract before changing a mapping
 
@@ -30,9 +37,11 @@ adapter conforms.
 In the adapter's tests, validate every payload the adapter builds against the
 shipped JSON Schema for its route, e.g.
 `jsonschema.Draft202012Validator(tckdb_schemas.contract.json_schema("ThermoUploadRequest")).validate(payload)`,
-and pin the tckdb-schemas version the tests ran against. Here that is
+and pin the tckdb-schemas version the tests ran against. The kit is
+`tckdb_core.testing.contract` / `.contract_hook` (the pin, `TARGET_SCHEMAS_LINE`, is the
+one line in `tckdb_core/tckdb_core/testing/contract.py`); the ARC wiring is
 `tckdb_arc/tests/_contract.py`, `tckdb_arc/tests/conftest.py` and
-`tckdb_arc/tests/test_contract_pin.py`. The conftest hook checks the four
+`tckdb_arc/tests/test_contract_pin.py` (twin: `tckdb_core/tests/test_core_contract_pin.py`). The conftest hook checks the four
 whole-request builders (conformer, computed-species, computed-reaction,
 transition-state) and the artifact request bodies with the route's published
 pydantic model and the shipped JSON Schema; use `contract_validate` where a test

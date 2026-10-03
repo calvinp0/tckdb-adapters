@@ -15,10 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
-from tckdb_core._logging import get_logger
-
-
-logger = get_logger()
+from tckdb_core._logging import resolve_log
 
 
 _VALID_KINDS: frozenset[str] = frozenset({
@@ -74,28 +71,29 @@ class TCKDBCalculationConstraint:
         )
 
 
-def _validate(c: TCKDBCalculationConstraint) -> bool:
+def _validate(c: TCKDBCalculationConstraint, log=None) -> bool:
     """Return True if ``c`` is internally consistent for TCKDB emission.
 
     Validates that the kind is recognised, that the right number of atom
     slots are filled, and that all filled atom indices are 1-based ints.
-    Logs a warning and returns False when invalid — the caller drops the
-    constraint and continues.
+    Logs a warning (to ``log``, else the package logger) and returns False when
+    invalid — the caller drops the constraint and continues.
     """
+    log = resolve_log(log)
     if c.constraint_kind not in _VALID_KINDS:
-        logger.warning("TCKDB constraint: unknown kind %r; dropping",
+        log.warning("TCKDB constraint: unknown kind %r; dropping",
                        c.constraint_kind)
         return False
     expected = _ATOMS_PER_KIND[c.constraint_kind]
     indices = [c.atom1_index, c.atom2_index, c.atom3_index, c.atom4_index]
     filled = [i for i in indices if i is not None]
     if len(filled) != expected:
-        logger.warning("TCKDB constraint: kind %s expects %d atom indices, "
+        log.warning("TCKDB constraint: kind %s expects %d atom indices, "
                        "got %d; dropping", c.constraint_kind, expected, len(filled))
         return False
     for idx in filled:
         if not isinstance(idx, int) or idx < 1:
-            logger.warning("TCKDB constraint: non-positive or non-integer "
+            log.warning("TCKDB constraint: non-positive or non-integer "
                            "atom index %r; dropping", idx)
             return False
     return True
@@ -103,6 +101,7 @@ def _validate(c: TCKDBCalculationConstraint) -> bool:
 
 def serialize_constraints(
     constraints: Iterable[TCKDBCalculationConstraint | Mapping[str, Any]],
+    log=None,
 ) -> list[dict[str, Any]]:
     """Serialize an iterable of constraints into TCKDB payload shape.
 
@@ -129,15 +128,17 @@ def serialize_constraints(
             'target_value': float | omitted,
         }
 
-    Returns ``[]`` when the input is empty or every entry is invalid.
+    Returns ``[]`` when the input is empty or every entry is invalid. Dropped
+    entries are logged to ``log`` (a producer passes its own logger), else to the
+    package logger.
     """
     out: list[dict[str, Any]] = []
     next_index = 1
     for raw in constraints:
-        c = _coerce(raw)
+        c = _coerce(raw, log)
         if c is None:
             continue
-        if not _validate(c):
+        if not _validate(c, log):
             continue
         entry: dict[str, Any] = {
             'constraint_index': next_index,
@@ -159,6 +160,7 @@ def serialize_constraints(
 
 def _coerce(
     raw: TCKDBCalculationConstraint | Mapping[str, Any],
+    log=None,
 ) -> TCKDBCalculationConstraint | None:
     """Coerce a parser-dict OR existing dataclass instance into the dataclass.
 
@@ -178,10 +180,11 @@ def _coerce(
     dataclass instance is exempt — it is never produced by an ARC parser,
     only by a caller that already normalized the indices itself.
     """
+    log = resolve_log(log)
     if isinstance(raw, TCKDBCalculationConstraint):
         return raw
     if not isinstance(raw, Mapping):
-        logger.warning("TCKDB constraint: expected dataclass or mapping, "
+        log.warning("TCKDB constraint: expected dataclass or mapping, "
                        "got %s; dropping", type(raw).__name__)
         return None
     kind = raw.get('constraint_kind')
@@ -196,21 +199,21 @@ def _coerce(
         }.get(str(raw.get('coordinate_type')))
         atoms = raw.get('atom_indices')
     if not isinstance(kind, str):
-        logger.warning("TCKDB constraint: missing or non-string "
+        log.warning("TCKDB constraint: missing or non-string "
                        "'constraint_kind' in %r; dropping", raw)
         return None
     if not isinstance(atoms, (list, tuple)) or not atoms:
-        logger.warning("TCKDB constraint: missing or empty 'atoms' in %r; "
+        log.warning("TCKDB constraint: missing or empty 'atoms' in %r; "
                        "dropping", raw)
         return None
     try:
         atom_ints = [int(a) for a in atoms]
     except (TypeError, ValueError):
-        logger.warning("TCKDB constraint: non-integer atom index in %r; "
+        log.warning("TCKDB constraint: non-integer atom index in %r; "
                        "dropping", raw)
         return None
     if raw.get('index_base') is None:
-        logger.warning(
+        log.warning(
             "TCKDB constraint: missing 'index_base' in %r; refusing to "
             "assume the atom indices are already 1-based (ARC's Gaussian "
             "and ORCA parsers disagree on this) — dropping. Callers with "
@@ -222,10 +225,10 @@ def _coerce(
     try:
         index_base = int(raw.get('index_base'))
     except (TypeError, ValueError):
-        logger.warning("TCKDB constraint: invalid index_base in %r; dropping", raw)
+        log.warning("TCKDB constraint: invalid index_base in %r; dropping", raw)
         return None
     if index_base not in (0, 1):
-        logger.warning("TCKDB constraint: unsupported index_base=%r; dropping", index_base)
+        log.warning("TCKDB constraint: unsupported index_base=%r; dropping", index_base)
         return None
     atom_ints = [atom - index_base + 1 for atom in atom_ints]
     target_value = raw.get('target_value')
@@ -233,7 +236,7 @@ def _coerce(
         try:
             target_value = float(target_value)
         except (TypeError, ValueError):
-            logger.warning("TCKDB constraint: non-numeric target_value %r; "
+            log.warning("TCKDB constraint: non-numeric target_value %r; "
                            "treating as absent", target_value)
             target_value = None
     return TCKDBCalculationConstraint.from_atoms(

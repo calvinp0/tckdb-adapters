@@ -13,8 +13,9 @@ findings from the server's. The producer tag is a parameter (the ARC adapter
 passes its own package name), never defaulted here, because the shared code does not know
 which producer it serves.
 
-The code table (every code an adapter can emit, with its meaning) is not here
-yet; each producer still defines its own ``_W_*`` constants.
+The code tables (every code an adapter can emit, with its meaning) are registries of
+:class:`tckdb_core.warning_codes.CodedEnum`: this package's own codes are
+:class:`~tckdb_core.warning_codes.CoreWarning`, and a producer registers its own.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ class AdapterWarning:
     def to_dict(self, producer: str) -> dict[str, Any]:
         """The sidecar dict: ``source`` first, then the context entries in order."""
         return {
-            "code": self.code,
+            "code": str(self.code),
             "message": self.message,
             "field": self.field,
             "context": {"source": f"{producer}_self_check", **self.context},

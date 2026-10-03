@@ -1,21 +1,22 @@
-"""Vendored logging shim.
+"""Package logger for ``tckdb_arc``.
 
-Replaces ``arc.common.get_logger`` for the standalone ``tckdb_arc`` package.
-ARC returns a single module-level ``logging.getLogger('arc')`` from
-``get_logger`` (see ``arc/common.py``); here we return a package-local logger
-so ``tckdb_arc`` never has to import ARC just to log.
+Replaces ``arc.common.get_logger`` for the standalone ``tckdb_arc`` package: ARC
+returns a single module-level ``logging.getLogger('arc')`` from ``get_logger``;
+here the logger is package-local, so ``tckdb_arc`` never has to import ARC just
+to log.
 
-The shared upload code in ``tckdb_core`` logs through a name-configurable logger;
-pointing it at ``tckdb_arc`` here keeps every record it emits for an ARC run
-under the ``tckdb_arc`` logger, as it was before the code moved.
+The shared upload pipeline in ``tckdb_core`` logs through the instance
+(``TCKDBAdapter._log``, bound to ``tckdb_arc.adapter.logger``) and through the
+``log=`` argument of its free functions, so every record it emits for an ARC run
+lands under the ``tckdb_arc`` logger with no process-global state.
 """
 
 import logging
 
-from tckdb_core._logging import set_logger_name
+#: Name of the logger every ``tckdb_arc`` record goes to.
+LOGGER_NAME = "tckdb_arc"
 
-logger = logging.getLogger("tckdb_arc")
-set_logger_name("tckdb_arc")
+logger = logging.getLogger(LOGGER_NAME)
 
 
 def get_logger() -> logging.Logger:

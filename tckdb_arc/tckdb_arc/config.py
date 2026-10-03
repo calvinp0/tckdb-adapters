@@ -34,7 +34,6 @@ from tckdb_core.config import (  # noqa: F401  (re-exported for backward compati
     InputError,
     TCKDBArtifactConfig as _CoreArtifactConfig,
     TCKDBConfig as _CoreConfig,
-    _read_tckdb_api_key_from_env_file,
     resolve_tckdb_api_key,
 )
 

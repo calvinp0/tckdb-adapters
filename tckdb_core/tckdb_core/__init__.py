@@ -5,4 +5,4 @@ builds TCKDB payloads; everything after that, and the helpers every producer
 shares, lives here. See the package README for what belongs in this package.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
