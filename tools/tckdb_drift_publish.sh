@@ -113,7 +113,7 @@ cat > "$tmp/pr.md" <<BODY
 Automated bump by \`tckdb-drift.yml\` (run: ${RUN_URL}).
 
 - tckdb-schemas ${SCHEMAS}, tckdb-client ${CLIENT}, TCKDB ${SHA}
-- \`tools/tckdb_drift.py --bump\` moved the pyproject bounds, \`TARGET_SCHEMAS_LINE\`, \`tckdb-pin.toml\`, the README install lines and version sentences, and the adapter patch version.
+- \`tools/tckdb_drift.py --bump\` moved the pyproject bounds (\`tckdb_arc\` and \`tckdb_core\`), \`TARGET_SCHEMAS_LINE\`, \`tckdb-pin.toml\`, the README install lines and version sentences, and the adapter patch version.
 
 ### What the bot already did
 It ran the full test suite against the new packages with the target already moved, and it passed. It did not read the contract change: that is your job. Read the \`--since\` changelog below (and \`python -m tckdb_schemas.contract --print\`), decide whether the adapter handles what moved, then merge or close. CI on this PR re-runs the suite.
@@ -134,7 +134,7 @@ git config user.email "$BOT_EMAIL"
 BASE_SHA="$(git rev-parse HEAD)"
 python tools/tckdb_drift.py --bump --sha "$SHA" --schemas "$SCHEMAS" --client "$CLIENT"
 git switch -C "$BRANCH"
-git add tckdb_arc/pyproject.toml tckdb_arc/tests/_contract.py tckdb_arc/README.md tckdb-pin.toml README.md
+git add tckdb_arc/pyproject.toml tckdb_core/pyproject.toml tckdb_arc/tests/_contract.py tckdb_arc/README.md tckdb-pin.toml README.md
 git diff --cached --quiet || git commit -q -m "$TITLE"
 
 pushed=false

@@ -3,6 +3,15 @@
 Producer adapters that turn a tool's output (ARC today, `tckdb_arc/`) into TCKDB
 upload payloads. TCKDB decides the contract; the adapter conforms.
 
+## Layout
+
+`tckdb_core/` (`tckdb-adapters-core`) holds what any producer reuses verbatim: the
+payload writer, upload/sidecar/readiness pipeline, idempotency keys, level-identity
+replica, config fields. It never imports `tckdb_arc` or reads a producer's output
+format (a guard test enforces it). `tckdb_arc/` reads ARC's output and builds the
+payloads, uploading through `tckdb_core`. Install the core first:
+`pip install -e tckdb_core -e tckdb_arc`.
+
 ## Read the producer contract before changing a mapping
 
 Before changing any mapping from a producer's output to a TCKDB payload, read the

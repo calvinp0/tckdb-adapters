@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tckdb-adapters-core"
+version = "0.1.0"
+description = "Producer-agnostic core of the TCKDB upload adapters (payload writer, upload pipeline, idempotency, level identity)."
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+dependencies = [
+    "tckdb-client>=0.111,<0.112",   # tested transport + replay contract
+    "tckdb-schemas>=0.73,<0.74", # the producer contract module ships from 0.52
+]
+
+[project.optional-dependencies]
+test = ["pytest", "jsonschema>=4.18"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tckdb_core*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

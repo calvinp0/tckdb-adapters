@@ -80,6 +80,7 @@ jobs:
             python -m pip install --upgrade pip &&
             pip install "$(sed -n 's/^TCKDB_CLIENT_SPEC=//p' "$RUNNER_TEMP/specs")" \
                         "$(sed -n 's/^TCKDB_SCHEMAS_SPEC=//p' "$RUNNER_TEMP/specs")" &&
+            pip install -e "./tckdb_core[test]" &&
             pip install -e "./tckdb_arc[test]"
           } > "$RUNNER_TEMP/install.log" 2>&1 || result=install-failed
 
@@ -89,7 +90,7 @@ jobs:
             || echo "(could not produce the --since output; see the run log)" >> "$RUNNER_TEMP/since.md"
 
           if [ "$result" = pass ]; then
-            (cd tckdb_arc && pytest -q -rfE -p no:cacheprovider) > "$RUNNER_TEMP/pytest.log" 2>&1 || result=fail
+            (cd tckdb_arc && pytest -q -rfE -p no:cacheprovider tests ../tckdb_core/tests) > "$RUNNER_TEMP/pytest.log" 2>&1 || result=fail
             {
               echo '```'
               grep -E '^(FAILED|ERROR) ' "$RUNNER_TEMP/pytest.log" | head -40 | cut -c1-300

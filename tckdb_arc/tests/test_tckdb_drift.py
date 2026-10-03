@@ -101,6 +101,9 @@ def test_bump_rewrites_only_the_pins_and_patch(root):
 
     assert drift.pinned_line(after[drift.ADAPTER_PYPROJECT], "tckdb-schemas") == (0, 58)
     assert drift.pinned_line(after[drift.ADAPTER_PYPROJECT], "tckdb-client") == (0, 98)
+    assert drift.pinned_line(after[drift.CORE_PYPROJECT], "tckdb-schemas") == (0, 58)
+    assert drift.pinned_line(after[drift.CORE_PYPROJECT], "tckdb-client") == (0, 98)
+    assert drift.adapter_version(after[drift.CORE_PYPROJECT]) == drift.adapter_version(before[drift.CORE_PYPROJECT])
     assert "TARGET_SCHEMAS_LINE = (0, 58)" in after[drift.CONTRACT_PY]
     assert drift.read_pin_file(after[drift.PIN_FILE])["sha"] == NEW_SHA
     assert NEW_SHA in after[drift.README]
@@ -267,3 +270,32 @@ def test_install_specs_come_from_the_pin_file(root, capsys):
     assert f"TCKDB_SCHEMAS_SPEC=tckdb-schemas @ git+{pin['repo']}@{pin['sha']}#subdirectory={pin['schemas_subdir']}" in out
     assert drift.run_install_specs(root, NEW_SHA) == 0
     assert NEW_SHA in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("package", ["tckdb-schemas", "tckdb-client"])
+def test_a_stale_core_pyproject_reports_drift_in_check(root, monkeypatch, package):
+    """Core pins the same packages as the adapter, so a stale core pin is drift."""
+    path = root / drift.CORE_PYPROJECT
+    text = path.read_text()
+    # Move core one minor behind the adapter's pin for this package.
+    line = drift.pinned_line(text, package)
+    older = (line[0], line[1] - 1)
+    text = re.sub(rf'"{package}[^"]*"', f'"{package}{drift.bound_for(older)}"', text)
+    path.write_text(text)
+    assert drift.read_pins(root)["schemas_line" if package == "tckdb-schemas" else "client_line"] == older
+
+    pin = drift.read_pin_file((root / drift.PIN_FILE).read_text())
+    available = {
+        f"{pin['schemas_subdir']}/pyproject.toml": '[project]\nversion = "%d.%d.9"\n' % fx.PINNED_SCHEMAS,
+        f"{pin['client_subdir']}/pyproject.toml": '[project]\nversion = "%d.%d.9"\n' % fx.PINNED_CLIENT,
+    }
+    monkeypatch.setattr(drift, "resolve_sha", lambda repo, ref: fx.OLD_SHA)
+    monkeypatch.setattr(drift, "fetch_files", lambda repo, sha, paths: available)
+    assert drift.run_check(root, None, "main") == drift.EXIT_DRIFT
+
+
+def test_bump_repairs_a_core_pin_that_lags_the_adapter(root):
+    path = root / drift.CORE_PYPROJECT
+    path.write_text(path.read_text().replace(">=0.54,<0.55", ">=0.53,<0.54"))
+    drift.run_bump(root, fx.OLD_SHA, "0.54.0", "0.95.0")
+    assert drift.pinned_line(path.read_text(), "tckdb-schemas") == fx.PINNED_SCHEMAS

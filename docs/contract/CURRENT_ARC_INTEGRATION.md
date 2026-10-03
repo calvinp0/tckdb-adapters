@@ -969,3 +969,15 @@ The pinned pre-`core_treatment` hashes of TCKDB's `test_level_of_theory_core_tre
 the backend's own pure `app.chemistry` modules (and the real `_level_of_theory_hash` where the backend's dependencies are
 installed). CI clones `backend/app/chemistry` at the pinned sha and sets `TCKDB_BACKEND_PATH` and `TCKDB_REQUIRE_BACKEND=1`
 (a missing backend then fails instead of skipping); locally, point `TCKDB_BACKEND_PATH` at a TCKDB checkout's `backend/`.
+
+## Core extraction (adapter 0.11.0, batch L1)
+
+No mapping changed. The producer-agnostic half of the adapter moved to `tckdb_core/` (`tckdb-adapters-core` 0.1.0):
+the payload writer, idempotency-key composition (namespace passed in), constraints, the level-identity replica
+(`tckdb_core/level_rules.py`; its pinned-hash and backend-corpus tests moved to `tckdb_core/tests/test_level_rules.py`),
+the config fields and API-key resolution, and the upload / sidecar / readiness / artifact-batch pipeline
+(`TCKDBUploaderBase`). `tckdb_arc` re-exports every moved name, so the paths named above still resolve. Every payload,
+sidecar, warning, key and log line is byte-identical to 0.10.0: all three upload modes, over eight fixtures, with an
+accepting, a refusing and an offline client, were built at the 0.10.0 commit and at 0.11.0 and the JSON compared (an
+empty diff). Left for the next batch: the NASA and thermo-point builders, unit tables, result flattening, the warning
+code table, and the contract test kit.

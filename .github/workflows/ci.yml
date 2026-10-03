@@ -54,12 +54,25 @@ jobs:
           echo "TCKDB_BACKEND_PATH=$RUNNER_TEMP/tckdb/backend" >> "$GITHUB_ENV"
           echo "TCKDB_REQUIRE_BACKEND=1" >> "$GITHUB_ENV"
 
+      - name: Install tckdb-adapters-core (editable, before tckdb-arc)
+        # tckdb-arc depends on tckdb-adapters-core (not on PyPI yet); the editable
+        # install of ../tckdb_core satisfies that requirement for the next step.
+        run: pip install -e "../tckdb_core[test]"
+
       - name: Install tckdb-arc (base + test extra)
         run: pip install -e ".[test]"
 
       - name: Run the base (no-ARC) test suite
         # ARC is NOT installed here, so the arc-coupled tests self-skip via
         # pytest.importorskip("arc"). The base suite must be fully green.
+        run: pytest -q
+
+      - name: Run the tckdb-adapters-core test suite
+        # The producer-agnostic tests (level-identity replica, payload writer, API
+        # key resolution, upload pipeline, the "no ARC in core" guard) live with the
+        # package. TCKDB_BACKEND_PATH / TCKDB_REQUIRE_BACKEND from the step above
+        # apply to its backend comparison too.
+        working-directory: tckdb_core
         run: pytest -q
 
   # ── ARC-coupled leg (documented, NOT run in CI) ──────────────────────────

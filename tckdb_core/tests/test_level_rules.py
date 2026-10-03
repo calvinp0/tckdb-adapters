@@ -1,4 +1,4 @@
-"""``tckdb_arc.level_rules``: the replica of TCKDB's level-of-theory identity (0.67-0.69).
+"""``tckdb_core.level_rules``: the replica of TCKDB's level-of-theory identity (0.67-0.69).
 
 The pinned hashes are TCKDB's own (``backend/tests/services/
 test_level_of_theory_core_treatment_hash.py::_PRE_P4_HASHES``, produced by the
@@ -8,7 +8,7 @@ every level spelled that way on the server.
 
 import pytest
 
-from tckdb_arc.level_rules import (
+from tckdb_core.level_rules import (
     dispersion_identity_key,
     level_hash,
     level_identity_keys,
