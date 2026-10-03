@@ -1115,6 +1115,28 @@ class TestUploadOutcomeCalcRefs(unittest.TestCase):
         self.assertEqual(outcome.additional_calculations[0]["calculation_id"], 11)
         self.assertEqual(outcome.additional_calculations[1]["type"], "sp")
 
+    def test_public_refs_reach_the_outcome_and_the_sidecar(self):
+        cfg = TCKDBConfig(
+            enabled=True, base_url="http://x", payload_dir=self.tmp,
+            api_key_env="X_TCKDB_API_KEY", project_label="proj-A",
+        )
+        client = _StubClient(response=_StubResponse({
+            "id": 1,
+            "submission_id": 5,
+            "submission_ref": "sub_abcd2345",
+            "primary_calculation": {"calculation_id": 10, "calculation_ref": "calc_aaaa2222", "type": "opt"},
+            "calculation_key_refs": {"opt": "calc_aaaa2222", "freq": "calc_bbbb3333"},
+        }))
+        adapter = TCKDBAdapter(cfg, client_factory=lambda c, k: client)
+        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+            outcome = adapter.submit_from_output(output_doc=_fake_output_doc(), species_record=_fake_record())
+        self.assertEqual(outcome.submission_ref, "sub_abcd2345")
+        self.assertEqual(outcome.calculation_key_refs, {"opt": "calc_aaaa2222", "freq": "calc_bbbb3333"})
+        self.assertEqual(outcome.primary_calculation["calculation_ref"], "calc_aaaa2222")
+        sidecar = json.loads(outcome.sidecar_path.read_text())
+        self.assertEqual(sidecar["public_refs"]["submission_refs"], ["sub_abcd2345"])
+        self.assertEqual(sidecar["public_refs"]["calculation_refs"], ["calc_aaaa2222", "calc_bbbb3333"])
+
     def test_calc_refs_default_when_response_omits_them(self):
         cfg = TCKDBConfig(
             enabled=True, base_url="http://x", payload_dir=self.tmp,

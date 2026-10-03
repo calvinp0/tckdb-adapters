@@ -109,11 +109,15 @@ class ArtifactSidecarMetadata:
 
     endpoint: str
     idempotency_key: str
-    calculation_id: int
+    # The calculation's ``calc_`` ref names it in the URL and the idempotency key
+    # (adapter 0.10); ``calculation_id`` is kept for a response that carried no ref
+    # and for pre-0.10 sidecars.
+    calculation_id: int | None
     kind: str
     filename: str
     sha256: str
     bytes: int
+    calculation_ref: str | None = None
     source_path: str | None = None
     payload_kind: str = "calculation_artifact"
     bundle_format_version: str = BUNDLE_FORMAT_VERSION
@@ -362,7 +366,7 @@ class PayloadWriter:
         self,
         *,
         species_label: str,
-        calculation_id: int,
+        calculation_id: int | None,
         kind: str,
         filename: str,
         sha256: str,
@@ -371,6 +375,7 @@ class PayloadWriter:
         idempotency_key: str,
         source_path: str | None = None,
         base_url: str | None = None,
+        calculation_ref: str | None = None,
     ) -> WrittenArtifact:
         """Write a ``pending`` artifact sidecar before the network call.
 
@@ -384,13 +389,15 @@ class PayloadWriter:
         directory.mkdir(parents=True, exist_ok=True)
         safe_species = _safe_label(species_label)
         safe_kind = _safe_label(kind)
-        sidecar_name = f"{safe_species}.calc{calculation_id}.{safe_kind}{self.ARTIFACT_SIDECAR_SUFFIX}"
+        target = _safe_label(calculation_ref) if calculation_ref else f"calc{calculation_id}"
+        sidecar_name = f"{safe_species}.{target}.{safe_kind}{self.ARTIFACT_SIDECAR_SUFFIX}"
         sidecar_path = directory / sidecar_name
 
         sidecar = ArtifactSidecarMetadata(
             endpoint=endpoint,
             idempotency_key=idempotency_key,
             calculation_id=calculation_id,
+            calculation_ref=calculation_ref,
             kind=kind,
             filename=filename,
             sha256=sha256,
@@ -400,6 +407,27 @@ class PayloadWriter:
         )
         self._write_json_atomic(sidecar_path, sidecar.to_json())
         return WrittenArtifact(sidecar_path=sidecar_path, sidecar=sidecar)
+
+    def read_legacy_artifact_sidecar(
+        self, *, species_label: str, calculation_id: int | None, kind: str,
+    ) -> tuple[Path, dict[str, Any]] | None:
+        """The pre-0.10 sidecar of this artifact (named by the integer id, ``calc{int}``), if any.
+
+        Adapter 0.10 names the sidecar after the calculation's ``calc_`` ref, so a project
+        uploaded before 0.10 keeps its artifact sidecars under the integer-id name. Returns
+        ``(path, sidecar json)``, or ``None`` when there is none or it is unreadable.
+        """
+        if calculation_id is None:
+            return None
+        directory = self._root / self.ARTIFACT_SUBDIR
+        name = (f"{_safe_label(species_label)}.calc{calculation_id}."
+                f"{_safe_label(kind)}{self.ARTIFACT_SIDECAR_SUFFIX}")
+        path = directory / name
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+        return (path, data) if isinstance(data, dict) else None
 
     def update_artifact_sidecar(
         self, sidecar_path: Path, sidecar: ArtifactSidecarMetadata

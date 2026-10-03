@@ -49,6 +49,10 @@ and schema versions; their percentages are not current coverage measurements.
 - **Adapter 0.9.0, batch J (ARC output 1.3 at PR #1059 head `ebc88ec8`):** per-occurrence reaction species labels, the TS
   atom map as TCKDB's `atom_map` on both routes, `nmd_forced`, observed conformer programs, `bac_type` check. See
   [Output schema 1.3 at ebc88ec8 (adapter 0.9.0, batch J)](#output-schema-13-at-ebc88ec8-adapter-090-batch-j).
+- **Adapter 0.10.0, batch K (tckdb-schemas 0.73, client 0.111, TCKDB `96b71b09`):** public refs on artifact targets,
+  the frequency level on BAC schemes, the `//` and correction-table method guards, a faithful replica of the
+  level-of-theory identity hash, and a G4 / G4MP2 Gaussian 16 Rev A.03 stopgap. See
+  [tckdb-schemas 0.65 to 0.73 (adapter 0.10.0, batch K)](#tckdb-schemas-065-to-073-adapter-0100-batch-k).
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
@@ -493,8 +497,8 @@ with a GSM guess and of species uploads whose screened-conformer or level attrib
   for a composite method (no composite calculation is sent), when the level ARC states is
   another than the linked calculation's, when an adaptive run left it unattributable, or when
   no sp/opt is linked. The unit tests replay the backend's identity hash and link rule
-  (`tests/_backend_level_rules.py`, checked against the backend when `TCKDB_BACKEND_PATH`
-  names its `backend/`); the live gate has a case, not run here.
+  (`tests/_backend_level_rules.py`, whose hash is now `tckdb_arc/level_rules.py` since 0.10.0, checked
+  against the backend when `TCKDB_BACKEND_PATH` names its `backend/`, which CI sets); the live gate has a case, not run here.
 - **A10, `scf_stability`.** ARC runs the stability analysis once per species, from the
   optimization job: at the opt level, on the converged geometry, with the opt's own orbitals so
   its SCF reproduces the wavefunction under test (`arc/scheduler.py::run_stability_job`). The
@@ -920,3 +924,48 @@ Not consumed: `ts_atom_map.reactant_endpoint` beyond the note, and `ts_label` be
 (a record-level signal that an NEB job ran) and B17 (composite step route lines).
 
 Upgrading changes the payload hash, and so the idempotency key, only of documents that carry the new keys.
+
+## tckdb-schemas 0.65 to 0.73 (adapter 0.10.0, batch K)
+
+Read first: `python -m tckdb_schemas.contract --since 0.64.0` (the whole changelog) and `--print` for
+`EnergyCorrectionSchemeRef`, `LevelOfTheoryRef`, `CalculationUploadRef`, `ArtifactsUploadResult` and
+`ComputedReactionUploadResult`. The pin moved with `tools/tckdb_drift.py --bump` (TCKDB `96b71b09`, schemas 0.73.0,
+client 0.111.0). **No test broke on the bump**: every payload accepted before is accepted unchanged by 0.65-0.73 (they only
+add), and the contract-pin test passes against the installed 0.73. Nothing the adapter sends changes except where an item
+below says so. The golden corpus hashes are unchanged.
+
+| TCKDB release / item | What the adapter does |
+|---|---|
+| 0.65 (#615, atoms with an `sp` primary on the network route) | Not applicable: the adapter never calls `/uploads/networks/pdep`. |
+| **6.2** public refs (0.57 + #599): `submission_ref`, `calculation_ref`, `calculation_key_refs` | **Done.** `UploadOutcome.submission_ref` and `.calculation_key_refs` (computed-reaction) carry what the response states; every `*_ref` is also in the sidecar's `public_refs` (`calculation_key_refs` values land under `calculation_refs`). The sweep names an artifact target by `primary_calculation.calculation_ref`; the URL (`/calculations/{calc_ref}/artifacts`), the batch idempotency key and the sidecar file name are built from the ref. The integer `calculation_id` is a fallback only for a response that carries no ref: it is used then with a `calculation_ref_not_returned` warning (log and sidecar) and never preferred. The adapter makes no rights-attestation call (neither does tckdb-client 0.111), so there is nothing to feed a `sub_` ref to; the ref is on the outcome for a caller that attests. The live-gate read helper (`tests/integration/_live.py::commit_probe`) still reads by integer id: `GET /calculations/{id}` takes an integer. |
+| artifact idempotency key | `(calculation_ref, artifact_kind, artifact_sha256)`, shape `arc:<project>:<species>:artifact:<calc_ref>:<kind>:<sha16>`. A sidecar written before 0.10 holds an integer-id key, so a new key would not replay and TCKDB keeps one `calculation_artifact` row per upload even for identical bytes (`backend/app/db/models/calculation.py`): re-posting would **duplicate the row**. Before building a ref-keyed artifact upload the adapter reads the pre-0.10 sidecar of the same artifact (`<species>.calc<int>.<kind>.artifact.meta.json`; the response still carries the integer id) and, if its status is `uploaded`, its sha256 matches and it was posted to the same `base_url` (when both state one), skips the artifact as done (`_legacy_uploaded_artifact`). No sidecar, a pending or failed one, or different bytes: upload under the ref key. Replaying a pre-0.10 sidecar itself (the replay tool) still posts under its old key. See `tckdb_arc/README.md`. |
+| **6.4** correction schemes (0.66): `scheme.frequency_level_of_theory` | **Done.** Sent only on a `bac_petersson` / `bac_melius` scheme whose record's `matched_arkane_key` (ARC 1.3 export) is a `CompositeLevelOfTheory(freq=..., energy=...)`, with the key's freq half (`_bac_key_frequency_level`). Contract 0.66: a scheme Arkane keys on one level, and every atom-energy scheme, send nothing new; in RMG-database `quantum_corrections/data.py` only 4 of 47 Petersson keys are composite-keyed, so most BAC schemes carry none. ARC's freq-job level (`levels.freq`, or the header `freq_level` for a record without `levels`, see `_bac_frequency_level`) is only a cross-check: if it disagrees with the key's freq half (method, basis, software when both state it, compared ignoring case and punctuation) the field is omitted with a `bac_frequency_level_conflict` warning; a composite key with no ARC freq level sends the key's half. A pre-1.3 record has no `matched_arkane_key` and so sends none. **Identity consequence:** the field joins scheme identity, so a composite-keyed BAC scheme deposited by an earlier adapter and the same table now sent with a frequency level are two schemes (one new `energy_correction_scheme` row per distinct frequency level). A frequency level equal to the energy level is stored as absent by TCKDB. |
+| `composite_delta_prefer_scheme_terms` (0.66) | **Never triggered.** The adapter only ever sends `application_role` `aec_total` and `bac_total`; pinned by `tests/test_correction_scheme_levels.py` (behaviour over the three routes, and the adapter source does not name `composite_delta`). |
+| **0.67** `//` in `level_of_theory.method` (`level_of_theory_method_is_compound`) | **Proved absent.** Every level the adapter sends comes through `_arc_level_to_tckdb_lot` (calculation levels, conformer/scan/IRC/TS-guess levels, scheme levels, the frequency-scale-factor level, the energy-level declaration). It now refuses a `//` method (returns no level and logs `level_method_is_compound`; the callers already treat "no level" as "not sent / not built"), since which half of an `energy//geometry` pair belongs to a job is not stated. ARC itself splits the shorthand on input (`arc/main.py`), so this guards a hand-edited or foreign document. `tests/test_method_guards.py` mutates every level slot of the 1.3 fixture to a compound method and builds all five routes: no payload carries a `//` method. `atom_corrections_level` and the header `arkane_level_of_theory` are only compared, never sent. |
+| 0.67 correction-table names (`level_of_theory_method_names_correction_table`) | **Done.** Where ARC's Arkane level string is such a name (`cbs-qb3-paraskevas`, `cbsqb32023`, recognised by the shipped `tckdb_schemas.fragments.refs.correction_table_method_stem`), the scheme's `level_of_theory.method` is the stem and **the scheme's `name` is the table name** as ARC states it (the contract names no other field for it: `name` is the scheme's label and part of its identity, `note` is not). The adapter warns `correction_table_method_split` (action `correction_table_named_on_scheme`). Identity consequence: such a scheme is now `(kind, name=<table>, level=<stem>)`, instead of `(kind, name=<kind>, level=<table-as-method>)`; the stem level is the real CBS-QB3 level, not a separate level named for a table. **Calculation levels too:** ARC accepts `cbs-qb3-paraskevas` as a composite method (`arc/level.py`, `data/ess_methods.yml`) and runs it as CBS-QB3 (`arc/job/adapters/gaussian.py`), so `_arc_level_to_tckdb_lot` applies the same stem to every level it projects (calculations, thermo/statmech levels); a calculation at `cbs-qb3-paraskevas` is sent with method `cbs-qb3` and logs `correction_table_method_split` naming the original string (log only: the calculation builder has no sidecar-warnings channel, so unlike the scheme case there is no sidecar entry). Only the scheme level keeps the table string (`split_table=False`), because the scheme's `name` carries it. A level whose method contains `//` is withheld: the calculation is not built and the skip reason starts with `level_method_is_compound`. |
+| 0.68 composite schemes bound to a named method | Reads only. No payload change. |
+| 0.69-0.73 (`composite` calculation type, `sp_energy_components`, `core_treatment`, `composite_scheme`, `composite_result`) | **Not consumed: composite runs (6.3) are deferred** to a later batch, pending ARC export B18 (the composite 0 K energy as printed, separately from `e_elect` and the scaled ZPE; `ARC_TCKDB_EXPORT_BRIEF.md` A6). The adapter derives none of `e0_hartree` / `recipe_zpe_hartree` / `electronic_energy_hartree`. `core_treatment` is never sent (ARC states none). |
+| **0.71** G4 / G4MP2 logs are not compared (Gaussian 16 Rev A.03 summary labels shifted) | **Stopgap guard (6.6).** ARC's `sp_energy_hartree` for such a run is the number after the `G4(0 K)` / `G4MP2(0 K)` label, the 298 K value on that revision (9-11 kJ/mol from E0, ARC brief Bug 8). For a record with `composite_log`, whose composite level (`levels.composite`, else the header `composite_method`) is `g4` or `g4mp2` (any spelling the identity key joins) and whose `ess_versions.composite` is Gaussian 16 Revision A.03, the adapter sends no sp energy, no statmech energy links (`sp` and the `composite` role) and, on the reaction routes, no kinetics fitted from it, and strips only the E0-derived thermo content (H298, NASA polynomials, point H and G; the `_strip_enthalpy_content` path the enthalpy refusals use). S298, Cp and point S come from statmech, not E0, and are kept, as is the thermo block's provenance. It warns `g4_energy_loader_shifted_label_gaussian16_a03` per record (the message names what is withheld and what is kept) and once for the kinetics. Missing banner or method: not that case, nothing inferred. **Coverage limit:** only output 1.3 records carry `ess_versions.composite`, so a pre-1.3 document has no banner to match and the guard cannot fire on it; a G4 run on that revision in an older document is sent unguarded. It stays until ARC exports a correct E0 (B18). The AEC/BAC totals (sums of table parameters, independent of the energy) are still sent. |
+| 6.1 identity hash replica | **Rebuilt** as `tckdb_arc/level_rules.py` (below). |
+
+### The level-of-theory identity replica (`tckdb_arc/level_rules.py`)
+
+TCKDB hashes a level over normalised keys (`calculation_resolution._level_of_theory_hash`, with `level_identity_keys`),
+so two spellings the adapter might send are one level on the server. The replica moved into the package (the adapter can
+pre-check identity at build time; `tests/_backend_level_rules.py` re-exports it) and now follows TCKDB `96b71b09`:
+
+- method: strip and lower-case; whole-name aliases `wb97x-d`, `m06-2x` and the composite spellings
+  `cbsqb3`/`rocbsqb3`/`cbs4m`/`cbsapno` to their hyphenated forms and `g4(mp2)`/`g3(mp2)`/`g3(mp2)b3` to
+  `g4mp2`/`g3mp2`/`g3mp2b3`; trailing `-d3(bj)` / `-gd3bj` to `-d3bj`. `w1`/`w1u`/`w1bd`/`w1ro`, `cbs-qb3` / `rocbs-qb3` and
+  correction-table names stay apart.
+- dispersion column: `gd3bj`, `d3(bj)` to `d3bj`; `gd3`, `d30` to `d3zero`; `gd2` to `d2`; each also as Gaussian's
+  `EmpiricalDispersion=X`, `=(X)` and `(X)`; bare `d3` is its own key.
+- a recognised dispersion folded into the method (`b3lyp-d3bj`) moves into the dispersion key, only off the listed stems
+  and suffixes, and not when the column states a different dispersion (then nothing is split).
+- `core_treatment` joins the payload **only when stated**, never as a null placeholder.
+
+The pinned pre-`core_treatment` hashes of TCKDB's `test_level_of_theory_core_treatment_hash.py` are reproduced in
+`tests/test_level_rules.py`, and `test_hash_matches_the_backend` plus a method-by-dispersion corpus compare the replica with
+the backend's own pure `app.chemistry` modules (and the real `_level_of_theory_hash` where the backend's dependencies are
+installed). CI clones `backend/app/chemistry` at the pinned sha and sets `TCKDB_BACKEND_PATH` and `TCKDB_REQUIRE_BACKEND=1`
+(a missing backend then fails instead of skipping); locally, point `TCKDB_BACKEND_PATH` at a TCKDB checkout's `backend/`.

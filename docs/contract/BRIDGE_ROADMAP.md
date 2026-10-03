@@ -936,6 +936,14 @@ Requests. **ARC B17:** export `composite_step_routes` (the Link1 route lines) or
 `composite_geometry_level`. **TCKDB:** a `composite` CalculationType, or let a composite run's
 primary calculation be typed as one.
 
+**Status (adapter 0.10.0, batch K).** TCKDB 0.70 added the `composite` calculation type and a `composite_result`
+block (0.72: assembled composites). The adapter does **not** build it yet: composite runs (6.3) are deferred to a later
+batch, pending **ARC B18** (the composite 0 K energy as printed in the log, separately from `e_elect` and the scaled ZPE;
+`ARC_TCKDB_EXPORT_BRIEF.md` A6), because the adapter derives none of `e0_hartree` / `recipe_zpe_hartree` /
+`electronic_energy_hartree`. Meanwhile a G4 / G4MP2 run on Gaussian 16 Revision A.03 has its energies (sp, H298, NASA, point H/G; S298 and Cp are kept) withheld
+(`g4_energy_loader_shifted_label_gaussian16_a03`): ARC and Arkane read the shifted `G4(0 K)` label, 9-11 kJ/mol off
+(**ARC Bug 8**). See CURRENT_ARC_INTEGRATION.md, "tckdb-schemas 0.65 to 0.73".
+
 
 **What.** For CBS-QB3 or G4 runs only `paths['composite']` is set, and `output.yml` has no
 log, deck, ESS version or spin diagnostic for it.
@@ -1209,6 +1217,11 @@ hashing the method string as sent, with no alias table
 hint. The adapter should keep sending ARC's string verbatim.
 
 **Effort.** M, including a backfill of the duplicate rows.
+
+**Status (adapter 0.10.0, batch K): TCKDB resolved it** (#585, #618, #627, #630, ADR 0021): the hash is over strip +
+lower-case keys with curated, cited aliases (`wb97x-d`/`wb97xd`, `m06-2x`, the composite spellings), the dispersion
+column's own aliases and a dispersion folded into the method. The adapter still sends ARC's strings verbatim; its replica of
+the hash (`tckdb_arc/level_rules.py`) is held to TCKDB's pinned hashes and to the backend's own modules by the tests and CI.
 
 ### C6. Atoms and the computed-species primary opt ([gate])
 

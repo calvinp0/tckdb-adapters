@@ -45,7 +45,10 @@ def _handler(seen, *, warnings, replayed=False):
         body = json.loads(request.content)
         seen.append({"path": request.url.path, "body": body,
                      "idempotency_key": request.headers.get("Idempotency-Key")})
-        calculation_id = int(request.url.path.split("/")[-2])
+        # The adapter names the calculation by its calc_ ref (calc_<n> here); the
+        # integer path is the deprecated fallback.
+        handle = request.url.path.split("/")[-2]
+        calculation_id = int(handle.removeprefix("calc_"))
         headers = {"X-Request-ID": f"req-{calculation_id}"}
         if replayed:
             headers["Idempotency-Replayed"] = "true"
@@ -80,11 +83,12 @@ def _adapter(project_dir, transport):
             "http://tckdb.test/api/v1", api_key=key, transport=transport))
 
 
-def _submit(adapter, calc_id, artifacts):
+def _submit(adapter, calc_id, artifacts, *, by_ref=True):
+    ids = {"calculation_ref": f"calc_{calc_id}"} if by_ref else {"calculation_id": calc_id}
     with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
         return adapter.submit_artifact_batch_for_calculation(
             output_doc=_fake_output_doc(), species_record=_fake_record(),
-            calculation_id=calc_id, calculation_type="opt", artifacts=artifacts)
+            calculation_type="opt", artifacts=artifacts, **ids)
 
 
 def test_server_warnings_status_request_id_and_replay_reach_sidecar_and_outcome(
@@ -96,7 +100,7 @@ def test_server_warnings_status_request_id_and_replay_reach_sidecar_and_outcome(
         outcomes = _submit(_adapter(project_dir, transport), 42,
                            [("output_log", log), ("input", deck)])
     assert [o.status for o in outcomes] == ["uploaded", "uploaded"]
-    assert len(seen) == 1 and seen[0]["path"].endswith("/calculations/42/artifacts")
+    assert len(seen) == 1 and seen[0]["path"].endswith("/calculations/calc_42/artifacts")
     for outcome in outcomes:
         assert outcome.warnings == [WARNING]
         sidecar = json.loads(outcome.sidecar_path.read_text())
@@ -127,12 +131,12 @@ def test_each_item_takes_the_response_to_its_own_calculation(project):
     for calc_id, path, kind in ((1, log, "output_log"), (2, deck, "input")):
         prepared.append(adapter._prepare_artifact_upload(
             output_doc=_fake_output_doc(), species_label="ethanol",
-            calculation_id=calc_id, kind=kind, file_path=path,
+            calculation_id=None, calculation_ref=f"calc_{calc_id}", kind=kind, file_path=path,
             artifact_cfg=adapter._config.artifacts))
     with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
         outcomes = adapter._upload_artifact_batch(
             prepared=prepared, idempotency_key_prefix="arc:proj-A:ethanol:artifact")
-    assert [(o.calculation_id, o.warnings) for o in outcomes] == [(1, [WARNING]), (2, [])]
+    assert [(o.calculation_ref, o.warnings) for o in outcomes] == [("calc_1", [WARNING]), ("calc_2", [])]
     ids = [json.loads(o.sidecar_path.read_text())["request_ids"][-1]["request_id"]
            for o in outcomes]
     assert ids == ["req-1", "req-2"]
@@ -149,8 +153,8 @@ def test_requests_match_what_the_client_itself_would_send(project):
     prepared = [
         adapter._prepare_artifact_upload(
             output_doc=_fake_output_doc(), species_label="ethanol",
-            calculation_id=calc_id, kind=kind, file_path=path,
-            artifact_cfg=adapter._config.artifacts)
+            calculation_id=calc_id, calculation_ref=f"calc_{calc_id}", kind=kind,
+            file_path=path, artifact_cfg=adapter._config.artifacts)
         for calc_id, path, kind in ((7, log, "output_log"), (7, deck, "input"),
                                     (9, log, "output_log"))
     ]
@@ -189,3 +193,120 @@ def test_a_refused_batch_is_recorded_failed_with_the_server_status(project):
     sidecar = json.loads(outcome.sidecar_path.read_text())
     assert sidecar["response_status_code"] == 422
     assert sidecar["request_ids"][-1]["request_id"] == "req-refused"
+
+
+def test_without_a_ref_the_integer_id_is_the_fallback_and_is_warned_about(project, caplog):
+    project_dir, log, _ = project
+    seen = []
+    transport = httpx.MockTransport(_handler(seen, warnings={}))
+    with caplog.at_level(logging.WARNING, logger="tckdb_arc"):
+        (outcome,) = _submit(_adapter(project_dir, transport), 42, [("output_log", log)], by_ref=False)
+    assert seen[0]["path"].endswith("/calculations/42/artifacts")
+    assert outcome.status == "uploaded" and outcome.calculation_ref is None and outcome.calculation_id == 42
+    assert [w["code"] for w in outcome.warnings] == ["calculation_ref_not_returned"]
+    sidecar = json.loads(outcome.sidecar_path.read_text())
+    assert sidecar["calculation_ref"] is None and sidecar["calculation_id"] == 42
+    assert "calculation_ref_not_returned" in caplog.text
+
+
+def test_a_ref_names_the_url_the_key_and_the_sidecar_and_wins_over_the_id(project):
+    project_dir, log, _ = project
+    seen = []
+    adapter = _adapter(project_dir, httpx.MockTransport(_handler(seen, warnings={})))
+    with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+        (outcome,) = adapter.submit_artifact_batch_for_calculation(
+            output_doc=_fake_output_doc(), species_record=_fake_record(),
+            calculation_id=42, calculation_ref="calc_42", calculation_type="opt",
+            artifacts=[("output_log", log)])
+    assert seen[0]["path"].endswith("/calculations/calc_42/artifacts")
+    assert "calc_42" in seen[0]["idempotency_key"] and ":42:" not in seen[0]["idempotency_key"]
+    assert outcome.warnings == []
+    sidecar = json.loads(outcome.sidecar_path.read_text())
+    assert sidecar["calculation_ref"] == "calc_42" and sidecar["calculation_id"] == 42
+    assert "calc_42" in outcome.idempotency_key and ":artifact:42:" not in outcome.idempotency_key
+    assert "calc_42" in outcome.sidecar_path.name
+
+
+def test_the_sweep_names_artifacts_by_the_responses_calculation_ref():
+    from tckdb_arc import sweep
+
+    class _Spy:
+        def __init__(self):
+            self.calls = []
+
+        def submit_artifact_batch_for_calculation(self, **kw):
+            self.calls.append(kw)
+            return []
+
+    spy, counts, failures = _Spy(), {}, []
+    outcome = mock.Mock(
+        primary_calculation={"calculation_id": 10, "calculation_ref": "calc_aaaa", "type": "opt"},
+        additional_calculations=[{"calculation_id": 11, "type": "freq"}])
+    with mock.patch.object(sweep, "_resolve_artifact_path", return_value="x.log"):
+        sweep._sweep_artifacts_for_species(
+            adapter=spy, output_doc=_fake_output_doc(), species_record=_fake_record(), outcome=outcome,
+            counts=counts, failures=failures, kinds=("output_log",))
+    assert [(c["calculation_ref"], c["calculation_id"]) for c in spy.calls] == [("calc_aaaa", 10), (None, 11)]
+
+
+# ---- a project uploaded before 0.10 (integer-id keys and ``calc{int}`` sidecars)
+
+
+def _submit_both(adapter, calc_id, artifacts):
+    with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}):
+        return adapter.submit_artifact_batch_for_calculation(
+            output_doc=_fake_output_doc(), species_record=_fake_record(),
+            calculation_id=calc_id, calculation_ref=f"calc_{calc_id}", calculation_type="opt",
+            artifacts=artifacts)
+
+
+def _pre_0_10_upload(project_dir, log):
+    """What an adapter before 0.10 left behind: an uploaded ``calc42`` sidecar."""
+    seen = []
+    (outcome,) = _submit(_adapter(project_dir, httpx.MockTransport(_handler(seen, warnings={}))),
+                         42, [("output_log", log)], by_ref=False)
+    assert outcome.status == "uploaded" and "calc42" in outcome.sidecar_path.name
+    return outcome.sidecar_path
+
+
+def test_an_artifact_a_pre_0_10_sidecar_records_as_uploaded_is_not_posted_again(project):
+    project_dir, log, deck = project
+    legacy = _pre_0_10_upload(project_dir, log)
+    seen = []
+    adapter = _adapter(project_dir, httpx.MockTransport(_handler(seen, warnings={})))
+    outcomes = _submit_both(adapter, 42, [("output_log", log), ("input", deck)])
+    by_kind = {o.kind: o for o in outcomes}
+    assert by_kind["output_log"].status == "skipped"
+    assert legacy.name in by_kind["output_log"].skip_reason and "pre-0.10" in by_kind["output_log"].skip_reason
+    # the other artifact has no old sidecar: it uploads under the ref key
+    assert by_kind["input"].status == "uploaded"
+    assert [b["kind"] for s in seen for b in s["body"]["artifacts"]] == ["input"]
+    assert "calc_42" in by_kind["input"].idempotency_key
+    assert json.loads(legacy.read_text())["status"] == "uploaded"       # the old sidecar is untouched
+
+
+@pytest.mark.parametrize("change", ["pending", "other_bytes", "other_server"])
+def test_a_pre_0_10_sidecar_that_does_not_prove_the_upload_does_not_skip(project, change):
+    project_dir, log, _ = project
+    legacy = _pre_0_10_upload(project_dir, log)
+    data = json.loads(legacy.read_text())
+    if change == "pending":
+        data["status"] = "pending"
+    elif change == "other_bytes":
+        data["sha256"] = "0" * 64
+    else:
+        data["base_url"] = "http://elsewhere.test/api/v1"
+    legacy.write_text(json.dumps(data))
+    seen = []
+    adapter = _adapter(project_dir, httpx.MockTransport(_handler(seen, warnings={})))
+    (outcome,) = _submit_both(adapter, 42, [("output_log", log)])
+    assert outcome.status == "uploaded"
+    assert len(seen) == 1 and "calc_42" in outcome.sidecar_path.name
+
+
+def test_without_a_pre_0_10_sidecar_the_ref_keyed_upload_proceeds(project):
+    project_dir, log, _ = project
+    seen = []
+    adapter = _adapter(project_dir, httpx.MockTransport(_handler(seen, warnings={})))
+    (outcome,) = _submit_both(adapter, 42, [("output_log", log)])
+    assert outcome.status == "uploaded" and len(seen) == 1
