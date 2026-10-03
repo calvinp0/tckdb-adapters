@@ -960,7 +960,19 @@ note.
 
 **Effort.** S for the raw map; M for the participant→TS shape.
 
-**Status (adapter 0.8.0): ARC 1.3 exports the map; the adapter does not send it.** Output 1.3
+**Status (adapter 0.9.0, batch J): done.** ARC `ebc88ec8` exports `ts_atom_map` (the TS atom of every reactant and
+product atom, from an isomorphism of the condensed graphs of reaction of the reaction and its IRC endpoints;
+`method: irc_endpoint_cgr_isomorphism`, constitutional/2D, symmetry-equivalent atoms assigned by a deterministic
+convention) with `ts_atom_map_unavailable_reason` when it cannot. The adapter builds TCKDB's `atom_map` from it on
+**both** routes (`source: inferred`, `note` quoting the method and convention) after checking block lengths, TS index
+coverage, element conservation, consistency with `atom_map` and with the sent IRC participant mapping; a failure omits the
+map with `reaction_ts_atom_map_not_sent`, a null map with ARC's reason in the warning context, a document without the key
+keeps `reaction_atom_map_ts_order_not_stated`. See CURRENT_ARC_INTEGRATION.md "Output schema 1.3 at ebc88ec8". The ARC
+hand-off questions Q2 (`nmd_forced`), Q3 (`conformer_energies` null semantics), Q4 (`conformer_ess_software` / `_version`),
+Q5 (`bac_type` rule) and Q6 (`standard_state_pressure_pa` always stated) are resolved by the same ARC head and
+consumed in 0.9.0; Q7 (an NEB signal) and B17 stay open.
+
+**Earlier status (adapter 0.8.0): ARC 1.3 exports the map; the adapter does not send it.** Output 1.3
 states `atom_map`, `atom_map_reactant_labels`, `atom_map_product_labels`, `atom_map_source`
 (`declared` / `inferred`) and `atom_map_method` (`ARC:arc/output.py:_get_reaction_atom_map`),
 which settles provenance. It does not settle the TS atom order: ARC's map is reactant atom to
@@ -1114,6 +1126,12 @@ the 1.3 schema; making a torsion's treatment nullable needs it too.
 One label per occurrence exists today only as `atom_map_*_labels` when `atom_map` is non-null, and in
 `irc_participant_mapping` when the IRC was validated by isomorphism.
 
+**Status (adapter 0.9.0, batch J): done.** ARC `ebc88ec8` exports `reactant_species_labels` /
+`product_species_labels` (required, one entry per occurrence, `get_reactants_and_products` order, equal to
+`atom_map_*_labels` when `atom_map` is not null). They are THE order and repeats of `reactant_keys` / `product_keys` on
+both routes; a contradiction with `atom_map_*_labels` or `reactant_labels` refuses the reaction
+(`reaction_species_labels_contradicted`). The 0.8.0 recovery below remains for documents without them.
+
 **Adapter (0.8.0).** The occurrences are taken from `atom_map_*_labels`, else from the IRC
 participants; with neither, the collapsed lists are used if their elements balance, and the
 reaction is refused with `reaction_stoichiometry_not_stated` if not. The label string is never
@@ -1246,9 +1264,9 @@ Highest value first:
 **Status (adapter 0.8.0, batch H): TCKDB 0.64 closed two of the three.** `ts_upload` had three:
 
 - no `atom_map` field in the contract, so it always warned `reaction_atom_map_absent`. **0.64 added the slot**
-  (with `geometry_key` and a `key`/`geometry` on each participant). The adapter still sends no map, because ARC states
-  no participant-atom to TS-atom relation (B8, `reaction_atom_map_ts_order_not_stated`), so TCKDB still reports
-  `reaction_atom_map_absent` on both routes;
+  (with `geometry_key` and a `key`/`geometry` on each participant). The adapter sent no map until ARC `ebc88ec8` stated `ts_atom_map` (B8); since adapter 0.9.0 it sends one on both routes
+  from the same data (a map is still absent for documents without `ts_atom_map`, so TCKDB then reports
+  `reaction_atom_map_absent`);
 - no slot for TS applied corrections. **0.64 added `applied_energy_corrections`** (no source keys, no frequency scale
   factor); the adapter sends them. Likewise `scan` calculations with `scan_result` are accepted and sent;
 - the async `/jobs/transition-state` route drops every warning (still open).

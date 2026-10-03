@@ -20,12 +20,16 @@ The adapter reads its key from `TCKDB_INTEGRATION_API_KEY`, so an ambient
 `TCKDB_API_KEY` is never used.
 
 Validated against TCKDB_v2 `f22d3a80` (the pinned sha), with tckdb-client 0.102.0,
-tckdb-schemas 0.64.0 and tckdb-arc 0.8.1: 52 passed and no xfails, fresh and on replay
+tckdb-schemas 0.64.0 and tckdb-arc 0.9.0: 62 passed and no xfails, fresh and on replay
 (a second run against the same database). That run covers the 0.64 `imaginary_mode` and
 `energy_ordering` evidence (`golden_ts_evidence`: bundle with both kinds read back with
 their stored values and cited calculations, standalone TS with `imaginary_mode`), which
 exercises the server-only rules (stored-row ownership of each compared energy, the
-stored-frequency cross-check, electronic energy from an sp, one level per energy kind).
+stored-frequency cross-check, electronic energy from an sp, one level per energy kind), and
+the ARC 1.3 reaction atom map built from `ts_atom_map` (`ts_atom_map_sample` and
+`ts_atom_map_derived`, both routes), which pass the server's atom-map rules
+(`atom_map_participant_not_declared`, `atom_map_indices_not_geometry_relative`,
+`atom_map_element_not_conserved`, `atom_map_contradicts_irc_mapping`); no case sends a map they should refuse.
 The corpus drifted once before this run: `arc_1_2_corrections` still stated CH4's bond
 corrections as not applied, so the adapter (correctly, for a pre-1.3 document) deposited no
 `bac_total`; the corpus now states them applied. The strict xfails
@@ -119,6 +123,7 @@ counts are taken only once two consecutive snapshots agree (see T4).
 | `golden` (Phase 3, `tckdb_evidence.json`) | species, conformer, reaction, TS | calculation owners and types; H2 thermo stored as S and Cp only (no H298, NASA, point H or G, or reference kind), because pre-1.2 output cannot show the enthalpy is a formation enthalpy and H2 is too light for the magnitude guard, with the `enthalpy_formation_unverifiable_light_species` warning; reference pressure not stated (read back as null; the golden output records none, so the adapter omits it with the `thermo_reference_pressure_not_stated` warning) and source calculations; Hessian values; conformer-mode log and input artifacts |
 | `golden` + kinetics at T0 = 300 K and Arkane commit | reaction, TS | Arrhenius `a` = ARC's A as sent with `t0_k` = T0 (since 0.63 and adapter 0.8.0; not `A/T0**n`), `n`, `Ea`, kinetics source-calculation roles and owners, TS composition against both sides, IRC result, the standalone TS's calculations (no GSM path search since 0.6.4: ARC exports no GSM level) |
 | `golden` + kinetics + `ts_checks` (IRC, freq, e_elect all true) | reaction, TS | bundle: `irc`, `imaginary_mode` (count, cm^-1, cited freq calculation) and `energy_ordering` (each compared energy, cited to its own participant's sp) read back with the stored values and no `transition_state_energy_ordering_mixed_levels`; standalone TS: `irc` and `imaginary_mode` only |
+| `ts_atom_map_sample` (real ARC 1.3 writer output, `nC3H7 <=> iC3H7`) and `ts_atom_map_derived` (`OH + CH4 <=> H2O + CH3` with a TS order unlike the reactants'; `CH3 + CH3 <=> C2H6` with a repeated reactant) | reaction, TS | the one stored atom map (`include=atom_map`): `source` `inferred` with the adapter's note and no `equivalent_map_count`, on the uploaded TS entry; each participant's `atom_to_ts` equals the payload's and ARC's `ts_atom_map` counted from the species labels (elements agree with the TS atom, `ts_atom_order_follows_reactants` agrees with the stored indices); a repeated reactant is two participants of one species entry, each with its own disjoint block; mapped atom counts on both legs; none of `reaction_atom_map_absent`, `reaction_ts_atom_map_not_sent`, `reaction_species_labels_contradicted` (or the server's incompleteness and IRC-contradiction codes) from the adapter or the server. The replay snapshots also count stored map pairs, so a replay cannot add a second map |
 | `arc_1_2` (output 1.2 atom-correction flags) | species, conformer | formation enthalpy kept for CH4, stripped to S and Cp (no H298, NASA, point H or G, or reference kind) for the other five, with the producer warning |
 | `arc_1_2` CH4 + `energy_corrections` | species | applied AEC and BAC totals, units, components, source `sp` calculation |
 | `current_arc` H2O (`parser_evidence.json`) | species | Hessian stored verbatim in its own frame |

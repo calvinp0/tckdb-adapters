@@ -1,0 +1,1 @@
+`arc_output_yml_schema_ebc88ec8.json` is ARC's `arc/schemas/output_yml_schema.json` at commit ebc88ec8 (PR #1059 head), vendored verbatim; refresh with `git -C <ARC checkout> show <commit>:arc/schemas/output_yml_schema.json > arc_output_yml_schema_<commit>.json` and update `ARC_SCHEMA` in `test_arc_1_3_ts_atom_map.py`.

@@ -100,7 +100,15 @@ class LiveTCKDB:
         if len(species["records"]) >= 200 or len(reactions["records"]) >= 200:
             raise RuntimeError("too many species or reactions to count on one page")
         snapshot["species_entries"] = sum(len(r["entries"]) for r in species["records"])
-        snapshot["reaction_entries"] = len({r["reaction_entry_ref"] for r in reactions["records"]})
+        entry_refs = sorted({r["reaction_entry_ref"] for r in reactions["records"]})
+        snapshot["reaction_entries"] = len(entry_refs)
+        # An atom map is written once per reaction entry's transition state: a replay must not add pairs.
+        snapshot["atom_map_pairs"] = sum(
+            len(atom_map["pairs"])
+            for ref in entry_refs
+            for atom_map in self._get(f"/scientific/reaction-entries/{ref}/full",
+                                      {"include": "atom_map"})["atom_map"]
+        )
         snapshot["artifacts"] = self._get(
             "/scientific/artifacts/search", {"has_sha256": "true", "limit": 1},
         )["pagination"]["total"]

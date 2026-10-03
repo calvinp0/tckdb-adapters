@@ -10,8 +10,8 @@ reaction coordinate. So:
   frequency (ARC 1.3 ``reaction_coordinate_mode_index`` into ``freq_frequencies_cm1_ess_order``), or with one
   imaginary mode ``imag_freq_cm1``, written negative;
 * ``mode_displacement_agrees`` is ``True`` only when ARC states ``reaction_coordinate_mode_index`` (set only by a
-  genuine, non-forced normal mode displacement pass), ``False`` only when ``ts_checks['NMD']`` is ``False`` and no
-  index is stated, and omitted otherwise (not assessed is not ``False``);
+  genuine, non-forced normal mode displacement pass), ``False`` when ``ts_checks['NMD']`` is ``False`` with no
+  index stated or ``nmd_forced`` is true (a forced pass follows a failed check), and omitted otherwise (not assessed is not ``False``);
 * the bundle binds it to the TS ``freq`` calculation by key; the standalone route omits the key and binds to
   its single ``freq`` calculation.
 """
