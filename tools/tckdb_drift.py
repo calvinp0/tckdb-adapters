@@ -15,7 +15,7 @@ tool never edits a workflow file. Modes:
 ``--bump --sha SHA --schemas X.Y.Z --client A.B.C [--allow-downgrade]``
     Move the pins: the ``tckdb_arc/pyproject.toml`` and ``tckdb_core/pyproject.toml``
     dependency bounds, the
-    ``TARGET_SCHEMAS_LINE`` in ``tckdb_arc/tests/_contract.py``, the ``sha`` in
+    ``TARGET_SCHEMAS_LINE`` in ``tckdb_core/tckdb_core/testing/contract.py``, the ``sha`` in
     ``tckdb-pin.toml``, the install lines and "tested contract" sentence in
     ``README.md``, the version sentence and a changelog line in
     ``tckdb_arc/README.md``, and the adapter patch version. Idempotent: running it
@@ -61,7 +61,8 @@ ADAPTER_PYPROJECT = "tckdb_arc/pyproject.toml"
 CORE_PYPROJECT = "tckdb_core/pyproject.toml"
 PKG_README = "tckdb_arc/README.md"
 CHANGELOG_MARKER = "<!-- tckdb-drift:changelog -->"
-CONTRACT_PY = "tckdb_arc/tests/_contract.py"
+# The one ``TARGET_SCHEMAS_LINE`` line the test suites share (tckdb_arc/tests/_contract.py re-exports it).
+CONTRACT_PY = "tckdb_core/tckdb_core/testing/contract.py"
 PIN_FILE = "tckdb-pin.toml"
 README = "README.md"
 

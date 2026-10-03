@@ -11,16 +11,35 @@ A level inside a record states **no** ``software`` (ARC's ``Level.software`` is
 only a deduction); the program of a job is ``ess_software[<job>]`` read from the
 log itself.
 
-The module also holds the isotope rule for geometries (TCKDB's
-``species_geometry_isotope_mismatch``) and the route-line helper.
+The isotope rule for geometries (TCKDB's ``species_geometry_isotope_mismatch``) and the
+route-line comparison read no ARC key and live in :mod:`tckdb_core.isotopes` and
+:mod:`tckdb_core.route_level`; they are re-exported here. This module keeps the route-line
+*field* choice (``opt_route`` ...), which is ARC's.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+
+# The isotope rule and the route-line comparison read no ARC key; they moved to
+# ``tckdb_core`` in batch L2 and keep resolving here.
+from tckdb_core.isotopes import (  # noqa: F401
+    MOST_ABUNDANT_ISOTOPE,
+    _SMILES_ISOTOPE_RE,
+    _xyz_symbols,
+    geometry_isotope_multiset,
+    geometry_isotope_substitutions,
+    smiles_isotope_multiset,
+)
+from tckdb_core.route_level import (  # noqa: F401
+    ROUTE_PAIR_RE as _ROUTE_PAIR_RE,
+    norm_basis as _norm_basis,
+    norm_method as _norm_method,
+    route_contradicts_level,
+    route_method_basis,
+)
 
 #: The job keys of a record's ``levels`` object.
 RECORD_LEVEL_KEYS = ("opt", "freq", "sp", "composite", "irc")
@@ -219,98 +238,6 @@ def route_for_job(record: Mapping[str, Any], kind: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Isotopes
-# ---------------------------------------------------------------------------
-
-#: The most abundant natural isotope (mass number) per element; a geometry atom
-#: at this mass is not a substitution. Elements without an entry cannot be judged.
-MOST_ABUNDANT_ISOTOPE: Mapping[str, int] = {
-    "H": 1, "He": 4, "Li": 7, "Be": 9, "B": 11, "C": 12, "N": 14, "O": 16, "F": 19,
-    "Ne": 20, "Na": 23, "Mg": 24, "Al": 27, "Si": 28, "P": 31, "S": 32, "Cl": 35,
-    "Ar": 40, "K": 39, "Ca": 40, "Sc": 45, "Ti": 48, "V": 51, "Cr": 52, "Mn": 55,
-    "Fe": 56, "Co": 59, "Ni": 58, "Cu": 63, "Zn": 64, "Ga": 69, "Ge": 74, "As": 75,
-    "Se": 80, "Br": 79, "Kr": 84,
-}
-
-_SMILES_ISOTOPE_RE = re.compile(r"\[(\d+)([A-Z][a-z]?|[bcnops])")
-
-
-def _xyz_symbols(xyz_text: str | None) -> list[str] | None:
-    if not isinstance(xyz_text, str):
-        return None
-    symbols: list[str] = []
-    lines = xyz_text.strip().splitlines()
-    try:
-        int(lines[0].strip())
-        lines = lines[2:]  # a standard XYZ header: atom count, then a comment line
-    except (ValueError, IndexError):
-        pass
-    for line in lines:
-        parts = line.split()
-        if not parts:
-            continue
-        symbols.append(parts[0][:1].upper() + parts[0][1:].lower())
-    return symbols or None
-
-
-def geometry_isotope_substitutions(
-    xyz_text: str | None, isotopes: Any,
-) -> dict[int, int] | None:
-    """The 1-based ``{atom index: mass number}`` substitutions of a stated isotope list.
-
-    TCKDB's ``GeometryPayload.isotopes`` lists only substituted atoms (every
-    unlisted atom is at its most abundant isotope), so atoms at the standard mass
-    are dropped. ``{}`` for an all-standard geometry (send no ``isotopes``);
-    ``None`` when the list cannot be applied (not one integer per atom, or an
-    element whose standard isotope is not tabulated).
-    """
-    symbols = _xyz_symbols(xyz_text)
-    if symbols is None or not isinstance(isotopes, Sequence) or isinstance(isotopes, str):
-        return None
-    if len(isotopes) != len(symbols):
-        return None
-    out: dict[int, int] = {}
-    for index, (symbol, mass) in enumerate(zip(symbols, isotopes), start=1):
-        if isinstance(mass, bool) or not isinstance(mass, int) or mass <= 0:
-            return None
-        standard = MOST_ABUNDANT_ISOTOPE.get(symbol)
-        if standard is None:
-            return None
-        if mass != standard:
-            out[index] = mass
-    return out
-
-
-def smiles_isotope_multiset(smiles: Any) -> dict[tuple[str, int], int] | None:
-    """``{(element, mass): count}`` of the non-standard isotopes a SMILES declares.
-
-    A declared standard isotope (``[12C]``) is dropped, as TCKDB does before it
-    compares. ``None`` when the SMILES is missing.
-    """
-    if not isinstance(smiles, str) or not smiles:
-        return None
-    out: dict[tuple[str, int], int] = {}
-    for mass_text, symbol in _SMILES_ISOTOPE_RE.findall(smiles):
-        element = symbol[:1].upper() + symbol[1:]
-        mass = int(mass_text)
-        if MOST_ABUNDANT_ISOTOPE.get(element) == mass:
-            continue
-        out[(element, mass)] = out.get((element, mass), 0) + 1
-    return out
-
-
-def geometry_isotope_multiset(
-    xyz_text: str | None, substitutions: Mapping[int, int],
-) -> dict[tuple[str, int], int]:
-    symbols = _xyz_symbols(xyz_text) or []
-    out: dict[tuple[str, int], int] = {}
-    for index, mass in substitutions.items():
-        key = (symbols[index - 1], int(mass))
-        out[key] = out.get(key, 0) + 1
-    return out
-
-
-# ---------------------------------------------------------------------------
 # Placeholder primary opt
 # ---------------------------------------------------------------------------
 
@@ -346,57 +273,3 @@ def primary_opt_placeholder(record: Any) -> str | None:
 # ---------------------------------------------------------------------------
 # Route vs level
 # ---------------------------------------------------------------------------
-
-_ROUTE_PAIR_RE = re.compile(r"^([^/=\s]+)/([^/=\s]+)$")
-
-
-def _norm_method(text: str) -> str:
-    return text.lower().replace("-", "").replace("_", "").replace(" ", "")
-
-
-def _norm_basis(text: str) -> str:
-    out = text.lower().replace("(d,p)", "**").replace("(d)", "*")
-    return out.replace("-", "").replace("_", "").replace(" ", "")
-
-
-def route_method_basis(route: Any) -> tuple[str, str] | None:
-    """The one ``method/basis`` token of a Gaussian-style route line, or ``None``.
-
-    Only an unambiguous line counts: exactly one whitespace-delimited token of
-    the form ``a/b`` with no ``=``, and the line is not a composite route
-    (``#CBS-QB3 opt freq``) or an Orca ``!`` line (which have no such token).
-    """
-    if not isinstance(route, str):
-        return None
-    pairs = []
-    for token in route.split():
-        match = _ROUTE_PAIR_RE.match(token)
-        if match:
-            pairs.append(match.groups())
-    return pairs[0] if len(pairs) == 1 else None
-
-
-def route_contradicts_level(route: Any, level: Mapping[str, Any] | None) -> str | None:
-    """A description when ``route`` clearly names another method or basis than ``level``, else ``None``.
-
-    The route is what ran (observed); the level is what was requested. A Gaussian
-    ``u`` or ``ro`` prefix on the route's method is the spin treatment, not the
-    method (``ub3lyp`` is ``b3lyp``). Only a level with a method and a basis is
-    compared; a dispersion carried in the level's method, or a route that ARC
-    could not read, is never flagged.
-    """
-    pair = route_method_basis(route)
-    if pair is None or not isinstance(level, Mapping):
-        return None
-    method, basis = level.get("method"), level.get("basis")
-    if not method or not basis:
-        return None
-    r_method, r_basis = _norm_method(pair[0]), _norm_basis(pair[1])
-    l_method, l_basis = _norm_method(str(method)), _norm_basis(str(basis))
-    candidates = {r_method}
-    for prefix in ("ro", "u", "r"):
-        if r_method.startswith(prefix):
-            candidates.add(r_method[len(prefix):])
-    if l_method not in candidates or r_basis != l_basis:
-        return f"route {pair[0]}/{pair[1]} vs level {method}/{basis}"
-    return None

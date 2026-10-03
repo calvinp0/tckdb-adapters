@@ -8,7 +8,7 @@ Replicated from TCKDB (checked against the backend when it is importable, see
 ``test_energy_level_declaration.py::test_hash_matches_the_backend``):
 
 * ``backend/app/services/calculation_resolution.py::_level_of_theory_hash`` and
-  its identity keys: now ``tckdb_arc/level_rules.py`` (see its docstring).
+  its identity keys: now ``tckdb_core/level_rules.py`` (see its docstring).
 * ``backend/app/services/calculation_levels.py::assert_role_consistency``,
   R2' level uniformity and R4'/R5: a declared energy level must resolve to the
   linked sp calculations' shared level, or, with no sp linked, to every linked
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 # The hash lives in the package so the adapter can pre-check identity at build time;
 # the tests import it from there (and test_level_rules pins it to TCKDB's literals).
-from tckdb_arc.level_rules import basis_identity_key, level_hash  # noqa: F401
+from tckdb_core.level_rules import basis_identity_key, level_hash  # noqa: F401
 
 
 def energy_level_verdict(block, calculations_by_key):

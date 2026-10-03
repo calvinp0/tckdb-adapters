@@ -1,8 +1,9 @@
 """Shared plumbing for the opt-in live TCKDB integration gate.
 
-Everything here is offline: the loopback guard, the corpus builders and the
-adapter factory. Network access happens only through the ``live_tckdb``
-fixture in ``conftest.py``, which calls :func:`assert_loopback_url` first.
+Everything here is offline: the corpus builders and the adapter factory (the
+loopback guard and the commit probe live in ``tckdb_core.testing.live``). Network
+access happens only through the ``live_tckdb`` fixture in ``conftest.py``, which calls
+``assert_loopback_url`` first.
 
 The corpora are the offline fixtures the unit suite already uses, laid out as
 ARC project directories (``output/output.yml`` plus any evidence sidecar), so
@@ -17,17 +18,23 @@ import copy
 import json
 import shutil
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import yaml
 
 from tckdb_arc.adapter import TCKDBAdapter
 from tckdb_arc.config import TCKDBArtifactConfig, TCKDBConfig
 
-API_KEY_ENV = "TCKDB_INTEGRATION_API_KEY"
-LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
-REFUSED_PORTS = frozenset({8010})
-INTEGRATION_BUCKET_PREFIX = "tckdb-integ"
+# The guards and the commit probe are producer-agnostic and live in the core test kit.
+from tckdb_core.testing.live import (  # noqa: F401  (re-exported: the tests import them from here)
+    API_KEY_ENV,
+    INTEGRATION_BUCKET_PREFIX,
+    LOOPBACK_HOSTS,
+    REFUSED_PORTS,
+    assert_integration_backend,
+    assert_loopback_url,
+    commit_probe,
+    verify_isolated_backend,
+)
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 GOLDEN = FIXTURES / "golden"
@@ -49,72 +56,10 @@ KINETICS_T0 = {
 }
 
 
-def assert_loopback_url(url):
-    """Refuse any TCKDB base URL that is not loopback, or that uses port 8010.
-
-    Loopback alone does not mean isolated: TCKDB's API listens on
-    127.0.0.1:8010 on the production host and on a development machine, and
-    an ``ssh -L 8010:...`` tunnel makes a remote deployment loopback too. The
-    port is refused outright; :func:`assert_integration_backend` then checks
-    what actually answered.
-    """
-    parts = urlsplit(url or "")
-    host = parts.hostname
-    if host not in LOOPBACK_HOSTS:
-        raise ValueError(
-            f"refusing TCKDB integration target {url!r}: host {host!r} is not "
-            f"loopback ({', '.join(sorted(LOOPBACK_HOSTS))}). The gate only "
-            "runs against an isolated local backend."
-        )
-    if parts.port in REFUSED_PORTS:
-        raise ValueError(
-            f"refusing TCKDB integration target {url!r}: port {parts.port} is "
-            "where TCKDB's production and development APIs listen (directly or "
-            "through an SSH tunnel). Run the isolated backend on another port."
-        )
-    return url
 
 
-def assert_integration_backend(status):
-    """Refuse a backend whose artifact bucket is not an integration sentinel.
-
-    ``status`` is the body of ``GET /status``. The isolated stack in
-    ``docs/contract/INTEGRATION_GATE.md`` uses bucket ``tckdb-integ-artifacts``;
-    deployments use ``tckdb-artifacts``.
-    """
-    storage = ((status or {}).get("components") or {}).get("artifact_storage") or {}
-    bucket = storage.get("bucket")
-    if not (isinstance(bucket, str) and bucket.startswith(INTEGRATION_BUCKET_PREFIX)):
-        raise ValueError(
-            f"refusing TCKDB integration target: its artifact bucket is {bucket!r}, "
-            f"not an isolated integration bucket ({INTEGRATION_BUCKET_PREFIX}*)."
-        )
-    return bucket
 
 
-def verify_isolated_backend(url, timeout=30.0):
-    """Check that ``url`` is an isolated integration backend, without credentials.
-
-    The loopback/port check runs first, then ``/status`` (bucket sentinel) and
-    ``/readyz`` are fetched by a client that holds no API key: tckdb-client
-    attaches ``X-API-Key`` to every request whenever it has one, even
-    unauthenticated ones, so a keyed probe would hand the key to whatever
-    answered before it was verified.
-    """
-    from tckdb_client import TCKDBClient
-    from tckdb_client.errors import TCKDBHTTPError
-
-    assert_loopback_url(url)
-    with TCKDBClient(url, api_key=None, timeout=timeout) as probe:
-        try:
-            status = probe.request_json("GET", "/status", authenticated=False).data
-        except TCKDBHTTPError as exc:  # a degraded backend answers 503 with the same body
-            status = exc.response_json
-        assert_integration_backend(status)
-        ready = probe.request_json("GET", "/readyz", authenticated=False).data
-    if not (isinstance(ready, dict) and ready.get("status") == "ready"):
-        raise RuntimeError(f"TCKDB at {url} is not ready: {ready!r}")
-    return url
 
 
 def _load_yaml(path):
@@ -353,25 +298,6 @@ def make_adapter(live_url, project, name, mode, **kwargs):
     return TCKDBAdapter(make_config(live_url, name, mode, **kwargs), project_directory=project)
 
 
-def commit_probe(response):
-    """An id-addressed path that exists once ``response``'s upload has committed.
-
-    TCKDB commits in the teardown of its write-session dependency, after the
-    201 has been sent (see T4 in INTEGRATION_GATE.md), so a read issued the
-    moment an upload returns can miss the rows. The transaction is atomic:
-    once one of its rows is visible, all are.
-    """
-    if not isinstance(response, dict):
-        return None
-    if response.get("conformers"):
-        return f"/calculations/{response['conformers'][0]['primary_calculation']['calculation_id']}"
-    if response.get("primary_calculation"):
-        return f"/calculations/{response['primary_calculation']['calculation_id']}"
-    if response.get("calculation_keys"):
-        return f"/calculations/{min(response['calculation_keys'].values())}"
-    if response.get("type") == "transition_state_entry":
-        return f"/transition-states/entries/{response['id']}"
-    return None
 
 
 def read_sidecars(project):

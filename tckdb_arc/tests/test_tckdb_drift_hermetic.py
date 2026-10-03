@@ -17,7 +17,7 @@ COPIED = [
     "tools/tckdb_drift.py",
     "tckdb_arc/pyproject.toml",
     "tckdb_core/pyproject.toml",
-    "tckdb_arc/tests/_contract.py",
+    "tckdb_core/tckdb_core/testing/contract.py",
     "tckdb_arc/README.md",
     "tckdb_arc/tests/test_tckdb_drift.py",
     "tckdb_arc/tests/_drift_fixture.py",

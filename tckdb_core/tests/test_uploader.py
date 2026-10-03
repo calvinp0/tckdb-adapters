@@ -97,17 +97,74 @@ def test_the_log_hook_decides_where_the_pipeline_logs(tmp_path, monkeypatch):
     assert sink.info.called
 
 
-def test_the_shared_logger_follows_the_producer_name(caplog):
+def test_each_producer_logs_under_its_own_name_in_one_process(tmp_path, monkeypatch, caplog):
+    """The logger name is per class, not process state: two producers do not overwrite each other."""
+    monkeypatch.setenv("DEMO_TCKDB_KEY", "k")
+
+    class First(DemoAdapter):
+        LOGGER_NAME = "first_producer"
+
+    class Second(DemoAdapter):
+        LOGGER_NAME = "second_producer"
+
+    first = First(_config(tmp_path / "a"), client_factory=lambda *a, **k: _client())
+    second = Second(_config(tmp_path / "b"), client_factory=lambda *a, **k: _client())
+    with caplog.at_level(logging.INFO):
+        first._log.info("from first")
+        second._log.info("from second")
+        first._log.info("first again")
+    assert [(r.name, r.getMessage()) for r in caplog.records if r.name.endswith("_producer")] == [
+        ("first_producer", "from first"),
+        ("second_producer", "from second"),
+        ("first_producer", "first again"),
+    ]
+
+
+def test_the_default_logger_is_the_cores_own(tmp_path):
+    adapter = DemoAdapter(_config(tmp_path), client_factory=lambda *a, **k: _client())
+    assert adapter._log is logging.getLogger("tckdb_core")
+
+
+def test_there_is_no_process_global_logger_name():
     from tckdb_core import _logging
 
-    original = _logging._logger_name
-    try:
-        _logging.set_logger_name("demo_producer")
-        with caplog.at_level(logging.INFO, logger="demo_producer"):
-            _logging.get_logger().info("hello")
-        assert [r.name for r in caplog.records] == ["demo_producer"]
-    finally:
-        _logging.set_logger_name(original)
+    assert not hasattr(_logging, "set_logger_name")
+    assert not hasattr(_logging, "_logger_name")
+
+
+def test_free_functions_log_to_the_logger_they_are_given():
+    from tckdb_core.uploader import _close_quietly, _skip
+
+    sink = mock.Mock()
+    _skip(1, "output_log", "because", "calc_x", log=sink)
+    sink.info.assert_called_once_with(
+        "TCKDB artifact upload skipped: calc=%s kind=%s reason=%s", "calc_x", "output_log", "because")
+
+    class Noisy:
+        def close(self):
+            raise RuntimeError("boom")
+
+    _close_quietly(Noisy(), "ctx", log=sink)
+    assert sink.debug.call_args.args[:2] == ("TCKDB client close errored %s", "ctx")
+
+
+def test_skips_inside_the_pipeline_follow_the_instance_log(tmp_path, monkeypatch):
+    """The artifact path's skip line goes through ``self._log`` (so a producer's patched logger sees it)."""
+    monkeypatch.setenv("DEMO_TCKDB_KEY", "k")
+    sink = mock.Mock()
+
+    class Redirected(DemoAdapter):
+        @property
+        def _log(self):
+            return sink
+
+    adapter = Redirected(_config(tmp_path), client_factory=lambda *a, **k: _client())
+    outcome = adapter._prepare_artifact_upload(
+        output_doc={}, species_label="s", calculation_id=1, kind="output_log",
+        file_path=str(tmp_path / "missing.log"),
+        artifact_cfg=TCKDBArtifactConfig(upload=True, kinds=("output_log",)))
+    assert outcome.status == "skipped"
+    assert sink.info.called
 
 
 def test_readiness_is_probed_with_backoff_then_raises(tmp_path, monkeypatch):

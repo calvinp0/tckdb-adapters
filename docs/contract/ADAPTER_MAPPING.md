@@ -46,7 +46,7 @@ I flattened each payload into FIELD_KEY paths and validated it against the real 
 | `transform_kind` | One of `verbatim`, `coerced` (a type cast only), `renamed`, `unit_conversion`, `derived`, `constant`, `default` (a value with a fallback) or `conditional` (a passthrough gated by validity). |
 | `transform` | Free text. It ends with a `[route: …]` note on calculation rows. |
 | `condition` / `on_absence` | When the field is emitted, and what happens otherwise: omission, a refusal of the whole record, or an abort. |
-| `warning_codes` | Sidecar warning codes. The thermo enthalpy guard is the only producer-side emitter. |
+| `warning_codes` | Sidecar warning codes this row can raise. The thermo enthalpy guard is one producer-side emitter among many; `WARNING_CODES.md` is the registry of every code the adapter emits (generated from `tckdb_arc/warning_codes.py` and `tckdb_core/warning_codes.py`). |
 | `emission_route` | The line where the enclosing block is attached to the payload. |
 | `empirical` / `empirical_counts` | `fixture`: populated in a payload built from a checked-in ARC fixture. `synthetic`: populated only by test-suite corpora. `code_only`: populated by no built payload. |
 | `modes` | Upload modes that emit the row: `computed_species`, `computed_reaction`, `computed_ts` or `conformer`. |

@@ -134,7 +134,7 @@ git config user.email "$BOT_EMAIL"
 BASE_SHA="$(git rev-parse HEAD)"
 python tools/tckdb_drift.py --bump --sha "$SHA" --schemas "$SCHEMAS" --client "$CLIENT"
 git switch -C "$BRANCH"
-git add tckdb_arc/pyproject.toml tckdb_core/pyproject.toml tckdb_arc/tests/_contract.py tckdb_arc/README.md tckdb-pin.toml README.md
+git add tckdb_arc/pyproject.toml tckdb_core/pyproject.toml tckdb_core/tckdb_core/testing/contract.py tckdb_arc/README.md tckdb-pin.toml README.md
 git diff --cached --quiet || git commit -q -m "$TITLE"
 
 pushed=false

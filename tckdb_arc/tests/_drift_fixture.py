@@ -31,7 +31,7 @@ dependencies = [
     "tckdb-schemas>=0.54,<0.55", # contract
 ]
 ''',
-    "tckdb_arc/tests/_contract.py": '"""doc"""\n\nTARGET_SCHEMAS_LINE = (0, 54)\nOTHER = 1\n',
+    "tckdb_core/tckdb_core/testing/contract.py": '"""doc"""\n\nTARGET_SCHEMAS_LINE = (0, 54)\nOTHER = 1\n',
     "tckdb-pin.toml": f'''# pin
 [tckdb]
 repo = "{PIN_REPO}"
@@ -69,7 +69,7 @@ Other text.
 BUMPED = [
     "tckdb_arc/pyproject.toml",
     "tckdb_core/pyproject.toml",
-    "tckdb_arc/tests/_contract.py",
+    "tckdb_core/tckdb_core/testing/contract.py",
     "tckdb-pin.toml",
     "README.md",
     "tckdb_arc/README.md",

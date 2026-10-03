@@ -11,9 +11,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-import tckdb_core
-
-PACKAGE_DIR = Path(tckdb_core.__file__).parent
+# ``tckdb_core.__file__`` is ``None`` when pytest runs from the repository root, where the
+# ``tckdb_core`` directory resolves as a namespace package; the package directory is found
+# from this file's own location instead (and the check below fails if it is wrong).
+PACKAGE_DIR = Path(__file__).resolve().parents[1] / "tckdb_core"
 SOURCES = sorted(PACKAGE_DIR.rglob("*.py"))
 
 # ``arc.`` is matched on a word boundary so ``tckdb_arc.`` and words ending in
@@ -49,6 +50,13 @@ def _imported_modules(path: Path) -> set[str]:
 
 def test_the_package_has_sources_to_check():
     assert {p.name for p in SOURCES} >= {"uploader.py", "payload_writer.py", "adapter_warnings.py"}
+
+
+def test_the_checked_directory_is_the_one_the_package_imports_from():
+    """The scans above read ``PACKAGE_DIR``; it must be the package under test, wherever pytest starts."""
+    import tckdb_core.uploader
+
+    assert Path(tckdb_core.uploader.__file__).resolve().parent == PACKAGE_DIR.resolve()
 
 
 def test_no_module_imports_arc_or_tckdb_arc():

@@ -22,7 +22,7 @@ from typing import Any
 from tckdb_client import TCKDBClient
 from tckdb_client.errors import TCKDBError
 
-from tckdb_core._logging import get_logger
+from tckdb_core._logging import CORE_LOGGER_NAME, get_logger, resolve_log
 from tckdb_core.config import (
     IMPLEMENTED_ARTIFACT_KINDS,
     UPLOAD_MODE_COMPUTED_REACTION,
@@ -55,8 +55,7 @@ from tckdb_core.payload_writer import (
     _utcnow_iso,
 )
 from tckdb_core.adapter_warnings import AdapterWarning
-
-logger = get_logger()
+from tckdb_core.warning_codes import CoreWarning
 
 # Upload modes whose bundle payload already carries input/output_log
 # artifacts inline under each calculation. Standalone artifact sidecars
@@ -401,7 +400,7 @@ def _extract_calc_refs(
     return primary, additional
 
 
-_W_CALCULATION_REF_NOT_RETURNED = "calculation_ref_not_returned"
+_W_CALCULATION_REF_NOT_RETURNED = CoreWarning.CALCULATION_REF_NOT_RETURNED.value
 
 
 def _calculation_ref_not_returned_warning(
@@ -436,10 +435,11 @@ def _extract_submission_refs(response_data: Any) -> tuple[str | None, dict[str, 
 
 
 def _skip(
-    calculation_id: int | None, kind: str, reason: str, calculation_ref: str | None = None
+    calculation_id: int | None, kind: str, reason: str, calculation_ref: str | None = None,
+    log: Any = None,
 ) -> "ArtifactUploadOutcome":
-    """Build a skipped outcome and log the reason once."""
-    logger.info(
+    """Build a skipped outcome and log the reason once (to ``log``, else the package logger)."""
+    resolve_log(log).info(
         "TCKDB artifact upload skipped: calc=%s kind=%s reason=%s",
         calculation_ref or calculation_id, kind, reason,
     )
@@ -454,7 +454,7 @@ def _skip(
     )
 
 
-def _close_quietly(client: Any, context: str) -> None:
+def _close_quietly(client: Any, context: str, log: Any = None) -> None:
     """Close a TCKDB client and swallow close errors with a debug log."""
     close = getattr(client, "close", None)
     if not callable(close):
@@ -462,7 +462,7 @@ def _close_quietly(client: Any, context: str) -> None:
     try:
         close()
     except Exception:  # pragma: no cover - close errors swallowed
-        logger.debug("TCKDB client close errored %s", context, exc_info=True)
+        resolve_log(log).debug("TCKDB client close errored %s", context, exc_info=True)
 
 
 class TCKDBUploaderBase:
@@ -485,6 +485,11 @@ class TCKDBUploaderBase:
     PRODUCER_NAME: str = "the producer"
     #: Namespace of the producer's idempotency keys (``<namespace>:<project>:...``).
     IDEMPOTENCY_NAMESPACE: str = "producer"
+    #: Name of the logger the pipeline writes to (``logging.getLogger(LOGGER_NAME)``).
+    #: Per producer, not process-global: two producers in one process log under
+    #: their own names. A producer may instead override :attr:`_log` to return a
+    #: logger object of its own (e.g. a module-level one tests patch).
+    LOGGER_NAME: str = CORE_LOGGER_NAME
 
     def __init__(
         self,
@@ -515,7 +520,7 @@ class TCKDBUploaderBase:
     @property
     def _log(self):
         """The logger the pipeline writes to (a producer may return its own module's)."""
-        return logger
+        return get_logger(self.LOGGER_NAME)
 
     def _sleep_between_probes(self, seconds: float) -> None:
         """Wait between readiness-probe retries (a producer may rebind this for tests)."""
@@ -651,10 +656,10 @@ class TCKDBUploaderBase:
                 idempotency_key=sc.idempotency_key,
             )
         except Exception as exc:
-            _close_quietly(client, "after upload failure")
+            _close_quietly(client, "after upload failure", self._log)
             return self._record_failure(written, str(exc), exc)
         else:
-            _close_quietly(client, "after upload success")
+            _close_quietly(client, "after upload success", self._log)
 
         sc.status = "uploaded"
         sc.uploaded_at = _utcnow_iso()
@@ -888,22 +893,20 @@ class TCKDBUploaderBase:
                 calculation_id, kind,
                 f"upload_mode={self._config.upload_mode!r} carries kind={kind!r} "
                 "inline in the bundle; standalone artifact upload suppressed",
-                calculation_ref,
-            )
+                calculation_ref, log=self._log)
 
         if not artifact_cfg.upload:
-            return _skip(calculation_id, kind, "artifacts.upload is False", calculation_ref)
+            return _skip(calculation_id, kind, "artifacts.upload is False", calculation_ref, log=self._log)
         if kind not in artifact_cfg.kinds:
-            return _skip(calculation_id, kind, f"kind {kind!r} not in config.kinds", calculation_ref)
+            return _skip(calculation_id, kind, f"kind {kind!r} not in config.kinds", calculation_ref, log=self._log)
         if kind not in IMPLEMENTED_ARTIFACT_KINDS:
             return _skip(
                 calculation_id, kind,
-                f"kind {kind!r} is server-accepted but {self.PRODUCER_NAME} has no upload path yet",
-            )
+                f"kind {kind!r} is server-accepted but {self.PRODUCER_NAME} has no upload path yet", log=self._log)
 
         resolved = self._resolve_local_path(file_path)
         if resolved is None or not resolved.is_file():
-            return _skip(calculation_id, kind, f"file missing: {file_path!r}", calculation_ref)
+            return _skip(calculation_id, kind, f"file missing: {file_path!r}", calculation_ref, log=self._log)
 
         size_bytes = resolved.stat().st_size
         max_bytes = artifact_cfg.max_size_mb * 1024 * 1024
@@ -913,8 +916,7 @@ class TCKDBUploaderBase:
                 kind,
                 f"file {resolved.name} is {size_bytes} bytes "
                 f"(>{artifact_cfg.max_size_mb} MB cap)",
-                calculation_ref,
-            )
+                calculation_ref, log=self._log)
 
         with resolved.open("rb") as fh:
             content = fh.read()
@@ -931,8 +933,7 @@ class TCKDBUploaderBase:
                     calculation_id, kind,
                     f"already uploaded by a pre-0.10 run (sidecar {done.name}, same sha256); "
                     "re-posting would add a second calculation_artifact row",
-                    calculation_ref,
-                )
+                    calculation_ref, log=self._log)
 
         project_label = self._config.project_label or self._project_label_for(output_doc)
         idempotency_key = build_artifact_idempotency_key(ArtifactIdempotencyInputs(
@@ -1000,10 +1001,10 @@ class TCKDBUploaderBase:
                 client, prepared, idempotency_key_prefix=idempotency_key_prefix,
             )
         except Exception as exc:
-            _close_quietly(client, "after artifact upload failure")
+            _close_quietly(client, "after artifact upload failure", self._log)
             return self._record_artifact_batch_failure(prepared, str(exc), exc)
         else:
-            _close_quietly(client, "after artifact upload success")
+            _close_quietly(client, "after artifact upload success", self._log)
 
         batch_summary = _summarize_artifact_batch_results(batch_results)
         result_by_calculation = {result.handle: result for result in batch_results}

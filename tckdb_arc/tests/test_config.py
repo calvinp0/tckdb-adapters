@@ -20,9 +20,9 @@ from tckdb_arc.config import (
     TCKDBArtifactConfig,
     TCKDBConfig,
     VALID_ARTIFACT_KINDS,
-    _read_tckdb_api_key_from_env_file,
     resolve_tckdb_api_key,
 )
+from tckdb_core.config import _read_tckdb_api_key_from_env_file
 
 
 class TestTCKDBConfig(unittest.TestCase):

@@ -46,6 +46,7 @@ from tckdb_schemas.fragments.refs import (
 from tckdb_schemas.utils import normalize_tunneling_model
 
 from tckdb_arc import arc13
+from tckdb_arc._logging import LOGGER_NAME as _LOGGER_NAME
 from tckdb_arc._logging import get_logger
 from tckdb_arc.adaptive import (
     RUN_LEVEL,
@@ -55,6 +56,7 @@ from tckdb_arc.adaptive import (
     detect_adaptive_levels,
     read_restart_info,
 )
+from tckdb_arc.warning_codes import ADAPTIVE_LEVEL_NOT_ATTRIBUTABLE, ArcWarning
 from tckdb_arc.config import (
     IMPLEMENTED_ARTIFACT_KINDS,
     TCKDBConfig,
@@ -68,10 +70,10 @@ from tckdb_arc.idempotency import (
     build_artifact_idempotency_key,
     build_idempotency_key,
 )
-from tckdb_arc.level_rules import method_identity_key
-from tckdb_arc.constraints import serialize_constraints
 from tckdb_arc.evidence import EvidenceStore
-from tckdb_arc.payload_writer import (
+from tckdb_core.constraints import serialize_constraints
+from tckdb_core.level_rules import method_identity_key
+from tckdb_core.payload_writer import (
     ArtifactSidecarMetadata,
     PayloadWriter,
     SidecarMetadata,
@@ -83,6 +85,15 @@ from tckdb_arc.payload_writer import (
 # key helpers moved to ``tckdb_core`` (batch L1). Every name that lived here is
 # re-exported so ``tckdb_arc.adapter.<name>`` keeps resolving for callers and
 # tests; the leading-underscore names are part of that surface.
+from tckdb_core import composition as _composition
+from tckdb_core import isotopes as _isotopes
+from tckdb_core import reaction_flatten as _reaction_flatten
+from tckdb_core import rmg_units as _rmg_units
+from tckdb_core import rules as _rules
+from tckdb_core import software_release as _software_release
+from tckdb_core import thermo_numerics as _thermo_numerics
+from tckdb_core import ts_evidence as _ts_evidence
+from tckdb_core.adapter_warnings import AdapterWarning, WarningSink
 from tckdb_core.constants import (  # noqa: F401
     ARTIFACTS_ENDPOINT_TEMPLATE,
     COMPUTED_REACTION_ENDPOINT,
@@ -147,7 +158,7 @@ def _serialize_calc_constraints(source) -> list[dict]:
     ``source`` is whatever ``arc/output.py`` attached to the record (a
     list of parser dicts) or what the caller passed explicitly. Empty /
     None / unrecognised input produces ``[]``. Wraps
-    ``tckdb_arc.constraints.serialize_constraints`` so per-calc parse
+    ``tckdb_core.constraints.serialize_constraints`` so per-calc parse
     failures never bubble up into payload generation.
     """
     if not source:
@@ -157,7 +168,7 @@ def _serialize_calc_constraints(source) -> list[dict]:
                        type(source).__name__)
         return []
     try:
-        return serialize_constraints(source)
+        return serialize_constraints(source, log=logger)
     except Exception as exc:  # defensive — serializer logs internally too
         logger.warning("TCKDB constraints: serialization failed: %s; emitting [].",
                        exc)
@@ -576,6 +587,113 @@ def _correction_records_from_record(
 
 logger = get_logger()
 
+#: Source tag of this adapter's sidecar warnings: ``context.source == "tckdb_arc_self_check"``.
+_PRODUCER_TAG = "tckdb_arc"
+
+
+def _self_check(
+    code: str, message: str, field: str | None = None, context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The sidecar dict of one self-check finding, rendered through ``AdapterWarning``.
+
+    ``context`` is the finding's own details (``action``, ids, ...); ``source`` is added
+    first. Appending the result to a plain list or to a ``WarningSink`` stores the same
+    ``{code, message, field, context}`` dict the sidecar has always held.
+    """
+    return AdapterWarning(code, message, field, context or {}).to_dict(_PRODUCER_TAG)
+
+
+# ---------------------------------------------------------------------------
+# Names that moved to ``tckdb_core`` in batch L2 (the producer-agnostic numerics, rules
+# and tables). Each keeps resolving here, and the functions that log do so through this
+# module's ``logger`` so ``mock.patch("tckdb_arc.adapter.logger")`` still intercepts them.
+# ---------------------------------------------------------------------------
+
+_ARC_TO_TCKDB_A_UNITS = _rmg_units.RMG_TO_TCKDB_A_UNITS
+_ARC_TO_TCKDB_EA_UNITS = _rmg_units.RMG_TO_TCKDB_EA_UNITS
+_normalize_unit_key = _rmg_units.normalize_unit_key
+
+
+def arc_to_tckdb_a_units(arc_units: str | None) -> str | None:
+    """Map an ARC ``A_units`` string to a TCKDB ``ArrheniusAUnits`` enum value.
+
+    ``tckdb_core.rmg_units.a_units_to_tckdb`` with this module's logger: ``None`` for
+    null/empty or unrecognised units (a debug line says which).
+    """
+    return _rmg_units.a_units_to_tckdb(arc_units, log=logger)
+
+
+def arc_to_tckdb_ea_units(arc_units: str | None) -> str | None:
+    """Map an ARC ``Ea_units`` (or ``dEa_units``) string to a TCKDB ``ActivationEnergyUnits`` value.
+
+    ``tckdb_core.rmg_units.ea_units_to_tckdb`` with this module's logger.
+    """
+    return _rmg_units.ea_units_to_tckdb(arc_units, log=logger)
+
+
+_GAS_CONSTANT_J_MOL_K = _thermo_numerics.GAS_CONSTANT_J_MOL_K
+_T298_K = _thermo_numerics.T298_K
+_nasa_h298_kj_mol = _thermo_numerics.nasa_h298_kj_mol
+
+
+def _build_nasa_block(nasa_low: Any, nasa_high: Any) -> dict[str, Any] | None:
+    """ARC's two NASA blocks as ``ThermoNASACreate`` (``tckdb_core.thermo_numerics``), or ``None``."""
+    return _thermo_numerics.build_nasa_block(nasa_low, nasa_high, log=logger)
+
+
+def _build_thermo_points(thermo_points: Any) -> list[dict[str, Any]]:
+    """ARC's ``thermo_points`` as ``ThermoPointCreate`` dicts (``tckdb_core.thermo_numerics``)."""
+    return _thermo_numerics.build_thermo_points(thermo_points, log=logger)
+
+
+_REACTION_FLAT_RESULT_FIELDS = _reaction_flatten.REACTION_FLAT_RESULT_FIELDS
+_REACTION_RESULT_FIELDS_HANDLED_ELSEWHERE = _reaction_flatten.REACTION_RESULT_FIELDS_HANDLED_ELSEWHERE
+_REACTION_RESULT_FIELDS_NOT_CARRIED = _reaction_flatten.REACTION_RESULT_FIELDS_NOT_CARRIED
+_REACTION_MODE_FIELDS_HANDLED = _reaction_flatten.REACTION_MODE_FIELDS_HANDLED
+_REACTION_MODE_FIELDS_NOT_CARRIED = _reaction_flatten.REACTION_MODE_FIELDS_NOT_CARRIED
+_flatten_result_fields = _reaction_flatten.flatten_result_fields
+_flatten_all_reaction_calcs = _reaction_flatten.flatten_all_reaction_calcs
+
+_xyz_element_symbols = _composition.xyz_element_symbols
+_FORMULA_TERM_RE = _composition.FORMULA_TERM_RE
+_formula_element_symbols = _composition.formula_element_symbols
+_is_single_atom_geometry = _composition.is_single_atom_geometry
+_formula = _composition.formula
+
+_XTB_BANNER_RE = _software_release.XTB_BANNER_RE
+_split_ess_version_banner = _software_release.split_version_banner
+
+_calculations_by_key = _rules.calculations_by_key
+_describe_level = _rules.describe_level
+_finite_float = _ts_evidence.finite_float
+
+
+def _energy_level_declaration(
+    energy_level: Mapping[str, Any] | None,
+    *,
+    calc_keys_by_role: Mapping[str, str],
+    calculations: Mapping[str, Mapping[str, Any]],
+) -> tuple[str, dict[str, Any]] | None:
+    """Return ``(role, level)`` to declare as ``energy_level_of_theory``, or ``None``.
+
+    The rule is TCKDB's (``assert_role_consistency``) and lives in
+    :func:`tckdb_core.rules.energy_level_declaration`; reading ARC's stated energy level
+    (``energy_level``, see ``_thermo_energy_level``) into the ``LevelOfTheoryRef`` shape
+    is the ARC part. Nothing is declared when ARC's energy level is not stated (adaptive
+    runs it cannot attribute).
+    """
+    if not isinstance(energy_level, Mapping):
+        return None
+    return _rules.energy_level_declaration(
+        _arc_level_to_tckdb_lot(energy_level),
+        energy_level_description=_describe_level(energy_level),
+        calc_keys_by_role=calc_keys_by_role,
+        calculations=calculations,
+        producer_name="ARC",
+        role_order=(_CALC_KEY_SP, _CALC_KEY_OPT),
+        log=logger,
+    )
+
 
 # Bundle-only calculation keys that ``_build_ts_block`` layers onto each
 # calc dict for the computed-reaction wire shape (local cross-reference
@@ -818,77 +936,6 @@ def _resolve_log_field(role: str, record: Mapping[str, Any]) -> str | None:
 # so the source-of-truth for naming stays on the producer side.
 _CALC_KEY_SCAN = "scan"
 
-# ARC kinetics-unit string → TCKDB enum string. Source of truth for the
-# enum values is TCKDB's ``ArrheniusAUnits`` and ``ActivationEnergyUnits``
-# (backend/app/db/models/common.py). The ARC side normalizes whitespace
-# and quotes before lookup so cosmetic variations don't miss.
-_ARC_TO_TCKDB_A_UNITS: dict[str, str] = {
-    "s^-1": "per_s",
-    "1/s": "per_s",
-    "cm^3/(mol*s)": "cm3_mol_s",
-    "cm^3/(molecule*s)": "cm3_molecule_s",
-    "m^3/(mol*s)": "m3_mol_s",
-    "cm^6/(mol^2*s)": "cm6_mol2_s",
-    "cm^6/(molecule^2*s)": "cm6_molecule2_s",
-    "m^6/(mol^2*s)": "m6_mol2_s",
-}
-
-_ARC_TO_TCKDB_EA_UNITS: dict[str, str] = {
-    "j/mol": "j_mol",
-    "kj/mol": "kj_mol",
-    "cal/mol": "cal_mol",
-    "kcal/mol": "kcal_mol",
-}
-
-
-def _normalize_unit_key(text: str | None) -> str | None:
-    """Lowercase + strip whitespace so ``" kJ/mol "`` matches ``"kj/mol"``.
-
-    The ARC unit strings come from RMG and aren't perfectly consistent in
-    case/whitespace; the TCKDB enums are. This is the boundary helper.
-    """
-    if text is None:
-        return None
-    s = str(text).strip().lower()
-    return s or None
-
-
-def arc_to_tckdb_a_units(arc_units: str | None) -> str | None:
-    """Map an ARC ``A_units`` string to a TCKDB ``ArrheniusAUnits`` enum value.
-
-    Returns ``None`` for null/empty input or unrecognized strings — the
-    caller decides whether to omit the field or raise. Unrecognized
-    units log a debug line so a producer with a typo can spot it
-    without spamming warnings on every reaction.
-    """
-    key = _normalize_unit_key(arc_units)
-    if key is None:
-        return None
-    enum_value = _ARC_TO_TCKDB_A_UNITS.get(key)
-    if enum_value is None:
-        logger.debug(
-            "TCKDB kinetics: unrecognized A_units %r; field will be omitted.",
-            arc_units,
-        )
-    return enum_value
-
-
-def arc_to_tckdb_ea_units(arc_units: str | None) -> str | None:
-    """Map an ARC ``Ea_units`` (or ``dEa_units``) string to a TCKDB ``ActivationEnergyUnits`` enum value.
-
-    Same null-or-unknown → ``None`` policy as :func:`arc_to_tckdb_a_units`.
-    """
-    key = _normalize_unit_key(arc_units)
-    if key is None:
-        return None
-    enum_value = _ARC_TO_TCKDB_EA_UNITS.get(key)
-    if enum_value is None:
-        logger.debug(
-            "TCKDB kinetics: unrecognized Ea_units %r; field will be omitted.",
-            arc_units,
-        )
-    return enum_value
-
 
 def _warn_primary_opt_placeholder(
     species_record: Mapping[str, Any],
@@ -931,14 +978,12 @@ def _warn_primary_opt_placeholder(
     )
     logger.warning("TCKDB %s: %s", code, message)
     if warnings is not None:
-        warnings.append({
-            "code": code, "message": message, "field": field,
-            "context": {"source": "tckdb_arc_self_check",
-                        "action": "placeholder_primary_opt_filed"},
-        })
+        warnings.append(_self_check(
+            code, message, field,
+            {"action": "placeholder_primary_opt_filed"}))
 
 
-_W_IRC_ENDPOINT_SPECIES_SKIPPED = "irc_endpoint_species_skipped"
+_W_IRC_ENDPOINT_SPECIES_SKIPPED = ArcWarning.IRC_ENDPOINT_SPECIES_SKIPPED.value
 
 
 def _irc_endpoint_skip(
@@ -984,13 +1029,9 @@ def _irc_endpoint_skip(
     logger.warning("TCKDB %s: %s", _W_IRC_ENDPOINT_SPECIES_SKIPPED, message)
     return UploadOutcome(
         status="skipped", payload_path=None, sidecar_path=None, idempotency_key="",
-        warnings=[{
-            "code": _W_IRC_ENDPOINT_SPECIES_SKIPPED,
-            "message": message,
-            "field": "species",
-            "context": {"source": "tckdb_arc_self_check",
-                        "action": "species_skipped", "ts_label": ts_label},
-        }],
+        warnings=[_self_check(
+            _W_IRC_ENDPOINT_SPECIES_SKIPPED, message, "species",
+            {"action": "species_skipped", "ts_label": ts_label})],
     )
 
 
@@ -1006,7 +1047,8 @@ class TCKDBAdapter(TCKDBUploaderBase):
     producer-agnostic :class:`tckdb_core.uploader.TCKDBUploaderBase`.
     """
 
-    PRODUCER_TAG = "tckdb_arc"
+    PRODUCER_TAG = _PRODUCER_TAG
+    LOGGER_NAME = _LOGGER_NAME
     PRODUCER_NAME = "ARC"
     IDEMPOTENCY_NAMESPACE = "arc"
 
@@ -1121,12 +1163,9 @@ class TCKDBAdapter(TCKDBUploaderBase):
                 "Observed outranks requested, and the adapter never sends both as consistent.")
             logger.warning("TCKDB %s: %s", _W_LEVEL_CONTRADICTED_BY_ROUTE, message)
             if warnings is not None:
-                warnings.append({
-                    "code": _W_LEVEL_CONTRADICTED_BY_ROUTE, "message": message,
-                    "field": f"{kind}.level_of_theory",
-                    "context": {"source": "tckdb_arc_self_check",
-                                "action": f"{kind}_calculation_omitted", "label": label},
-                })
+                warnings.append(_self_check(
+                    _W_LEVEL_CONTRADICTED_BY_ROUTE, message, f"{kind}.level_of_theory",
+                    {"action": f"{kind}_calculation_omitted", "label": label}))
 
     def submit_from_output(
         self,
@@ -1148,7 +1187,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
         if not self._config.enabled:
             return None
 
-        build_warnings: list[dict[str, Any]] = []
+        build_warnings: list[dict[str, Any]] = WarningSink(_PRODUCER_TAG)
         output_doc = self._with_adaptive_levels(output_doc, build_warnings)
         species_record = _withhold_unreliable_composite_energies(output_doc, species_record, build_warnings)
         skipped = _irc_endpoint_skip(output_doc, species_record)
@@ -1348,7 +1387,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
         conformer_label = extra_label or f"conf{conformer_index}"
         project_label = self._config.project_label or output_doc.get("project")
 
-        build_warnings: list[dict[str, Any]] = []
+        build_warnings: list[dict[str, Any]] = WarningSink(_PRODUCER_TAG)
         output_doc = self._with_adaptive_levels(output_doc, build_warnings)
         species_record = _withhold_unreliable_composite_energies(output_doc, species_record, build_warnings)
         skipped = _irc_endpoint_skip(output_doc, species_record)
@@ -2711,7 +2750,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
         reaction_label = reaction_record.get("label") or "unlabeled"
         project_label = self._config.project_label or output_doc.get("project")
 
-        build_warnings: list[dict[str, Any]] = []
+        build_warnings: list[dict[str, Any]] = WarningSink(_PRODUCER_TAG)
         output_doc = self._with_adaptive_levels(output_doc, build_warnings)
         output_doc = _withhold_unreliable_energies_in_doc(output_doc, build_warnings)
         reaction_record = _withhold_reaction_kinetics(output_doc, reaction_record, build_warnings)
@@ -3580,17 +3619,14 @@ class TCKDBAdapter(TCKDBUploaderBase):
                 "TCKDB irc_software_not_stated: TS %r IRC calculation not filed: "
                 "ARC recorded no ess_software.irc.", ts_label)
             if warnings is not None:
-                warnings.append({
-                    "code": "irc_software_not_stated",
-                    "message": (
-                        f"The IRC calculation of {ts_label!r} was not uploaded: ARC "
+                warnings.append(_self_check(
+                    ArcWarning.IRC_SOFTWARE_NOT_STATED.value,
+                    f"The IRC calculation of {ts_label!r} was not uploaded: ARC "
                         "states the program of the IRC logs in ess_software.irc, "
                         "only when every IRC log was identified as the same program, "
-                        "and it did not here."),
-                    "field": "transition_state.irc.software_release",
-                    "context": {"source": "tckdb_arc_self_check",
-                                "action": "irc_calculation_omitted"},
-                })
+                        "and it did not here.",
+                    "transition_state.irc.software_release",
+                    {"action": "irc_calculation_omitted"}))
             irc_level_unattributable = True
         elif irc_level is not None and not irc_level.get("software"):
             # ARC's IRC program rule gives no ESS this adapter can name.
@@ -3599,17 +3635,14 @@ class TCKDBAdapter(TCKDBUploaderBase):
                 "its level's method (%s) is not run in Gaussian, and ARC records no "
                 "IRC program.", ts_label, irc_level.get("method"))
             if warnings is not None:
-                warnings.append({
-                    "code": "irc_software_not_stated",
-                    "message": (
-                        f"The IRC calculation of {ts_label!r} was not uploaded: ARC runs "
+                warnings.append(_self_check(
+                    ArcWarning.IRC_SOFTWARE_NOT_STATED.value,
+                    f"The IRC calculation of {ts_label!r} was not uploaded: ARC runs "
                         "an IRC in Gaussian (arc/level.py deduce_software) except for "
                         f"UMA/torchani/xtb-type methods ({irc_level.get('method')!r}), "
-                        "and records no program for it."),
-                    "field": "transition_state.irc.software_release",
-                    "context": {"source": "tckdb_arc_self_check",
-                                "action": "irc_calculation_omitted"},
-                })
+                        "and records no program for it.",
+                    "transition_state.irc.software_release",
+                    {"action": "irc_calculation_omitted"}))
             irc_level_unattributable = True
         if ts_record.get("irc_logs") and not irc_level_unattributable:
             try:
@@ -3832,7 +3865,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
         )
         project_label = self._config.project_label or output_doc.get("project")
 
-        build_warnings: list[dict[str, Any]] = []
+        build_warnings: list[dict[str, Any]] = WarningSink(_PRODUCER_TAG)
         output_doc = self._with_adaptive_levels(output_doc, build_warnings)
         output_doc = _withhold_unreliable_energies_in_doc(output_doc, build_warnings)
         ts_record = _withhold_unreliable_composite_energies(output_doc, ts_record, build_warnings)
@@ -3950,7 +3983,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
             )
             self._warned_ts_artifacts_unsupported = True
 
-        ts_warnings: list[dict[str, Any]] = []
+        ts_warnings: list[dict[str, Any]] = WarningSink(_PRODUCER_TAG)
         ts_block, _ = self._build_ts_block(
             output_doc=output_doc,
             ts_record=ts_record,
@@ -4669,7 +4702,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
 
 
 _CONTRADICTIONS_KEY = "_tckdb_route_contradictions"
-_W_LEVEL_CONTRADICTED_BY_ROUTE = "level_contradicted_by_route"
+_W_LEVEL_CONTRADICTED_BY_ROUTE = ArcWarning.LEVEL_CONTRADICTED_BY_ROUTE.value
 
 
 def _route_contradiction(
@@ -4702,8 +4735,8 @@ def _note_route_contradiction(
             noted.append(entry)
 
 
-_W_COMPOSITE_GEOMETRY_LEVEL_NOT_STATED = "composite_geometry_level_not_stated"
-_W_PRIMARY_OPT_PLACEHOLDER_NO_OPT_JOB = "primary_opt_placeholder_no_opt_job"
+_W_COMPOSITE_GEOMETRY_LEVEL_NOT_STATED = ArcWarning.COMPOSITE_GEOMETRY_LEVEL_NOT_STATED.value
+_W_PRIMARY_OPT_PLACEHOLDER_NO_OPT_JOB = ArcWarning.PRIMARY_OPT_PLACEHOLDER_NO_OPT_JOB.value
 
 
 def _placeholder_origin(kind: str) -> dict[str, Any]:
@@ -4950,57 +4983,6 @@ def _screened_conformer_origin(job: str = "opt") -> dict[str, Any]:
     }
 
 
-_XTB_BANNER_RE = re.compile(r"^\s*xtb\s+version\s+(?P<version>\S+)(?:\s+\((?P<build>[0-9A-Za-z]+)\))?", re.IGNORECASE)
-
-
-def _split_ess_version_banner(name: str, banner: str) -> dict[str, str]:
-    """Split an ESS banner into ``version`` (and ``revision``) as TCKDB would.
-
-    ARC records the banner as printed (``ess_versions``: ``'Gaussian 16,
-    Revision C.02'``). TCKDB keeps version and revision in separate columns
-    and, given the banner as ``version``, normalises it itself with a
-    ``software_release_version_is_composite`` warning. The rule is the shared
-    ``tckdb_schemas.fragments.refs.SoftwareReleaseRef.normalize_composite_version``
-    (the model the server validates with), so it is reused here rather than
-    re-implemented and the adapter sends exactly what the server would store:
-
-    * no internal whitespace (``'16'``, ``'5.0.4'``): unchanged;
-    * leading token equal to ``name`` (case-insensitive): stripped, and a
-      trailing ``', Revision <label>'`` split into ``revision``
-      (``'Gaussian 16, Revision C.02'`` -> ``16`` / ``C.02``, ``'ORCA 5.0.4'``
-      -> ``5.0.4``, ``'Molpro 2022.3'`` -> ``2022.3``);
-    * leading token naming another program (``name='gaussian'``,
-      ``'ORCA 6.0.0'``; ``name='qchem'``, ``'Q-Chem 5.4'``): unchanged, as
-      the server leaves it (it warns ``software_release_name_looks_wrong``);
-      the adapter never guesses which of the two is right.
-
-    The server's ``[auto] ...`` provenance note is not sent: the split is
-    a deterministic reformat, and the banner is reconstructible from
-    ``name``/``version``/``revision``.
-    """
-    unchanged = {"version": banner}
-    xtb = _XTB_BANNER_RE.match(banner) if str(name).lower() == "xtb" else None
-    if xtb is not None:
-        # xtb prints ``xtb version 6.7.1 (edcfbbe) compiled by ...``: the shared
-        # composite rule would keep the word "version" in ``version``. The release
-        # number is the version and the parenthesised hash its build.
-        split = {"version": xtb.group("version")}
-        if xtb.group("build"):
-            split["build"] = xtb.group("build")
-        return split
-    try:
-        ref = SoftwareReleaseRef(name=name, version=banner)
-    except ValueError:
-        return unchanged
-    warning = ref.version_warning()
-    if warning is None or warning.code != W_SOFTWARE_RELEASE_VERSION_IS_COMPOSITE:
-        return unchanged
-    split = {"version": ref.version}
-    if ref.revision is not None:
-        split["revision"] = ref.revision
-    return split
-
-
 def _stated_integer(
     record: Mapping[str, Any],
     field: str,
@@ -5187,51 +5169,21 @@ def _designate_reaction_coordinate_index(
 ) -> int | None:
     """1-based position in ``imaginary_values`` of the unique major TS mode.
 
-    Applies ARC's own window criterion instead of "most negative wins"
-    over ALL modes: a candidate is any imaginary mode whose magnitude
-    sits strictly inside (75, 10000) cm-1 — mirroring
-    ``arc/checks/ts.py::check_imaginary_frequencies``, the same rule ARC
-    itself uses to accept a TS. Restricting candidacy to the window is
-    what keeps a parse/SCF artifact (e.g. -12000 cm-1, outside the
-    window) from ever being asserted as the barrier over the real
-    reaction coordinate (e.g. -1320.5 cm-1) sitting right where ARC
-    itself would call it — see
-    ``test_ts_designates_window_mode_over_a_stiffer_artifact``.
-
-    When more than one candidate qualifies, the largest-magnitude
-    candidate is designated. This is safe against TCKDB's own ambiguity
-    check (``W_TS_REACTION_COORDINATE_AMBIGUOUS`` in
-    ``stationary_point.py``), which blocks only when an undeclared extra
-    mode is *at least as stiff* as the designated one: a smaller
-    in-window sibling can never trip it once the larger one is chosen and
-    the others are marked ``unassigned``. See
-    ``test_ts_two_in_window_candidates_designates_larger_magnitude``.
-
-    Returns ``None`` only when the designation is genuinely undecidable:
-    zero candidates qualify, or more than one candidate ties for the
-    largest magnitude — including the classic degenerate-pair case,
-    where two modes share one magnitude and both sit inside the window.
-    Callers must not guess in that case — see
-    ``stationary_point.py``'s ``W_TS_REACTION_COORDINATE_AMBIGUOUS``,
-    which an undesignated same-magnitude "extra" mode would trip anyway.
+    The rule (largest-magnitude candidate inside the window, ``None`` on a tie or no
+    candidate) is :func:`tckdb_core.rules.designate_reaction_coordinate_index`; the
+    window is ARC's own, (75, 10000) cm-1, mirroring ``arc/checks/ts.py::
+    check_imaginary_frequencies`` (``_TS_MAJOR_MODE_MIN_CM1`` / ``_TS_MAJOR_MODE_MAX_CM1``).
     """
-    candidates = [
-        (i, abs(v)) for i, v in enumerate(imaginary_values, start=1)
-        if _TS_MAJOR_MODE_MIN_CM1 < abs(v) < _TS_MAJOR_MODE_MAX_CM1
-    ]
-    if not candidates:
-        return None
-    max_magnitude = max(magnitude for _, magnitude in candidates)
-    top = [i for i, magnitude in candidates if magnitude == max_magnitude]
-    return top[0] if len(top) == 1 else None
+    return _rules.designate_reaction_coordinate_index(
+        imaginary_values, window_cm1=(_TS_MAJOR_MODE_MIN_CM1, _TS_MAJOR_MODE_MAX_CM1))
 
 
 # TCKDB's noise floor for an imaginary mode when no protocol is recorded
 # (tckdb_schemas.stationary_point.TAU_PROTOCOL_NOT_RECORDED_CM1): deliberately the
 # finite-difference-from-gradients value, since assuming the better case would
 # flag modes that are only noise. ARC states no tau, so this is used.
-_TS_TAU_PROTOCOL_NOT_RECORDED_CM1 = 50.0
-_W_TS_REACTION_COORDINATE_NOT_DESIGNATED = "ts_reaction_coordinate_not_designated"
+_TS_TAU_PROTOCOL_NOT_RECORDED_CM1 = _rules.TAU_PROTOCOL_NOT_RECORDED_CM1
+_W_TS_REACTION_COORDINATE_NOT_DESIGNATED = ArcWarning.TS_REACTION_COORDINATE_NOT_DESIGNATED.value
 
 
 class TSReactionCoordinateNotDesignated(ValueError):
@@ -5258,15 +5210,9 @@ class TSReactionCoordinateNotDesignated(ValueError):
             f"refuses to guess; refusing to deposit this record."
         )
         super().__init__(message)
-        self.warning = {
-            "code": _W_TS_REACTION_COORDINATE_NOT_DESIGNATED,
-            "message": message,
-            "field": "transition_state.freq_result.reaction_coordinate_mode_index",
-            "context": {"source": "tckdb_arc_self_check", "action": "record_refused",
-                        "label": label, "imaginary_cm1": imaginary_cm1,
-                        "tau_cm1": _TS_TAU_PROTOCOL_NOT_RECORDED_CM1,
-                        "n_above_tau": n_above_tau},
-        }
+        self.warning = _self_check(
+            _W_TS_REACTION_COORDINATE_NOT_DESIGNATED, message, "transition_state.freq_result.reaction_coordinate_mode_index",
+            {"action": "record_refused", "label": label, "imaginary_cm1": imaginary_cm1, "tau_cm1": _TS_TAU_PROTOCOL_NOT_RECORDED_CM1, "n_above_tau": n_above_tau})
         logger.warning("TCKDB %s: %s", _W_TS_REACTION_COORDINATE_NOT_DESIGNATED, message)
 
 
@@ -5532,18 +5478,18 @@ def _freq_result_payload(
             # others are numerical noise and the one real mode is the reaction
             # coordinate. Two or more at or above tau is a genuine higher-order
             # saddle TCKDB blocks without a designation: refused.
-            magnitudes = [(i, abs(m["frequency_cm1"])) for i, m in imaginary_entries]
-            above = [i for i, mag in magnitudes if mag >= _TS_TAU_PROTOCOL_NOT_RECORDED_CM1]
-            if len(imaginary_entries) == n_imag and len(above) == 1:
-                reaction_coordinate_mode_index = above[0]
+            tau_index, n_above_tau = _rules.designate_by_tau(
+                [(i, m["frequency_cm1"]) for i, m in imaginary_entries], n_imag)
+            if tau_index is not None:
+                reaction_coordinate_mode_index = tau_index
                 for i, m in imaginary_entries:
-                    if i != above[0]:
+                    if i != tau_index:
                         m["imaginary_disposition"] = "unassigned"
             else:
                 values = [m["frequency_cm1"] for _, m in imaginary_entries]
                 raise TSReactionCoordinateNotDesignated(
                     label=str(label), n_imag=n_imag, imaginary_cm1=values,
-                    stated_index=stated_index, n_above_tau=len(above),
+                    stated_index=stated_index, n_above_tau=n_above_tau,
                 )
     elif n_imag and n_imag > 1:
         imaginary_entries = [
@@ -5866,8 +5812,8 @@ def _arc_args_to_keywords(args: Any) -> str | None:
     return "; ".join(parts)
 
 
-_W_LEVEL_METHOD_IS_COMPOUND = "level_method_is_compound"
-_W_CORRECTION_TABLE_METHOD_SPLIT = "correction_table_method_split"
+_W_LEVEL_METHOD_IS_COMPOUND = ArcWarning.LEVEL_METHOD_IS_COMPOUND.value
+_W_CORRECTION_TABLE_METHOD_SPLIT = ArcWarning.CORRECTION_TABLE_METHOD_SPLIT.value
 
 
 def _arc_level_to_tckdb_lot(
@@ -5972,7 +5918,7 @@ _ARKANE_COMPOSITE_KEY_RE = re.compile(
     re.DOTALL,
 )
 _ARKANE_KEY_FIELD_RE = re.compile(r"\s*(?P<name>[A-Za-z_]+)\s*=\s*'(?P<value>[^']*)'\s*(?:,|$)")
-_W_BAC_FREQUENCY_LEVEL_CONFLICT = "bac_frequency_level_conflict"
+_W_BAC_FREQUENCY_LEVEL_CONFLICT = ArcWarning.BAC_FREQUENCY_LEVEL_CONFLICT.value
 
 
 def _arkane_key_half(body: str) -> dict[str, str] | None:
@@ -6047,22 +5993,16 @@ def _bac_key_frequency_level(
             )
             logger.warning("TCKDB %s: %s: %s", warning_field, _W_BAC_FREQUENCY_LEVEL_CONFLICT, message)
             if warnings is not None:
-                warnings.append({
-                    "code": _W_BAC_FREQUENCY_LEVEL_CONFLICT,
-                    "message": message,
-                    "field": f"{warning_field}.scheme.frequency_level_of_theory",
-                    "context": {"source": "tckdb_arc_self_check",
-                                "action": "scheme_frequency_level_omitted",
-                                "scheme_kind": kind, "arkane_key_freq": dict(key_freq),
-                                "arc_freq_level": arc_stated},
-                })
+                warnings.append(_self_check(
+                    _W_BAC_FREQUENCY_LEVEL_CONFLICT, message, f"{warning_field}.scheme.frequency_level_of_theory",
+                    {"action": "scheme_frequency_level_omitted", "scheme_kind": kind, "arkane_key_freq": dict(key_freq), "arc_freq_level": arc_stated}))
             return None
     return _arc_level_to_tckdb_lot(key_freq)
 
 
 _ARKANE_KEY_RE = re.compile(r"^\s*LevelOfTheory\((?P<body>.*)\)\s*$", re.DOTALL)
 _ARKANE_KEY_SOFTWARE_RE = re.compile(r"(?:^|,)\s*software\s*=\s*'(?P<name>[A-Za-z0-9_.+-]+)'\s*(?=,|$)")
-_W_ENERGY_CORRECTION_SCHEME_SOFTWARE_CONFLICT = "energy_correction_scheme_software_conflict"
+_W_ENERGY_CORRECTION_SCHEME_SOFTWARE_CONFLICT = ArcWarning.ENERGY_CORRECTION_SCHEME_SOFTWARE_CONFLICT.value
 
 
 def _arkane_key_software(matched_arkane_key: Any) -> str | None:
@@ -6086,10 +6026,8 @@ def _arkane_key_software(matched_arkane_key: Any) -> str | None:
     return names[0]
 
 
-_W_ATOM_ENERGY_RECORD_NOT_DEPOSITED_AEC_YML = "atom_energy_record_not_deposited_aec_yml"
-_W_BAC_CORRECTION_OMITTED_COMPONENTS_INCOMPLETE = (
-    "bac_correction_omitted_components_incomplete"
-)
+_W_ATOM_ENERGY_RECORD_NOT_DEPOSITED_AEC_YML = ArcWarning.ATOM_ENERGY_RECORD_NOT_DEPOSITED_AEC_YML.value
+_W_BAC_CORRECTION_OMITTED_COMPONENTS_INCOMPLETE = ArcWarning.BAC_CORRECTION_OMITTED_COMPONENTS_INCOMPLETE.value
 
 
 def _bond_corrections_flag(record: Mapping[str, Any]) -> bool | None:
@@ -6099,7 +6037,7 @@ def _bond_corrections_flag(record: Mapping[str, Any]) -> bool | None:
     return flag if isinstance(flag, bool) else None
 
 
-_W_BAC_TYPE_NOT_STATED = "bac_type_not_stated"
+_W_BAC_TYPE_NOT_STATED = ArcWarning.BAC_TYPE_NOT_STATED.value
 
 
 def _warn_bac_type_not_stated(
@@ -6122,13 +6060,9 @@ def _warn_bac_type_not_stated(
     )
     logger.warning("TCKDB %s: %s", _W_BAC_TYPE_NOT_STATED, message)
     if warnings is not None:
-        warnings.append({
-            "code": _W_BAC_TYPE_NOT_STATED,
-            "message": message,
-            "field": "thermo",
-            "context": {"source": "tckdb_arc_self_check", "action": "none_scheme_from_energy_corrections",
-                        "bac_type": str(output_doc.get("bac_type"))},
-        })
+        warnings.append(_self_check(
+            _W_BAC_TYPE_NOT_STATED, message, "thermo",
+            {"action": "none_scheme_from_energy_corrections", "bac_type": str(output_doc.get("bac_type"))}))
 
 
 def _note_omitted_bac_on_thermo(
@@ -6342,14 +6276,9 @@ def _build_applied_energy_corrections(
             logger.warning("TCKDB %s: %s: %s", warning_field,
                            _W_ATOM_ENERGY_RECORD_NOT_DEPOSITED_AEC_YML, message)
             if warnings is not None:
-                warnings.append({
-                    "code": _W_ATOM_ENERGY_RECORD_NOT_DEPOSITED_AEC_YML,
-                    "message": message, "field": warning_field,
-                    "context": {"source": "tckdb_arc_self_check",
-                                "action": "atom_energy_correction_omitted",
-                                "arc_aec_yml_sha256": aec_yml_digest,
-                                "species": target_label},
-                })
+                warnings.append(_self_check(
+                    _W_ATOM_ENERGY_RECORD_NOT_DEPOSITED_AEC_YML, message, warning_field,
+                    {"action": "atom_energy_correction_omitted", "arc_aec_yml_sha256": aec_yml_digest, "species": target_label}))
             continue
         components_in = rec.get("components") or []
         omission = _petersson_bac_omission_reason(
@@ -6370,16 +6299,9 @@ def _build_applied_energy_corrections(
             if omitted_bac_reasons is not None:
                 omitted_bac_reasons.append(reason)
             if warnings is not None:
-                warnings.append({
-                    "code": _W_BAC_CORRECTION_OMITTED_COMPONENTS_INCOMPLETE,
-                    "message": message,
-                    "field": warning_field,
-                    "context": {"source": "tckdb_arc_self_check",
-                                "action": "bac_correction_omitted",
-                                "reason": reason,
-                                "target_kind": target_kind,
-                                "species": target_label},
-                })
+                warnings.append(_self_check(
+                    _W_BAC_CORRECTION_OMITTED_COMPONENTS_INCOMPLETE, message, warning_field,
+                    {"action": "bac_correction_omitted", "reason": reason, "target_kind": target_kind, "species": target_label}))
             continue
         components_out: list[dict[str, Any]] = []
         for c in components_in:
@@ -6425,15 +6347,9 @@ def _build_applied_energy_corrections(
                 )
                 logger.warning("TCKDB %s: %s: %s", warning_field, _W_CORRECTION_TABLE_METHOD_SPLIT, message)
                 if warnings is not None:
-                    warnings.append({
-                        "code": _W_CORRECTION_TABLE_METHOD_SPLIT,
-                        "message": message,
-                        "field": f"{warning_field}.scheme.level_of_theory.method",
-                        "context": {"source": "tckdb_arc_self_check",
-                                    "action": "correction_table_named_on_scheme",
-                                    "table": table_name, "method": table_stem,
-                                    "scheme_kind": str(scheme_out.get("kind"))},
-                    })
+                    warnings.append(_self_check(
+                        _W_CORRECTION_TABLE_METHOD_SPLIT, message, f"{warning_field}.scheme.level_of_theory.method",
+                        {"action": "correction_table_named_on_scheme", "table": table_name, "method": table_stem, "scheme_kind": str(scheme_out.get("kind"))}))
             scheme_out["level_of_theory"] = lot_ref
             if scheme_out.get("kind") in _FREQ_KEYED_SCHEME_KINDS:
                 freq_ref = _bac_key_frequency_level(
@@ -6476,16 +6392,9 @@ def _build_applied_energy_corrections(
                 logger.warning("TCKDB %s: %s: %s", warning_field,
                                _W_ENERGY_CORRECTION_SCHEME_SOFTWARE_CONFLICT, message)
                 if warnings is not None:
-                    warnings.append({
-                        "code": _W_ENERGY_CORRECTION_SCHEME_SOFTWARE_CONFLICT,
-                        "message": message,
-                        "field": f"{warning_field}.scheme.software",
-                        "context": {"source": "tckdb_arc_self_check",
-                                    "action": "scheme_software_omitted",
-                                    "scheme_kind": str(scheme_out.get("kind")),
-                                    "arkane_key_software": key_software,
-                                    "level_software": level_software},
-                    })
+                    warnings.append(_self_check(
+                        _W_ENERGY_CORRECTION_SCHEME_SOFTWARE_CONFLICT, message, f"{warning_field}.scheme.software",
+                        {"action": "scheme_software_omitted", "scheme_kind": str(scheme_out.get("kind")), "arkane_key_software": key_software, "level_software": level_software}))
             else:
                 scheme_out["software"] = {"name": key_software}
 
@@ -6546,10 +6455,10 @@ _THERMO_ENTHALPY_REFERENCE_KIND = "formation_298k"
 # atom energies were used (``thermo.atom_corrections_level``), which can be
 # a stand-in for the energy level (ARC only warns). Enthalpies failing
 # either check are stripped from the block, keeping its entropy and Cp.
-_W_ENTHALPY_ATOM_CORRECTIONS_NOT_APPLIED = "enthalpy_atom_corrections_not_applied"
-_W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_MISMATCH = "enthalpy_atom_corrections_level_mismatch"
-_W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_UNVERIFIABLE = "enthalpy_atom_corrections_level_unverifiable"
-_W_ENTHALPY_NOT_FINITE = "enthalpy_not_finite"
+_W_ENTHALPY_ATOM_CORRECTIONS_NOT_APPLIED = ArcWarning.ENTHALPY_ATOM_CORRECTIONS_NOT_APPLIED.value
+_W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_MISMATCH = ArcWarning.ENTHALPY_ATOM_CORRECTIONS_LEVEL_MISMATCH.value
+_W_ENTHALPY_ATOM_CORRECTIONS_LEVEL_UNVERIFIABLE = ArcWarning.ENTHALPY_ATOM_CORRECTIONS_LEVEL_UNVERIFIABLE.value
+_W_ENTHALPY_NOT_FINITE = ArcWarning.ENTHALPY_NOT_FINITE.value
 # Levels compare by effective method (the method with its dispersion
 # folded in) and basis, normalized exactly as ARC matches levels against
 # Arkane's database: case, hyphens and spaces and a trailing refit year are
@@ -6577,8 +6486,7 @@ _LEVEL_FIELDS_ARC_MATCHING_IGNORES = ("dispersion", "solvation_method")
 # be a formation enthalpy. It misses every species whose raw total energy
 # is below about 7.6 hartree (2e4 kJ/mol): H, H2, He, the Li atom.
 _FORMATION_ENTHALPY_MAX_ABS_KJ_MOL = 2.0e4
-_W_ENTHALPY_NOT_FORMATION_MAGNITUDE = "enthalpy_not_formation_magnitude"
-
+_W_ENTHALPY_NOT_FORMATION_MAGNITUDE = ArcWarning.ENTHALPY_NOT_FORMATION_MAGNITUDE.value
 # Interim checks for a null or absent flag, until every run writes output.yml
 # 1.2's ``atom_corrections_applied`` (ARC PR #1059), which supersedes them.
 #
@@ -6610,10 +6518,8 @@ _W_ENTHALPY_NOT_FORMATION_MAGNITUDE = "enthalpy_not_formation_magnitude"
 #   matching ignores them, so the plain gas-phase method's atom energies
 #   were applied.
 _LIGHT_ATOM_TOTAL_ENERGY_HARTREE = {"H": 0.50, "He": 2.90, "Li": 7.43}
-_W_ENTHALPY_FORMATION_UNVERIFIABLE_LIGHT_SPECIES = "enthalpy_formation_unverifiable_light_species"
+_W_ENTHALPY_FORMATION_UNVERIFIABLE_LIGHT_SPECIES = ArcWarning.ENTHALPY_FORMATION_UNVERIFIABLE_LIGHT_SPECIES.value
 _HEADER_CORRECTIONS_LEVEL_SOURCE = "output_header.arkane_level_of_theory"
-_GAS_CONSTANT_J_MOL_K = 8.314462618
-_T298_K = 298.15
 
 # TCKDB #529 and the producer contract: ``reference_pressure_bar`` is never
 # defaulted, and "if your source does not say which convention a number
@@ -6623,8 +6529,7 @@ _T298_K = 298.15
 # run that recorded one). When it is absent or unusable the adapter omits
 # ``reference_pressure_bar`` (TCKDB stores "not stated") and reports
 # ``thermo_reference_pressure_not_stated``; it never fills RMG's 1 atm in.
-_W_THERMO_REFERENCE_PRESSURE_NOT_STATED = "thermo_reference_pressure_not_stated"
-
+_W_THERMO_REFERENCE_PRESSURE_NOT_STATED = ArcWarning.THERMO_REFERENCE_PRESSURE_NOT_STATED.value
 # Plausible standard-state pressures, in bar: a validity check on the value
 # ARC recorded, never a source of one. Every real convention (1 bar, 1 atm)
 # sits well inside; a value in bar mistaken for Pa (1.01325 -> 1e-5 bar) or
@@ -6659,15 +6564,6 @@ def _thermo_reference_pressure_bar(
     return None, "malformed"
 
 
-def _nasa_h298_kj_mol(nasa: Mapping[str, float]) -> float:
-    """Evaluate a NASA-7 block's H at 298.15 K (kJ/mol)."""
-    prefix = "a" if _T298_K <= nasa["t_mid"] else "b"
-    c = [nasa[f"{prefix}{i}"] for i in range(1, 8)]
-    t = _T298_K
-    h_rt = c[0] + c[1] * t / 2 + c[2] * t**2 / 3 + c[3] * t**3 / 4 + c[4] * t**4 / 5 + c[5] / t
-    return h_rt * _GAS_CONSTANT_J_MOL_K * t / 1000.0
-
-
 def _thermo_energy_level(
     output_doc: Mapping[str, Any], record: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any] | None:
@@ -6697,66 +6593,6 @@ def _thermo_energy_level(
                 return None
         return composite
     return _resolve_level(output_doc, "sp", record)
-
-
-def _calculations_by_key(*groups: Any) -> dict[str, Mapping[str, Any]]:
-    """Map each built calculation dict's bundle-local ``key`` to the dict."""
-    out: dict[str, Mapping[str, Any]] = {}
-    for group in groups:
-        for calc in ([group] if isinstance(group, Mapping) else group or ()):
-            if isinstance(calc, Mapping) and isinstance(calc.get("key"), str):
-                out[calc["key"]] = calc
-    return out
-
-
-def _energy_level_declaration(
-    energy_level: Mapping[str, Any] | None,
-    *,
-    calc_keys_by_role: Mapping[str, str],
-    calculations: Mapping[str, Mapping[str, Any]],
-) -> tuple[str, dict[str, Any]] | None:
-    """Return ``(role, level)`` to declare as ``energy_level_of_theory``, or ``None``.
-
-    TCKDB checks a declared energy level against the calculations the record
-    links (``app.services.calculation_levels.assert_role_consistency``): the
-    linked sp's level when there is one, else every linked opt's. Levels are
-    compared as resolved rows, and the row identity hashes every field of
-    ``LevelOfTheoryRef`` including ``spin_treatment``, where NULL folds to
-    ``"unknown"`` (``app.services.calculation_resolution._level_of_theory_hash``).
-    The adapter stamps ``spin_treatment`` on the sp's level from
-    ``scf_reference`` (``_calculation_payload``), so the bare level ARC ran at
-    is a different row and a declaration built from it is refused
-    (``thermo_energy_level_contradiction`` / ``statmech_energy_level_contradiction``).
-
-    The declaration is therefore the energy calculation's own ``level_of_theory``
-    as sent, ``spin_treatment`` included, and only when ARC's stated energy level
-    (``energy_level``, see ``_thermo_energy_level``) is that calculation's level
-    apart from ``spin_treatment``. Nothing is declared when no sp (or, without
-    one, no opt) is linked, when ARC's energy level is not stated (adaptive runs
-    it cannot attribute), or when it is another level than the linked
-    calculation's (a composite method, which is not sent as a calculation, or an
-    ``sp_level`` whose sp was not built): TCKDB would refuse it or have nothing
-    to check it against.
-    """
-    if not isinstance(energy_level, Mapping):
-        return None
-    stated = _arc_level_to_tckdb_lot(energy_level)
-    if stated is None:
-        return None
-    role = _CALC_KEY_SP if _CALC_KEY_SP in calc_keys_by_role else (
-        _CALC_KEY_OPT if _CALC_KEY_OPT in calc_keys_by_role else None)
-    if role is None:
-        return None
-    calc = calculations.get(calc_keys_by_role[role])
-    level = calc.get("level_of_theory") if isinstance(calc, Mapping) else None
-    if not isinstance(level, Mapping):
-        return None
-    if {k: v for k, v in level.items() if k != "spin_treatment"} != stated:
-        logger.info(
-            "TCKDB energy level not declared: ARC's energy level %s is not the "
-            "level of the linked %s calculation.", _describe_level(energy_level), role)
-        return None
-    return role, dict(level)
 
 
 def _normalize_level_name(name: Any) -> str | None:
@@ -6799,55 +6635,6 @@ def _level_identity(level: Any) -> tuple[str, str | None] | None:
     return method, _normalize_level_name(level.get("basis"))
 
 
-def _describe_level(level: Any) -> str:
-    if not isinstance(level, Mapping) or not level.get("method"):
-        return "an unrecorded level"
-    method = str(level["method"])
-    if level.get("dispersion"):
-        method += f" + {level['dispersion']}"
-    return "/".join([method, *([str(level["basis"])] if level.get("basis") else [])])
-
-
-def _xyz_element_symbols(xyz: Any) -> tuple[str, ...] | None:
-    """Return the element symbol of every atom in an output.yml ``xyz`` string.
-
-    Accepts ARC's atom-only lines (``xyz_to_str``) with or without an XYZ
-    count/comment header. ``None`` when the geometry is missing or a line
-    does not start with an element symbol.
-    """
-    if not isinstance(xyz, str):
-        return None
-    lines = [line for line in xyz.strip().splitlines() if line.strip()]
-    if lines and lines[0].strip().isdigit():
-        lines = [line for line in xyz.strip().splitlines()[2:] if line.strip()]
-    symbols = tuple(line.split()[0].capitalize() for line in lines)
-    if not symbols or not all(symbol.isalpha() for symbol in symbols):
-        return None
-    return symbols
-
-
-_FORMULA_TERM_RE = re.compile(r"([A-Z][a-z]?)(\d*)")
-
-
-def _formula_element_symbols(formula: Any) -> tuple[str, ...] | None:
-    """Expand a plain ``formula`` (``H``, ``H2``, ``C2H5O``) to one symbol per atom.
-
-    ``None`` for anything else (charges, parentheses, isotopes), like
-    ``_xyz_element_symbols``.
-    """
-    if not isinstance(formula, str) or not formula:
-        return None
-    terms = _FORMULA_TERM_RE.findall(formula)
-    if "".join(symbol + count for symbol, count in terms) != formula:
-        return None
-    symbols: list[str] = []
-    for symbol, count in terms:
-        if count.startswith("0"):
-            return None
-        symbols.extend([symbol] * int(count or 1))
-    return tuple(symbols)
-
-
 def _species_element_symbols(record: Mapping[str, Any]) -> tuple[str, ...] | None:
     """A species record's composition: its xyz, else its ``formula``.
 
@@ -6858,17 +6645,6 @@ def _species_element_symbols(record: Mapping[str, Any]) -> tuple[str, ...] | Non
     if symbols is None:
         symbols = _formula_element_symbols(record.get("formula"))
     return symbols
-
-
-def _is_single_atom_geometry(xyz_text: Any) -> bool:
-    """Whether a conformer's own XYZ has exactly one atom.
-
-    The rule tckdb-schemas 0.59 states for an ``sp`` primary calculation is on the
-    geometry the conformer carries (``geometry.natoms == 1``), so it is read from
-    the XYZ the adapter sends, never from the formula or the SMILES.
-    """
-    symbols = _xyz_element_symbols(xyz_text)
-    return symbols is not None and len(symbols) == 1
 
 
 def _monatomic_sp_result_payload(record: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -6938,13 +6714,6 @@ def _light_species_raw_energy_kj_mol(element_symbols: Any) -> float | None:
             return None
         hartree += atom_hartree
     return hartree * E_h_kJmol
-
-
-def _formula(element_symbols: Any) -> str:
-    counts: dict[str, int] = {}
-    for symbol in element_symbols:
-        counts[symbol] = counts.get(symbol, 0) + 1
-    return "".join(f"{s}{n if n > 1 else ''}" for s, n in sorted(counts.items()))
 
 
 def _level_field_unverifiable_error(
@@ -7347,13 +7116,9 @@ def _build_thermo_block(
             warning_field, "its enthalpy" if keep else "it", code, message,
         )
         if warnings is not None:
-            warnings.append({
-                "code": code,
-                "message": message,
-                "field": warning_field,
-                "context": {"source": "tckdb_arc_self_check", "action": action,
-                            **extra_context},
-            })
+            warnings.append(_self_check(
+                code, message, warning_field,
+                {"action": action, **extra_context}))
     if keep and pressure_unstated is not None:
         message = (
             "ARC did not record the standard-state pressure its entropies were "
@@ -7367,143 +7132,10 @@ def _build_thermo_block(
             warning_field, _W_THERMO_REFERENCE_PRESSURE_NOT_STATED, message,
         )
         if warnings is not None:
-            warnings.append({
-                "code": _W_THERMO_REFERENCE_PRESSURE_NOT_STATED,
-                "message": message,
-                "field": warning_field,
-                "context": {"source": "tckdb_arc_self_check",
-                            "action": "reference_pressure_omitted",
-                            "standard_state_pressure_pa": pressure_unstated},
-            })
+            warnings.append(_self_check(
+                _W_THERMO_REFERENCE_PRESSURE_NOT_STATED, message, warning_field,
+                {"action": "reference_pressure_omitted", "standard_state_pressure_pa": pressure_unstated}))
     return block if keep else None
-
-
-def _build_nasa_block(
-    nasa_low: Any, nasa_high: Any
-) -> dict[str, Any] | None:
-    """Map ARC's two NASA blocks to ``ThermoNASACreate``.
-
-    Returns ``None`` if either block is missing or fails any of the
-    structural checks. Per spec, malformed NASA must skip the NASA block
-    only — scalar thermo and Cp points are kept by the caller.
-    """
-    if not isinstance(nasa_low, Mapping) or not isinstance(nasa_high, Mapping):
-        return None
-    low_coeffs = nasa_low.get("coeffs")
-    high_coeffs = nasa_high.get("coeffs")
-    if not isinstance(low_coeffs, list) or len(low_coeffs) != 7:
-        logger.warning(
-            "TCKDB thermo: NASA block skipped — nasa_low.coeffs must be a list of 7 floats."
-        )
-        return None
-    if not isinstance(high_coeffs, list) or len(high_coeffs) != 7:
-        logger.warning(
-            "TCKDB thermo: NASA block skipped — nasa_high.coeffs must be a list of 7 floats."
-        )
-        return None
-    t_low = nasa_low.get("tmin_k")
-    t_mid_low = nasa_low.get("tmax_k")
-    t_mid_high = nasa_high.get("tmin_k")
-    t_high = nasa_high.get("tmax_k")
-    if None in (t_low, t_mid_low, t_mid_high, t_high):
-        logger.warning(
-            "TCKDB thermo: NASA block skipped — temperature bounds incomplete."
-        )
-        return None
-    try:
-        t_low_f, t_mid_low_f, t_mid_high_f, t_high_f = (
-            float(t_low), float(t_mid_low), float(t_mid_high), float(t_high)
-        )
-    except (TypeError, ValueError) as exc:
-        logger.warning("TCKDB thermo: NASA block skipped — non-numeric bounds (%s).", exc)
-        return None
-    if t_mid_low_f != t_mid_high_f:
-        logger.warning(
-            "TCKDB thermo: NASA block skipped — nasa_low.tmax_k=%s != nasa_high.tmin_k=%s.",
-            t_mid_low_f, t_mid_high_f,
-        )
-        return None
-    try:
-        low_floats = [float(c) for c in low_coeffs]
-        high_floats = [float(c) for c in high_coeffs]
-    except (TypeError, ValueError) as exc:
-        logger.warning("TCKDB thermo: NASA block skipped — non-numeric coefficient (%s).", exc)
-        return None
-    block: dict[str, Any] = {
-        "t_low": t_low_f,
-        "t_mid": t_mid_low_f,
-        "t_high": t_high_f,
-    }
-    for i, c in enumerate(low_floats, start=1):
-        block[f"a{i}"] = c
-    for i, c in enumerate(high_floats, start=1):
-        block[f"b{i}"] = c
-    return block
-
-
-def _build_thermo_points(thermo_points: Any) -> list[dict[str, Any]]:
-    """Map ARC's ``thermo_points`` list to ``ThermoPointCreate`` dicts.
-
-    Each entry must carry ``temperature_k``; ``cp_j_mol_k``, ``h_kj_mol``,
-    ``s_j_mol_k``, and ``g_kj_mol`` are optional and forwarded when present
-    and numeric. Malformed individual points (missing/non-numeric
-    temperature, or a per-quantity value that won't coerce) are dropped
-    with a warning so a single bad row doesn't take out the whole
-    thermo upload.
-    """
-    if not isinstance(thermo_points, list):
-        return []
-    seen_temps: set[float] = set()
-    points: list[dict[str, Any]] = []
-    for i, raw in enumerate(thermo_points):
-        if not isinstance(raw, Mapping):
-            logger.warning("TCKDB thermo: thermo_points[%d] skipped — not a mapping.", i)
-            continue
-        t = raw.get("temperature_k")
-        if t is None:
-            logger.warning("TCKDB thermo: thermo_points[%d] skipped — missing temperature_k.", i)
-            continue
-        try:
-            t_f = float(t)
-        except (TypeError, ValueError) as exc:
-            logger.warning(
-                "TCKDB thermo: thermo_points[%d] skipped — non-numeric temperature_k=%r (%s).",
-                i, t, exc,
-            )
-            continue
-        if t_f <= 0:
-            logger.warning(
-                "TCKDB thermo: thermo_points[%d] skipped — temperature_k must be > 0 (got %s).",
-                i, t_f,
-            )
-            continue
-        if t_f in seen_temps:
-            # Server enforces uniqueness by temperature_k; skip duplicates here.
-            logger.warning(
-                "TCKDB thermo: thermo_points[%d] skipped — duplicate temperature_k=%s.",
-                i, t_f,
-            )
-            continue
-        seen_temps.add(t_f)
-        point: dict[str, Any] = {"temperature_k": t_f}
-        for src_key, dst_key in (
-            ("cp_j_mol_k", "cp_j_mol_k"),
-            ("h_kj_mol", "h_kj_mol"),
-            ("s_j_mol_k", "s_j_mol_k"),
-            ("g_kj_mol", "g_kj_mol"),
-        ):
-            v = raw.get(src_key)
-            if v is None:
-                continue
-            try:
-                point[dst_key] = float(v)
-            except (TypeError, ValueError) as exc:
-                logger.warning(
-                    "TCKDB thermo: thermo_points[%d].%s dropped — non-numeric %r (%s).",
-                    i, src_key, v, exc,
-                )
-        points.append(point)
-    return points
 
 
 def _index_species(output_doc: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -7714,7 +7346,7 @@ _STATMECH_CALC_ROLES: tuple[tuple[str, str], ...] = (
 )
 
 
-_W_FREQ_SCALE_FACTOR_FITTED_FOR_OTHER_LEVEL = "freq_scale_factor_fitted_for_other_level"
+_W_FREQ_SCALE_FACTOR_FITTED_FOR_OTHER_LEVEL = ArcWarning.FREQ_SCALE_FACTOR_FITTED_FOR_OTHER_LEVEL.value
 
 
 def _build_freq_scale_factor_ref(
@@ -7803,12 +7435,9 @@ def _build_freq_scale_factor_ref(
         )
         logger.warning("TCKDB %s: %s", _W_FREQ_SCALE_FACTOR_FITTED_FOR_OTHER_LEVEL, message)
         if warnings is not None:
-            warnings.append({
-                "code": _W_FREQ_SCALE_FACTOR_FITTED_FOR_OTHER_LEVEL,
-                "message": message,
-                "field": "statmech.freq_scale_factor",
-                "context": {"source": "tckdb_arc_self_check", "action": "freq_scale_factor_sent_with_header_level"},
-            })
+            warnings.append(_self_check(
+                _W_FREQ_SCALE_FACTOR_FITTED_FOR_OTHER_LEVEL, message, "statmech.freq_scale_factor",
+                {"action": "freq_scale_factor_sent_with_header_level"}))
     if level_of_theory is None:
         logger.debug(
             "TCKDB statmech: freq/arkane level missing or has no 'method'; "
@@ -7924,10 +7553,8 @@ _STATMECH_FIELDS_BY_TARGET: dict[str, frozenset[str]] = {
 }
 
 
-_W_TORSION_SCAN_NOT_BUILT = "torsion_scan_not_built"
-
-
-_W_STATMECH_TREATMENT_NOT_STATED = "statmech_treatment_not_stated"
+_W_TORSION_SCAN_NOT_BUILT = ArcWarning.TORSION_SCAN_NOT_BUILT.value
+_W_STATMECH_TREATMENT_NOT_STATED = ArcWarning.STATMECH_TREATMENT_NOT_STATED.value
 
 
 def _build_statmech_block_for_species(
@@ -8079,14 +7706,9 @@ def _build_statmech_block_for_species(
                 logger.warning("TCKDB %s: %s: %s", warning_field,
                                _W_TORSION_WITHOUT_COORDINATES, message)
                 if warnings is not None:
-                    warnings.append({
-                        "code": _W_TORSION_WITHOUT_COORDINATES,
-                        "message": message,
-                        "field": f"{warning_field}.torsions",
-                        "context": {"source": "tckdb_arc_self_check",
-                                    "action": "torsion_sent_without_coordinates",
-                                    "torsion_index": torsion["torsion_index"]},
-                    })
+                    warnings.append(_self_check(
+                        _W_TORSION_WITHOUT_COORDINATES, message, f"{warning_field}.torsions",
+                        {"action": "torsion_sent_without_coordinates", "torsion_index": torsion["torsion_index"]}))
         for position in without_coordinates:
             message = (
                 f"Torsion #{position} has no usable atom_indices, and the conformer "
@@ -8095,15 +7717,9 @@ def _build_statmech_block_for_species(
             )
             logger.warning("TCKDB %s: %s: %s", warning_field, _W_TORSION_NOT_SENT, message)
             if warnings is not None:
-                warnings.append({
-                    "code": _W_TORSION_NOT_SENT,
-                    "message": message,
-                    "field": f"{warning_field}.torsions",
-                    "context": {"source": "tckdb_arc_self_check",
-                                "action": "torsion_omitted",
-                                "torsion_position": position,
-                                "reason": "atom_indices_unusable"},
-                })
+                warnings.append(_self_check(
+                    _W_TORSION_NOT_SENT, message, f"{warning_field}.torsions",
+                    {"action": "torsion_omitted", "torsion_position": position, "reason": "atom_indices_unusable"}))
         for position, scan_key in dropped_links:
             reason = omitted_scan_keys[scan_key]
             message = (
@@ -8114,14 +7730,9 @@ def _build_statmech_block_for_species(
             )
             logger.warning("TCKDB %s: %s: %s", warning_field, _W_TORSION_SCAN_NOT_BUILT, message)
             if warnings is not None:
-                warnings.append({
-                    "code": _W_TORSION_SCAN_NOT_BUILT,
-                    "message": message,
-                    "field": warning_field,
-                    "context": {"source": "tckdb_arc_self_check",
-                                "action": "torsion_scan_link_omitted",
-                                "scan_key": scan_key, "reason": reason},
-                })
+                warnings.append(_self_check(
+                    _W_TORSION_SCAN_NOT_BUILT, message, warning_field,
+                    {"action": "torsion_scan_link_omitted", "scan_key": scan_key, "reason": reason}))
         if schema_1_3:
             # Output 1.3 states the treatment Arkane applied, read from its own
             # ``output.py``, so neither ARC's rotor list nor the presence of a
@@ -8173,17 +7784,9 @@ def _build_statmech_block_for_species(
             logger.warning("TCKDB %s: %s: %s", warning_field,
                            _W_STATMECH_TREATMENT_NOT_STATED, message)
             if warnings is not None:
-                warnings.append({
-                    "code": _W_STATMECH_TREATMENT_NOT_STATED,
-                    "message": message,
-                    "field": f"{warning_field}.statmech_treatment",
-                    "context": {"source": "tckdb_arc_self_check",
-                                "action": "statmech_treatment_omitted",
-                                "reason": "no_freq_hessian",
-                                "inferred_treatment": treatment,
-                                "omitted": omitted,
-                                "torsion_count": len(slim_torsions)},
-                })
+                warnings.append(_self_check(
+                    _W_STATMECH_TREATMENT_NOT_STATED, message, f"{warning_field}.statmech_treatment",
+                    {"action": "statmech_treatment_omitted", "reason": "no_freq_hessian", "inferred_treatment": treatment, "omitted": omitted, "torsion_count": len(slim_torsions)}))
 
         # After the treatment is classified: a rejected rotor was not treated, so it
         # never counts toward ``statmech_treatment``. tckdb-schemas 0.61 gave the bundle
@@ -8289,16 +7892,9 @@ def _stated_arkane_treatment(
     message = f"statmech_treatment is omitted: {explanation}"
     logger.warning("TCKDB %s: %s: %s", warning_field, _W_STATMECH_TREATMENT_NOT_STATED, message)
     if warnings is not None:
-        warnings.append({
-            "code": _W_STATMECH_TREATMENT_NOT_STATED,
-            "message": message,
-            "field": f"{warning_field}.statmech_treatment",
-            "context": {"source": "tckdb_arc_self_check",
-                        "action": "statmech_treatment_omitted",
-                        "reason": reason,
-                        "arkane_treatment": stated if isinstance(stated, str) else None,
-                        "torsion_count": torsions_sent},
-        })
+        warnings.append(_self_check(
+            _W_STATMECH_TREATMENT_NOT_STATED, message, f"{warning_field}.statmech_treatment",
+            {"action": "statmech_treatment_omitted", "reason": reason, "arkane_treatment": stated if isinstance(stated, str) else None, "torsion_count": torsions_sent}))
     return None
 
 
@@ -8539,9 +8135,9 @@ def _build_slim_torsions(
     return out
 
 
-_W_TORSION_NOT_SENT = "torsion_not_sent"
-_W_TORSION_WITHOUT_COORDINATES = "torsion_without_coordinates"
-_W_REJECTED_TORSION_NOT_SENT = "rejected_torsion_not_sent"
+_W_TORSION_NOT_SENT = ArcWarning.TORSION_NOT_SENT.value
+_W_TORSION_WITHOUT_COORDINATES = ArcWarning.TORSION_WITHOUT_COORDINATES.value
+_W_REJECTED_TORSION_NOT_SENT = ArcWarning.REJECTED_TORSION_NOT_SENT.value
 _REJECTED_TORSION_NO_REASON = "ARC rejected this rotor and recorded no reason"
 
 
@@ -8597,15 +8193,9 @@ def _build_rejected_torsions(
             )
             logger.warning("TCKDB %s: %s: %s", warning_field, _W_REJECTED_TORSION_NOT_SENT, message)
             if warnings is not None:
-                warnings.append({
-                    "code": _W_REJECTED_TORSION_NOT_SENT,
-                    "message": message,
-                    "field": f"{warning_field}.torsions",
-                    "context": {"source": "tckdb_arc_self_check",
-                                "action": "rejected_torsion_omitted",
-                                "rotor_index": rotor_index,
-                                "reason": "atom_indices_unusable"},
-                })
+                warnings.append(_self_check(
+                    _W_REJECTED_TORSION_NOT_SENT, message, f"{warning_field}.torsions",
+                    {"action": "rejected_torsion_omitted", "rotor_index": rotor_index, "reason": "atom_indices_unusable"}))
             continue
         reason = entry.get("invalidation_reason")
         slim: dict[str, Any] = {
@@ -8685,7 +8275,7 @@ def _coerce_torsion_coordinates(
 
 #: Marks a record whose energies the adapter withheld (see ``_withhold_unreliable_composite_energies``).
 _ENERGY_WITHHELD_KEY = "_tckdb_energy_withheld"
-_W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03 = "g4_energy_loader_shifted_label_gaussian16_a03"
+_W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03 = ArcWarning.G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03.value
 #: Marks a ``thermo`` record whose E0-derived content is withheld (``_build_thermo_block`` strips it).
 _THERMO_ENTHALPY_WITHHELD_KEY = "_tckdb_thermo_enthalpy_withheld"
 _GAUSSIAN16_A03_BANNER = re.compile(r"gaussian\s*16\b.*\brevision\s*a\.?03\b", re.IGNORECASE | re.DOTALL)
@@ -8765,13 +8355,9 @@ def _withhold_unreliable_composite_energies(
                and (w.get("context") or {}).get("label") == label for w in (warnings or ())):
         logger.warning("TCKDB %s: %s", _W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03, message)
         if warnings is not None:
-            warnings.append({
-                "code": _W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03,
-                "message": message,
-                "field": f"{label}.energies",
-                "context": {"source": "tckdb_arc_self_check", "action": "record_energies_withheld",
-                            "label": label, "method": method, "ess_version": banner},
-            })
+            warnings.append(_self_check(
+                _W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03, message, f"{label}.energies",
+                {"action": "record_energies_withheld", "label": label, "method": method, "ess_version": banner}))
     out = dict(record)
     out["sp_energy_hartree"] = None
     if isinstance(record.get("thermo"), Mapping):
@@ -8847,11 +8433,9 @@ def _withhold_reaction_kinetics(
         )
         logger.warning("TCKDB %s: %s", _W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03, message)
         if warnings is not None:
-            warnings.append({
-                "code": _W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03, "message": message, "field": "kinetics",
-                "context": {"source": "tckdb_arc_self_check", "action": "kinetics_withheld",
-                            "reaction": reaction.get("label"), "withheld": hit},
-            })
+            warnings.append(_self_check(
+                _W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03, message, "kinetics",
+                {"action": "kinetics_withheld", "reaction": reaction.get("label"), "withheld": hit}))
     return {**reaction, "kinetics": None}
 
 
@@ -8953,197 +8537,6 @@ def _ts_unmapped_smiles_handle(
         return None
 
     return f"{'.'.join(reactant_smiles)}>>{'.'.join(product_smiles)}"
-
-
-# Result-shape adapter: ``CalculationInBundle`` (computed-species)
-# wraps results in nested ``opt_result``/``freq_result``/``sp_result``
-# dicts; the network_pdep ``CalculationIn`` (which the computed-reaction
-# endpoint extends) carries the same data as flat fields. The mapping
-# below is the full v0 translation; ``_calculation_payload`` produces
-# the wrapped shape, and :func:`_flatten_result_fields` rewrites it to
-# the flat shape in place when building reaction bundles.
-_REACTION_FLAT_RESULT_FIELDS: dict[str, dict[str, str]] = {
-    "opt_result": {
-        "converged": "opt_converged",
-        "n_steps": "opt_n_steps",
-        "final_energy_hartree": "opt_final_energy_hartree",
-    },
-    "freq_result": {
-        "n_imag": "freq_n_imag",
-        "imag_freq_cm1": "freq_imag_freq_cm1",
-        "zpe_hartree": "freq_zpe_hartree",
-        "reaction_coordinate_mode_index": "freq_reaction_coordinate_mode_index",
-    },
-    "sp_result": {
-        "electronic_energy_hartree": "sp_electronic_energy_hartree",
-    },
-}
-
-# Wrapped-result top-level fields with no 1:1 entry in
-# ``_REACTION_FLAT_RESULT_FIELDS`` above but that ARE carried onto the
-# reaction route by dedicated code further down in
-# :func:`_flatten_result_fields`, rather than the generic src->dst copy
-# loop. ``freq_result.modes`` is the only one today: it fans out into
-# both ``freq_frequencies_cm1`` and ``freq_imaginary_dispositions``.
-_REACTION_RESULT_FIELDS_HANDLED_ELSEWHERE: dict[str, frozenset[str]] = {
-    "freq_result": frozenset({"modes"}),
-}
-
-# Wrapped-result top-level fields that are deliberately NOT carried onto
-# the reaction route's flat shape, keyed by wrapped_key -> {field:
-# reason}. Empty today: every top-level field ``OptResultPayload`` /
-# ``FreqResultPayload`` / ``SPResultPayload`` can carry already has a
-# mapping above or a dedicated handler. Kept as a real (checked) table
-# rather than omitted so a future field that genuinely can't be carried
-# has an explicit place to land, with a reason, instead of the
-# completeness guard below being silenced by deleting its check.
-_REACTION_RESULT_FIELDS_NOT_CARRIED: dict[str, dict[str, str]] = {}
-
-# Per-mode (``FrequencyModePayload``) fields consumed while building
-# ``freq_frequencies_cm1`` / ``freq_imaginary_dispositions`` above.
-# ``mode_index`` and ``is_imaginary`` are read as indexing/control data
-# and not re-emitted under their own name (``mode_index`` becomes the
-# mode's position in ``freq_frequencies_cm1`` and its key in
-# ``freq_imaginary_dispositions``; ``is_imaginary`` is implied on the
-# flat side by the sign of ``frequency_cm1`` — see
-# ``shared/calculation_in.py::freq_result_of``).
-_REACTION_MODE_FIELDS_HANDLED = frozenset({
-    "mode_index", "frequency_cm1", "is_imaginary", "imaginary_disposition",
-})
-
-# ``FrequencyModePayload`` fields with no home at all on the reaction
-# route: ``CalculationIn.freq_frequencies_cm1`` is a bare ``list[float]``
-# and ``freq_imaginary_dispositions`` is a bare ``{mode_index:
-# disposition}`` map (``shared/calculation_in.py``) — neither has a slot
-# for per-mode metadata beyond frequency and imaginary disposition. This
-# is a structural limit of the flat reaction shape itself, not an
-# adapter oversight: ``shared/calculation_in.py::freq_result_of``
-# reconstructs ``FrequencyModePayload`` from the flat fields using only
-# ``mode_index``/``frequency_cm1``/``is_imaginary``/
-# ``imaginary_disposition``, so nothing downstream could receive these
-# even if this adapter tried to carry them. ``_freq_result_payload``
-# does not currently populate any of them either, so nothing is lost in
-# practice today; they are listed here (with the schema-level reason)
-# so the completeness guard has a real, checked table to point at
-# instead of an unexamined "everything else is fine".
-_REACTION_MODE_FIELDS_NOT_CARRIED: dict[str, str] = {
-    "reduced_mass_amu": "no flat CalculationIn slot for per-mode reduced mass",
-    "force_constant_mdyne_angstrom": "no flat CalculationIn slot for per-mode force constant",
-    "ir_intensity_km_mol": "no flat CalculationIn slot for per-mode IR intensity",
-    "raman_activity": "no flat CalculationIn slot for per-mode Raman activity",
-    "symmetry_label": "no flat CalculationIn slot for per-mode symmetry label",
-    "note": "no flat CalculationIn slot for per-mode free-text notes",
-}
-
-
-def _flatten_result_fields(calc: dict[str, Any]) -> None:
-    """Convert wrapped ``opt_result``/``freq_result``/``sp_result`` into flat fields.
-
-    Mutates ``calc`` in place: each wrapped result dict is removed and
-    its values are promoted to the network_pdep-style flat field names.
-    A no-op for IRC and any other calc type without a wrapped result —
-    those carry their data through ``parameters_json`` instead.
-
-    Completeness guard: any key inside a wrapped result (or inside one
-    of ``freq_result``'s ``modes`` entries) that is not accounted for by
-    ``_REACTION_FLAT_RESULT_FIELDS``, ``_REACTION_RESULT_FIELDS_
-    HANDLED_ELSEWHERE``/``_REACTION_MODE_FIELDS_HANDLED``, or the
-    corresponding "not carried" table raises ``ValueError`` instead of
-    being silently dropped. Before this guard existed, any such key
-    (e.g. a new field a species-shape builder starts emitting without
-    updating this module) would vanish here with no error and no test
-    failure — the reaction upload would simply lack data the species
-    upload has, discovered only by a human diffing two uploads of the
-    "same" calculation.
-    """
-    for wrapped_key, field_map in _REACTION_FLAT_RESULT_FIELDS.items():
-        result = calc.pop(wrapped_key, None)
-        if not isinstance(result, Mapping):
-            continue
-        handled_elsewhere = _REACTION_RESULT_FIELDS_HANDLED_ELSEWHERE.get(
-            wrapped_key, frozenset()
-        )
-        not_carried = _REACTION_RESULT_FIELDS_NOT_CARRIED.get(wrapped_key, {})
-        unknown = set(result) - set(field_map) - handled_elsewhere - set(not_carried)
-        if unknown:
-            raise ValueError(
-                f"{wrapped_key} carries field(s) {sorted(unknown)!r} with no "
-                f"reaction-route flat-field mapping, explicit handler, or "
-                f"documented 'not carried' justification. Update "
-                f"_REACTION_FLAT_RESULT_FIELDS, "
-                f"_REACTION_RESULT_FIELDS_HANDLED_ELSEWHERE, or "
-                f"_REACTION_RESULT_FIELDS_NOT_CARRIED in adapter.py before "
-                f"this field can silently vanish on the computed-reaction "
-                f"route."
-            )
-        for src, dst in field_map.items():
-            if src in result:
-                calc[dst] = result[src]
-        if wrapped_key == "freq_result":
-            modes = result.get("modes")
-            if modes:
-                for m in modes:
-                    mode_unknown = (
-                        set(m)
-                        - _REACTION_MODE_FIELDS_HANDLED
-                        - set(_REACTION_MODE_FIELDS_NOT_CARRIED)
-                    )
-                    if mode_unknown:
-                        raise ValueError(
-                            f"freq_result.modes carries field(s) "
-                            f"{sorted(mode_unknown)!r} with no reaction-route "
-                            f"handling or documented 'not carried' "
-                            f"justification. Update "
-                            f"_REACTION_MODE_FIELDS_HANDLED or "
-                            f"_REACTION_MODE_FIELDS_NOT_CARRIED in "
-                            f"adapter.py before this field can silently "
-                            f"vanish on the computed-reaction route."
-                        )
-                calc["freq_frequencies_cm1"] = [m["frequency_cm1"] for m in modes]
-                # ``modes``' per-entry ``imaginary_disposition`` (set by
-                # ``_freq_result_payload`` on every non-designated
-                # imaginary mode once a reaction coordinate is
-                # designated) has no home on the flat per-mode list —
-                # the network_pdep/computed-reaction shape carries it
-                # separately, keyed by mode_index, via
-                # ``CalculationIn.freq_imaginary_dispositions``
-                # (shared/calculation_in.py). Drop it and it silently
-                # reverts to "undeclared", which is exactly the state
-                # stationary_point.py's ambiguity check blocks on.
-                dispositions = {
-                    m["mode_index"]: m["imaginary_disposition"]
-                    for m in modes
-                    if m.get("imaginary_disposition") is not None
-                }
-                if dispositions:
-                    calc["freq_imaginary_dispositions"] = dispositions
-
-
-def _flatten_all_reaction_calcs(bundle: dict[str, Any]) -> None:
-    """Walk a computed-reaction bundle and flatten every calc in place.
-
-    Hits each species block's primary opt (under ``conformers[*].calculation``)
-    and additionals (under ``calculations``), then the TS's primary
-    (``transition_state.calculation``) and additionals
-    (``transition_state.calculations``). One pass at the bundle root
-    keeps the per-builder code free of shape concerns.
-    """
-    for species in bundle.get("species") or []:
-        for conf in species.get("conformers") or []:
-            calc = conf.get("calculation")
-            if isinstance(calc, dict):
-                _flatten_result_fields(calc)
-        for calc in species.get("calculations") or []:
-            if isinstance(calc, dict):
-                _flatten_result_fields(calc)
-    ts = bundle.get("transition_state")
-    if isinstance(ts, dict):
-        primary = ts.get("calculation")
-        if isinstance(primary, dict):
-            _flatten_result_fields(primary)
-        for calc in ts.get("calculations") or []:
-            if isinstance(calc, dict):
-                _flatten_result_fields(calc)
 
 
 # Roles defined by TCKDB's ``KineticsCalculationRole`` enum; mirrored
@@ -9759,8 +9152,8 @@ def _stated_conformer_sp(
     return {**energy_level, "software": software}, float(energy) / E_h_kJmol
 
 
-_W_CONFORMER_NOT_ESS_OPTIMIZED = "conformer_geometry_not_esss_optimized"
-_W_CONFORMER_PROGRAM_NOT_STATED = "conformer_program_not_stated"
+_W_CONFORMER_NOT_ESS_OPTIMIZED = ArcWarning.CONFORMER_NOT_ESS_OPTIMIZED.value
+_W_CONFORMER_PROGRAM_NOT_STATED = ArcWarning.CONFORMER_PROGRAM_NOT_STATED.value
 
 
 def _warn_conformer_not_esss_optimized(
@@ -9776,14 +9169,9 @@ def _warn_conformer_not_esss_optimized(
     )
     logger.warning("TCKDB %s: %s", _W_CONFORMER_NOT_ESS_OPTIMIZED, message)
     if warnings is not None:
-        warnings.append({
-            "code": _W_CONFORMER_NOT_ESS_OPTIMIZED,
-            "message": message,
-            "field": "conformers",
-            "context": {"source": "tckdb_arc_self_check",
-                        "action": "screened_conformers_omitted",
-                        "omitted_count": str(omitted)},
-        })
+        warnings.append(_self_check(
+            _W_CONFORMER_NOT_ESS_OPTIMIZED, message, "conformers",
+            {"action": "screened_conformers_omitted", "omitted_count": str(omitted)}))
 
 
 def _warn_conformer_program_not_stated(
@@ -9806,17 +9194,12 @@ def _warn_conformer_program_not_stated(
         )
     logger.warning("TCKDB %s: %s", _W_CONFORMER_PROGRAM_NOT_STATED, message)
     if warnings is not None:
-        warnings.append({
-            "code": _W_CONFORMER_PROGRAM_NOT_STATED,
-            "message": message,
-            "field": "conformers",
-            "context": {"source": "tckdb_arc_self_check",
-                        "action": "screened_conformers_omitted",
-                        "omitted_count": str(omitted)},
-        })
+        warnings.append(_self_check(
+            _W_CONFORMER_PROGRAM_NOT_STATED, message, "conformers",
+            {"action": "screened_conformers_omitted", "omitted_count": str(omitted)}))
 
 
-_W_CONFORMER_LEVEL_NOT_STATED = "conformer_level_not_stated"
+_W_CONFORMER_LEVEL_NOT_STATED = ArcWarning.CONFORMER_LEVEL_NOT_STATED.value
 
 
 def _warn_conformer_level_not_stated(
@@ -9837,20 +9220,13 @@ def _warn_conformer_level_not_stated(
     )
     logger.warning("TCKDB %s: %s", _W_CONFORMER_LEVEL_NOT_STATED, message)
     if warnings is not None:
-        warnings.append({
-            "code": _W_CONFORMER_LEVEL_NOT_STATED,
-            "message": message,
-            "field": "conformers",
-            "context": {"source": "tckdb_arc_self_check",
-                        "action": "screened_conformers_omitted",
-                        "omitted_count": str(omitted)},
-        })
+        warnings.append(_self_check(
+            _W_CONFORMER_LEVEL_NOT_STATED, message, "conformers",
+            {"action": "screened_conformers_omitted", "omitted_count": str(omitted)}))
 
 
-_W_TS_GUESS_LEVEL_NOT_STATED = "ts_guess_level_not_stated"
-
-
-_W_TS_GUESS_SOFTWARE_NOT_STATED = "ts_guess_software_not_stated"
+_W_TS_GUESS_LEVEL_NOT_STATED = ArcWarning.TS_GUESS_LEVEL_NOT_STATED.value
+_W_TS_GUESS_SOFTWARE_NOT_STATED = ArcWarning.TS_GUESS_SOFTWARE_NOT_STATED.value
 
 
 def _warn_ts_guess_level_not_stated(
@@ -9890,14 +9266,9 @@ def _warn_ts_guess_level_not_stated(
     )
     logger.warning("TCKDB %s: %s", code, message)
     if warnings is not None:
-        warnings.append({
-            "code": code,
-            "message": message,
-            "field": "transition_state.path_search.level_of_theory",
-            "context": {"source": "tckdb_arc_self_check",
-                        "action": "path_search_calculation_omitted",
-                        "method": method},
-        })
+        warnings.append(_self_check(
+            code, message, "transition_state.path_search.level_of_theory",
+            {"action": "path_search_calculation_omitted", "method": method}))
 
 
 # ARC ``adaptive_levels`` and the other levels output.yml does not record (see
@@ -9923,14 +9294,8 @@ _JOB_TYPES_BY_KIND: Mapping[str, tuple[str, ...]] = {
     "conf_opt": ("conf_opt",),
 }
 
-_W_ADAPTIVE_LEVEL_NOT_ATTRIBUTABLE: Mapping[str, str] = {
-    "opt": "opt_level_adaptive_not_attributable",
-    "freq": "freq_level_adaptive_not_attributable",
-    "sp": "sp_level_adaptive_not_attributable",
-    "scan": "scan_level_adaptive_not_attributable",
-    "irc": "irc_level_adaptive_not_attributable",
-}
-_W_ENTHALPY_ADAPTIVE_LEVELS_UNVERIFIABLE = "enthalpy_adaptive_levels_unverifiable"
+_W_ADAPTIVE_LEVEL_NOT_ATTRIBUTABLE: Mapping[str, str] = ADAPTIVE_LEVEL_NOT_ATTRIBUTABLE
+_W_ENTHALPY_ADAPTIVE_LEVELS_UNVERIFIABLE = ArcWarning.ENTHALPY_ADAPTIVE_LEVELS_UNVERIFIABLE.value
 
 
 def _header_adaptive_job_types(output_doc: Mapping[str, Any]) -> set[str]:
@@ -10154,18 +9519,12 @@ def _warn_adaptive_omissions(
             )
         logger.warning("TCKDB %s: %s", code, message)
         if warnings is not None:
-            warnings.append({
-                "code": code,
-                "message": message,
-                "field": f"{kind}.level_of_theory",
-                "context": {"source": "tckdb_arc_self_check",
-                            "action": f"{kind}_calculation_omitted",
-                            "adaptive_levels_sources": ",".join(marker["sources"]),
-                            "labels": ",".join(sorted(labels))},
-            })
+            warnings.append(_self_check(
+                code, message, f"{kind}.level_of_theory",
+                {"action": f"{kind}_calculation_omitted", "adaptive_levels_sources": ",".join(marker["sources"]), "labels": ",".join(sorted(labels))}))
 
 
-_W_TS_IRC_EVIDENCE_WITHOUT_IRC_CALCULATION = "ts_irc_evidence_without_irc_calculation"
+_W_TS_IRC_EVIDENCE_WITHOUT_IRC_CALCULATION = ArcWarning.TS_IRC_EVIDENCE_WITHOUT_IRC_CALCULATION.value
 
 
 def _ts_irc_validation_evidence(
@@ -10214,22 +9573,11 @@ def _ts_irc_validation_evidence(
         )
         logger.warning("TCKDB %s: %s", _W_TS_IRC_EVIDENCE_WITHOUT_IRC_CALCULATION, message)
         if warnings is not None:
-            warnings.append({
-                "code": _W_TS_IRC_EVIDENCE_WITHOUT_IRC_CALCULATION,
-                "message": message,
-                "field": "transition_state.validation_evidence",
-                "context": {"source": "tckdb_arc_self_check",
-                            "action": "validation_evidence_omitted",
-                            "ts_checks_irc": str(verdict).lower()},
-            })
+            warnings.append(_self_check(
+                _W_TS_IRC_EVIDENCE_WITHOUT_IRC_CALCULATION, message, "transition_state.validation_evidence",
+                {"action": "validation_evidence_omitted", "ts_checks_irc": str(verdict).lower()}))
         return []
-    rationale = f"ARC ts_checks['IRC'] = {verdict}"
-    evidence: dict[str, Any] = {
-        "kind": "irc",
-        "passed": verdict,
-        "rationale": rationale,
-        "source_calculation_key": irc_calc_key,
-    }
+    mappings = None
     if verdict is True and reaction_record is not None and species_index is not None:
         mappings = _irc_participant_mappings(
             ts_record,
@@ -10239,16 +9587,17 @@ def _ts_irc_validation_evidence(
             ts_label=ts_label,
             warnings=warnings,
         )
-        if mappings is not None:
-            evidence["reactant_participant_mapping"] = mappings[0]
-            evidence["product_participant_mapping"] = mappings[1]
-    return [evidence]
+    return [_ts_evidence.irc_record(
+        verdict,
+        source_calculation_key=irc_calc_key,
+        rationale=f"ARC ts_checks['IRC'] = {verdict}",
+        participant_mappings=mappings,
+    )]
 
 
-_W_TS_ENERGY_ORDERING_NOT_SENT = "ts_energy_ordering_evidence_not_sent"
-_W_TS_IMAGINARY_MODE_NOT_SENT = "ts_imaginary_mode_evidence_not_sent"
-_W_TS_NMD_FORCED_CONTRADICTS_INDEX = "ts_nmd_forced_contradicts_reaction_coordinate_index"
-
+_W_TS_ENERGY_ORDERING_NOT_SENT = ArcWarning.TS_ENERGY_ORDERING_NOT_SENT.value
+_W_TS_IMAGINARY_MODE_NOT_SENT = ArcWarning.TS_IMAGINARY_MODE_NOT_SENT.value
+_W_TS_NMD_FORCED_CONTRADICTS_INDEX = ArcWarning.TS_NMD_FORCED_CONTRADICTS_INDEX.value
 # The e_elect check's margin (``arc/checks/ts.py``), in kJ/mol; hartree convert with the vendored ``E_h_kJmol``.
 _ENERGY_ORDERING_MARGIN_KJ_MOL = 1.0
 
@@ -10260,24 +9609,9 @@ def _warn_ts_evidence_not_sent(
     """Report a TS validation verdict ARC states that is not sent (the adapter never guesses around it)."""
     logger.warning("TCKDB %s: %s", code, message)
     if warnings is not None:
-        warnings.append({
-            "code": code,
-            "message": message,
-            "field": "transition_state.validation_evidence",
-            "context": {"source": "tckdb_arc_self_check", "action": "validation_evidence_omitted",
-                        "ts_label": str(ts_label), **(context or {})},
-        })
-
-
-def _finite_float(value: Any) -> float | None:
-    """``value`` as a finite float, else ``None`` (a bool is not an energy)."""
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
+        warnings.append(_self_check(
+            code, message, "transition_state.validation_evidence",
+            {"action": "validation_evidence_omitted", "ts_label": str(ts_label), **(context or {})}))
 
 
 def _ts_energy_ordering_validation_evidence(
@@ -10345,31 +9679,18 @@ def _ts_energy_ordering_validation_evidence(
                         "TCKDB takes absolute (non-positive) energies")
         if not key:
             return omit(f"{participant} ({label!r}) has no sp calculation in this upload to cite")
-        energies.append({"participant": participant, "energy_kind": "electronic",
-                         "energy_hartree": energy, "source_calculation_key": key})
-    from tckdb_arc._vendor import E_h_kJmol
-    ts_energy = energies[0]["energy_hartree"]
-    wells = {side: sum(e["energy_hartree"] for e in energies if e["participant"].startswith(f"{side}:"))
-             for side in ("reactant", "product")}
-    if verdict is True:
-        for side, well in wells.items():
-            if not (ts_energy - well) * E_h_kJmol > _ENERGY_ORDERING_MARGIN_KJ_MOL:
-                return omit(
-                    f"the stated sp energies do not put the saddle point more than "
-                    f"{_ENERGY_ORDERING_MARGIN_KJ_MOL:g} kJ/mol above the {side} side "
-                    f"({ts_energy} vs {well} hartree), so the pass is contradicted by its own numbers")
-    elif all((ts_energy - well) * E_h_kJmol > _ENERGY_ORDERING_MARGIN_KJ_MOL for well in wells.values()):
-        # A False verdict on numbers that satisfy the ordering was computed on stale energies.
-        return omit(
-            f"the stated sp energies put the saddle point more than {_ENERGY_ORDERING_MARGIN_KJ_MOL:g} "
-            "kJ/mol above both sides, so the failure is contradicted by its own numbers (the verdict "
-            "was computed on stale energies)",
-            reason_code="verdict_contradicted_by_stated_energies")
+        energies.append(_ts_evidence.energy_entry(participant, energy, key))
+    # TCKDB refuses a pass its own numbers contradict; a failure they contradict is stale.
+    contradiction = _ts_evidence.energy_ordering_contradiction(
+        verdict, energies, margin_kj_mol=_ENERGY_ORDERING_MARGIN_KJ_MOL)
+    if contradiction is not None:
+        reason, reason_code = contradiction
+        return omit(reason, reason_code=reason_code)
     rationale = f"ARC ts_checks['e_elect'] = {verdict} (electronic energies; sp_energy_hartree of each participant)"
     e0_verdict = checks.get("E0")
     if isinstance(e0_verdict, bool):
         rationale += f"; ARC ts_checks['E0'] = {e0_verdict} (not sent: not one calculation's energy)"
-    return [{"kind": "energy_ordering", "passed": verdict, "rationale": rationale, "energies": energies}]
+    return [_ts_evidence.energy_ordering_record(verdict, rationale, energies)]
 
 
 def _ts_imaginary_mode_validation_evidence(
@@ -10415,26 +9736,14 @@ def _ts_imaginary_mode_validation_evidence(
     if freq_calc_key is None or freq_result is None:
         return omit("the TS has no frequency calculation in this upload, so there is no freq "
                     "calculation for the evidence to bind to")
-    n_imag = freq_result.get("n_imag")
-    n_imag = n_imag if isinstance(n_imag, int) and not isinstance(n_imag, bool) else None
+    # What the cited frequency result states (a finite float or None for the frequency).
+    n_imag, designated, value = _ts_evidence.freq_result_imaginary_facts(freq_result)
     if verdict and n_imag == 0:
         return omit("its frequency result reports no imaginary mode")
-    designated = freq_result.get("reaction_coordinate_mode_index")
     if verdict and n_imag is not None and n_imag > 1 and designated is None:
         return omit(f"the frequency result has {n_imag} imaginary modes and designates no reaction "
                     "coordinate, which TCKDB requires of a passing record")
-    value = None
-    if designated is not None:
-        value = next((m.get("frequency_cm1") for m in freq_result.get("modes") or []
-                      if m.get("mode_index") == designated), None)
-    elif n_imag == 1:
-        value = freq_result.get("imag_freq_cm1")
-    value = _finite_float(value)             # a finite float or None
-    record: dict[str, Any] = {"kind": "imaginary_mode", "passed": verdict, "source_calculation_key": freq_calc_key}
-    if n_imag is not None:
-        record["imaginary_frequency_count"] = n_imag
-    if value:
-        record["imaginary_frequency_cm1"] = -abs(value)
+    mode_displacement_agrees: bool | None = None
     stated = ts_record.get("reaction_coordinate_mode_index")
     stated_index = stated if isinstance(stated, int) and not isinstance(stated, bool) else None
     nmd = checks.get("NMD")
@@ -10446,7 +9755,7 @@ def _ts_imaginary_mode_validation_evidence(
         # decide") is never forced. So the displacement check ran and found the mode inconsistent
         # with the reaction: that is a ``False`` verdict, never ``True``. (TCKDB has no rule tying
         # ``mode_displacement_agrees`` to ``passed``.)
-        record["mode_displacement_agrees"] = False
+        mode_displacement_agrees = False
         rationale += ("; mode_displacement_agrees = False: ARC's normal mode displacement check failed "
                       "and the pass in ts_checks['NMD'] was forced (skip_nmd; nmd_forced = true)")
         if stated_index is not None:
@@ -10457,32 +9766,30 @@ def _ts_imaginary_mode_validation_evidence(
                 "designation and mode_displacement_agrees was sent as False.")
             logger.warning("TCKDB %s: %s", _W_TS_NMD_FORCED_CONTRADICTS_INDEX, message)
             if warnings is not None:
-                warnings.append({
-                    "code": _W_TS_NMD_FORCED_CONTRADICTS_INDEX,
-                    "message": message,
-                    "field": "transition_state.validation_evidence",
-                    "context": {"source": "tckdb_arc_self_check",
-                                "action": "reaction_coordinate_index_not_used",
-                                "ts_label": str(ts_label), "nmd_forced": "true",
-                                "reaction_coordinate_mode_index": str(stated_index)},
-                })
+                warnings.append(_self_check(
+                    _W_TS_NMD_FORCED_CONTRADICTS_INDEX, message, "transition_state.validation_evidence",
+                    {"action": "reaction_coordinate_index_not_used", "ts_label": str(ts_label), "nmd_forced": "true", "reaction_coordinate_mode_index": str(stated_index)}))
     elif stated_index is not None and stated_index == designated and nmd is not False:
-        record["mode_displacement_agrees"] = True
+        mode_displacement_agrees = True
         rationale += (f"; mode_displacement_agrees from ARC's reaction_coordinate_mode_index = {stated_index} "
                       "(set only by a genuine normal mode displacement pass)")
     elif nmd is False and stated_index is None:
-        record["mode_displacement_agrees"] = False
+        mode_displacement_agrees = False
         rationale += "; mode_displacement_agrees from ARC ts_checks['NMD'] = False"
-    record["rationale"] = rationale
-    return [record]
+    return [_ts_evidence.imaginary_mode_record(
+        verdict,
+        source_calculation_key=freq_calc_key,
+        imaginary_frequency_count=n_imag,
+        frequency_cm1=value,
+        mode_displacement_agrees=mode_displacement_agrees,
+        rationale=rationale,
+    )]
 
 
-_W_IRC_PARTICIPANT_MAPPING_NOT_SENT = "ts_irc_participant_mapping_not_sent"
-_W_ATOM_MAP_TS_ORDER_NOT_STATED = "reaction_atom_map_ts_order_not_stated"
-
-
-_W_REACTION_STOICHIOMETRY_NOT_STATED = "reaction_stoichiometry_not_stated"
-_W_REACTION_SPECIES_LABELS_CONTRADICTED = "reaction_species_labels_contradicted"
+_W_IRC_PARTICIPANT_MAPPING_NOT_SENT = ArcWarning.IRC_PARTICIPANT_MAPPING_NOT_SENT.value
+_W_ATOM_MAP_TS_ORDER_NOT_STATED = ArcWarning.ATOM_MAP_TS_ORDER_NOT_STATED.value
+_W_REACTION_STOICHIOMETRY_NOT_STATED = ArcWarning.REACTION_STOICHIOMETRY_NOT_STATED.value
+_W_REACTION_SPECIES_LABELS_CONTRADICTED = ArcWarning.REACTION_SPECIES_LABELS_CONTRADICTED.value
 
 
 def _with_stated_participants(
@@ -10527,10 +9834,9 @@ def _with_stated_participants(
                 "reaction was not uploaded.")
             logger.warning("TCKDB %s: %s", _W_REACTION_SPECIES_LABELS_CONTRADICTED, message)
             if warnings is not None:
-                warnings.append({"code": _W_REACTION_SPECIES_LABELS_CONTRADICTED, "message": message,
-                                 "field": "reactant_keys",
-                                 "context": {"source": "tckdb_arc_self_check",
-                                             "action": "reaction_not_uploaded"}})
+                warnings.append(_self_check(
+                    _W_REACTION_SPECIES_LABELS_CONTRADICTED, message, "reactant_keys",
+                    {"action": "reaction_not_uploaded"}))
             return ValueError(message)
 
         if not all(isinstance(v, list) and v and all(isinstance(x, str) and x for x in v)
@@ -10593,10 +9899,9 @@ def _with_stated_participants(
     )
     logger.warning("TCKDB %s: %s", _W_REACTION_STOICHIOMETRY_NOT_STATED, message)
     if warnings is not None:
-        warnings.append({"code": _W_REACTION_STOICHIOMETRY_NOT_STATED, "message": message,
-                         "field": "reactant_keys",
-                         "context": {"source": "tckdb_arc_self_check",
-                                     "action": "reaction_not_uploaded"}})
+        warnings.append(_self_check(
+            _W_REACTION_STOICHIOMETRY_NOT_STATED, message, "reactant_keys",
+            {"action": "reaction_not_uploaded"}))
     raise ValueError(message)
 
 
@@ -10666,14 +9971,9 @@ def _irc_participant_mappings(
         )
         logger.warning("TCKDB %s: %s", _W_IRC_PARTICIPANT_MAPPING_NOT_SENT, message)
         if warnings is not None:
-            warnings.append({
-                "code": _W_IRC_PARTICIPANT_MAPPING_NOT_SENT,
-                "message": message,
-                "field": "transition_state.validation_evidence",
-                "context": {"source": "tckdb_arc_self_check",
-                            "action": "irc_participant_mapping_omitted",
-                            **{key: str(value) for key, value in context.items()}},
-            })
+            warnings.append(_self_check(
+                _W_IRC_PARTICIPANT_MAPPING_NOT_SENT, message, "transition_state.validation_evidence",
+                {"action": "irc_participant_mapping_omitted", **({key: str(value) for key, value in context.items()})}))
         return None
 
     if mapping.get("atom_order_matches_ts") is not True:
@@ -10781,18 +10081,12 @@ def _warn_atom_map_not_sent(
     )
     logger.warning("TCKDB %s: %s", _W_ATOM_MAP_TS_ORDER_NOT_STATED, message)
     if warnings is not None:
-        warnings.append({
-            "code": _W_ATOM_MAP_TS_ORDER_NOT_STATED,
-            "message": message,
-            "field": "atom_map",
-            "context": {"source": "tckdb_arc_self_check",
-                        "action": "atom_map_omitted",
-                        "atom_map_source": str(reaction_record.get("atom_map_source")),
-                        "atom_map_method": str(reaction_record.get("atom_map_method"))},
-        })
+        warnings.append(_self_check(
+            _W_ATOM_MAP_TS_ORDER_NOT_STATED, message, "atom_map",
+            {"action": "atom_map_omitted", "atom_map_source": str(reaction_record.get("atom_map_source")), "atom_map_method": str(reaction_record.get("atom_map_method"))}))
 
 
-_W_REACTION_TS_ATOM_MAP_NOT_SENT = "reaction_ts_atom_map_not_sent"
+_W_REACTION_TS_ATOM_MAP_NOT_SENT = ArcWarning.REACTION_TS_ATOM_MAP_NOT_SENT.value
 _TS_ATOM_MAP_METHOD = "irc_endpoint_cgr_isomorphism"
 _TS_ATOM_MAP_NOTE = (
     "ARC ts_atom_map (output.yml 1.3, method irc_endpoint_cgr_isomorphism, IRC endpoint {endpoint} "
@@ -10819,17 +10113,10 @@ def _warn_ts_atom_map_not_sent(
     )
     logger.warning("TCKDB %s: %s", _W_REACTION_TS_ATOM_MAP_NOT_SENT, message)
     if warnings is not None:
-        warnings.append({
-            "code": _W_REACTION_TS_ATOM_MAP_NOT_SENT,
-            "message": message,
-            "field": "atom_map",
-            "context": {"source": "tckdb_arc_self_check",
-                        "action": action,
-                        "ts_atom_map_unavailable_reason": str(
-                            reaction_record.get("ts_atom_map_unavailable_reason")),
-                        "atom_map_source": str(reaction_record.get("atom_map_source")),
-                        "atom_map_method": str(reaction_record.get("atom_map_method"))},
-        })
+        warnings.append(_self_check(
+            _W_REACTION_TS_ATOM_MAP_NOT_SENT, message, "atom_map",
+            {"action": action, "ts_atom_map_unavailable_reason": str(
+                            reaction_record.get("ts_atom_map_unavailable_reason")), "atom_map_source": str(reaction_record.get("atom_map_source")), "atom_map_method": str(reaction_record.get("atom_map_method"))}))
 
 
 _TS_ROUTE_TS_GEOMETRY_KEY = "ts_geom"
@@ -10997,8 +10284,7 @@ def _tckdb_reaction_atom_map(
     }
 
 
-_W_IRC_DIRECTION_NOT_STATED = "irc_direction_not_stated"
-
+_W_IRC_DIRECTION_NOT_STATED = ArcWarning.IRC_DIRECTION_NOT_STATED.value
 # ARC runs every IRC job at ``irc_level`` (arc/scheduler.py ``run_irc_job``).
 # restart.yml records it whenever it differs from the settings default, and
 # the adapter then uses it exactly. When it is absent the level is that
@@ -11007,7 +10293,7 @@ _W_IRC_DIRECTION_NOT_STATED = "irc_direction_not_stated"
 # equals ``opt_level`` (true when ``opt_level`` is that same default, the
 # maintainer's adapter-0.6.0 decision). That assumption is reported on the IRC
 # calculation, until ARC exports the IRC level (BRIDGE_ROADMAP B3).
-_W_IRC_LEVEL_NOT_STATED = "irc_level_not_stated"
+_W_IRC_LEVEL_NOT_STATED = ArcWarning.IRC_LEVEL_NOT_STATED.value
 
 
 def _warn_irc_level_not_stated(
@@ -11028,16 +10314,12 @@ def _warn_irc_level_not_stated(
     )
     logger.warning("TCKDB %s: %s", _W_IRC_LEVEL_NOT_STATED, message)
     if warnings is not None:
-        warnings.append({
-            "code": _W_IRC_LEVEL_NOT_STATED,
-            "message": message,
-            "field": "transition_state.irc.level_of_theory",
-            "context": {"source": "tckdb_arc_self_check",
-                        "action": "irc_calculation_omitted"},
-        })
+        warnings.append(_self_check(
+            _W_IRC_LEVEL_NOT_STATED, message, "transition_state.irc.level_of_theory",
+            {"action": "irc_calculation_omitted"}))
 
 
-_W_IRC_LEVEL_ASSUMED_OPT_LEVEL = "irc_level_assumed_opt_level"
+_W_IRC_LEVEL_ASSUMED_OPT_LEVEL = ArcWarning.IRC_LEVEL_ASSUMED_OPT_LEVEL.value
 
 
 def _warn_irc_level_assumed(
@@ -11056,13 +10338,9 @@ def _warn_irc_level_assumed(
     )
     logger.warning("TCKDB %s: %s", _W_IRC_LEVEL_ASSUMED_OPT_LEVEL, message)
     if warnings is not None:
-        warnings.append({
-            "code": _W_IRC_LEVEL_ASSUMED_OPT_LEVEL,
-            "message": message,
-            "field": "transition_state.irc.level_of_theory",
-            "context": {"source": "tckdb_arc_self_check",
-                        "action": "level_of_theory_assumed"},
-        })
+        warnings.append(_self_check(
+            _W_IRC_LEVEL_ASSUMED_OPT_LEVEL, message, "transition_state.irc.level_of_theory",
+            {"action": "level_of_theory_assumed"}))
 
 
 def _build_irc_result_payload(
@@ -11236,13 +10514,9 @@ def _build_irc_result_payload(
         )
         logger.warning("TCKDB %s: %s: %s", warning_field, _W_IRC_DIRECTION_NOT_STATED, message)
         if warnings is not None:
-            warnings.append({
-                "code": _W_IRC_DIRECTION_NOT_STATED,
-                "message": message,
-                "field": warning_field,
-                "context": {"source": "tckdb_arc_self_check",
-                            "action": "irc_result_omitted"},
-            })
+            warnings.append(_self_check(
+                _W_IRC_DIRECTION_NOT_STATED, message, warning_field,
+                {"action": "irc_result_omitted"}))
         return None
     if has_forward and has_reverse:
         overall = _IRC_DIRECTION_BOTH
@@ -11912,7 +11186,7 @@ def _require_xyz_text(record: Mapping[str, Any]) -> str:
     return text
 
 
-_W_GEOMETRY_ISOTOPES_NOT_STATED = "geometry_isotopes_not_stated"
+_W_GEOMETRY_ISOTOPES_NOT_STATED = ArcWarning.GEOMETRY_ISOTOPES_NOT_STATED.value
 
 
 def _isotopic_substitutions(record: Mapping[str, Any]) -> dict[int, int] | None:
@@ -11932,33 +11206,22 @@ def _assert_isotopes_reconcile(record: Mapping[str, Any]) -> None:
     as stated, and it never rewrites the SMILES to fit nor drops a stated
     substitution to get past the check. When the two disagree, or the SMILES
     declares a substitution the geometry's isotopes cannot confirm, no request is
-    built.
+    built. The rule is :func:`tckdb_core.isotopes.isotope_reconciliation_error`;
+    reading ``xyz_isotopes`` and ``smiles`` from the record is the ARC part.
     """
     if "xyz_isotopes" not in record:
         return
-    declared = arc13.smiles_isotope_multiset(record.get("smiles"))
     text = _normalize_xyz_text(record.get("xyz"), record.get("label"))
-    subs = arc13.geometry_isotope_substitutions(text, record.get("xyz_isotopes"))
-    label = record.get("label")
-    if subs is None:
-        if declared:
-            raise ValueError(
-                f"{label!r}: the SMILES declares isotope substitution {sorted(declared)} but "
-                "ARC states no usable isotope list for the geometry (xyz_isotopes is null "
-                "or not one mass number per atom), so TCKDB's species_geometry_isotope_mismatch "
-                "check cannot be satisfied; not building the request."
-            )
-        return
-    if declared is None:
-        return  # no SMILES (a TS): nothing to reconcile with
-    stated = arc13.geometry_isotope_multiset(text, subs)
-    if stated != declared:
-        raise ValueError(
-            f"{label!r}: ARC states geometry isotope substitutions {sorted(stated)} "
-            f"but the SMILES declares {sorted(declared)}; sending them would be refused "
-            "(species_geometry_isotope_mismatch) and the adapter does not edit either; "
-            "not building the request."
-        )
+    error = _isotopes.isotope_reconciliation_error(
+        record.get("label"),
+        declared=arc13.smiles_isotope_multiset(record.get("smiles")),
+        substitutions=arc13.geometry_isotope_substitutions(text, record.get("xyz_isotopes")),
+        xyz_text=text,
+        producer_name="ARC",
+        isotopes_field="xyz_isotopes",
+    )
+    if error is not None:
+        raise error
 
 
 def _geometry_payload(
@@ -11973,23 +11236,16 @@ def _geometry_payload(
     geometry must state the same substitutions as the record's own geometry (the
     species identity carries them); one that states none, or others, is
     ``None``: the caller leaves that geometry out rather than deposit it as an
-    unsubstituted one.
+    unsubstituted one. The rule is :func:`tckdb_core.isotopes.geometry_payload`.
     """
-    out: dict[str, Any] = {"xyz_text": xyz_text}
-    if key is not None:
-        out["key"] = key
-    if "xyz_isotopes" not in record:
-        return out
-    record_subs = _isotopic_substitutions(record) or {}
-    subs = arc13.geometry_isotope_substitutions(xyz_text, isotopes)
-    if record_subs:
-        record_text = _normalize_xyz_text(record.get("xyz"), record.get("label"))
-        if subs is None or arc13.geometry_isotope_multiset(xyz_text, subs) != \
-                arc13.geometry_isotope_multiset(record_text, record_subs):
-            return None
-    if subs:
-        out["isotopes"] = {str(index): mass for index, mass in subs.items()}
-    return out
+    record_subs = _isotopic_substitutions(record) if "xyz_isotopes" in record else None
+    return _isotopes.geometry_payload(
+        xyz_text, isotopes,
+        isotopes_stated="xyz_isotopes" in record,
+        record_xyz_text=_normalize_xyz_text(record.get("xyz"), record.get("label")),
+        record_substitutions=record_subs,
+        key=key,
+    )
 
 
 def _conformer_isotopes(record: Mapping[str, Any], index: int) -> Any:
@@ -12007,12 +11263,9 @@ def _warn_isotopes_not_stated(
     )
     logger.warning("TCKDB %s: %s", _W_GEOMETRY_ISOTOPES_NOT_STATED, message)
     if warnings is not None:
-        warnings.append({
-            "code": _W_GEOMETRY_ISOTOPES_NOT_STATED,
-            "message": message,
-            "field": "geometry.isotopes",
-            "context": {"source": "tckdb_arc_self_check", "action": "geometry_omitted"},
-        })
+        warnings.append(_self_check(
+            _W_GEOMETRY_ISOTOPES_NOT_STATED, message, "geometry.isotopes",
+            {"action": "geometry_omitted"}))
 
 
 def _artifact_batch_idempotency_prefix(project_label: Any, species_label: Any) -> str:

@@ -33,7 +33,7 @@ producer contract generated from TCKDB's routes and models: read it with
 `python -m tckdb_schemas.contract --print` (and `--since <version>` for what
 moved) before changing a mapping. The test suite validates every payload the
 adapter builds against the contract's JSON Schema for its route and pins the
-tckdb-schemas line it ran against (`tests/_contract.py`).
+tckdb-schemas line it ran against (`TARGET_SCHEMAS_LINE`, in `tckdb_core/tckdb_core/testing/contract.py`, re-exported by `tests/_contract.py`).
 
 Adapter 0.6.0 conforms to that contract where ARC does not state a value:
 it omits `reference_pressure_bar` without a recorded pressure (below), omits
@@ -306,7 +306,7 @@ Adapter 0.10.0 (batch K, tckdb-schemas 0.73 / client 0.111; details in
 Adapter 0.11.0 (core extraction, batch L1; no behaviour change):
 
 - The producer-agnostic half moved to the new `tckdb-adapters-core` package (`tckdb_core/`, import name
-  `tckdb_core`; `tckdb-arc` now depends on it, `>=0.1,<0.2`): the payload writer and sidecar types, idempotency-key
+  `tckdb_core`; `tckdb-arc` depended on it, `>=0.1,<0.2`): the payload writer and sidecar types, idempotency-key
   composition (the key namespace is a parameter; ARC binds `"arc"`), constraints, the TCKDB level-identity replica, the
   config fields and API-key resolution, and the upload / sidecar / readiness / artifact-batch pipeline
   (`TCKDBUploaderBase`, which `TCKDBAdapter` inherits), with its outcome types and endpoint constants.
@@ -317,6 +317,38 @@ Adapter 0.11.0 (core extraction, batch L1; no behaviour change):
 - ARC-specific code stays here: reading `output.yml`, the payload builders, `TCKDBConfig.from_dict` (a thin subclass of
   the core config) and the CLI/sweep. Install `tckdb_core` before `tckdb_arc` when working from the checkout
   (`pip install -e tckdb_core -e tckdb_arc`).
+
+Adapter 0.12.0 (core extraction, batch L2; no behaviour change; needs `tckdb-adapters-core` `>=0.2,<0.3`):
+
+- Moved to `tckdb_core` 0.2.0, each still resolvable from `tckdb_arc.adapter` / `.arc13` / `._vendor`: the NASA and
+  thermo-point builders, the RMG unit tables (`arc_to_tckdb_a_units` / `arc_to_tckdb_ea_units` are thin wrappers over
+  `tckdb_core.rmg_units`), the reaction-route result flattening, the element, formula and xyz helpers with `E_h_kJmol`,
+  the isotope and route-line rules, the software-banner split, and the TCKDB rule pre-checks (energy-level
+  declaration, reaction-coordinate window and tau rules, evidence record shapes, the offline evidence-rule replica).
+  Anything that reads an ARC key (`ts_checks`, `xyz_isotopes`, `thermo.*`, level dicts) stays here and passes its
+  facts to them.
+- The `_W_*` constants and the inline `irc_software_not_stated` code are a documented registry,
+  `tckdb_arc/warning_codes.py` (`ArcWarning`, one line each); `docs/contract/WARNING_CODES.md` is generated from it and
+  the core's registry (`python tools/gen_warning_codes.py`; a test fails when it is stale). Every warning dict is built
+  by `AdapterWarning`, so the sidecar shape (`code`, `message`, `field`, `context.source == "tckdb_arc_self_check"`)
+  is unchanged.
+- Logging: the shared pipeline logs through the adapter instance and the moved functions take the adapter module's
+  `logger`, so `mock.patch("tckdb_arc.adapter.logger")` intercepts them; the core's process-global `set_logger_name`
+  is gone.
+- The contract test kit moved to `tckdb_core.testing` (`tests/_contract.py` and `_backend_import.py` are re-exports;
+  `tests/conftest.py` registers the contract hook against this adapter's builders; the live gate's guards and fixture
+  come from `tckdb_core.testing.live`). `TARGET_SCHEMAS_LINE` is the single line in
+  `tckdb_core/tckdb_core/testing/contract.py`; `tools/tckdb_drift.py` rewrites it there.
+- Deprecated: `tckdb_arc.level_rules` and `tckdb_arc.payload_writer` now forward their old public names to the
+  `tckdb_core` modules of the same name with a `DeprecationWarning` (`level_rules`: `method_identity_key`, `level_hash`,
+  `level_payload`, `level_identity_keys`, `basis_identity_key`, `component_identity_key`, `dispersion_identity_key`,
+  `same_level`, `NAME_ALIASES`, `SUFFIX_ALIASES`, `DISPERSION_ALIASES`, `FOLDED_SUFFIXES`, `FOLDED_STEMS`;
+  `payload_writer`: `PayloadWriter`, `SidecarMetadata`, `ArtifactSidecarMetadata`, `WrittenPayload`, `WrittenArtifact`,
+  `BUNDLE_FORMAT_VERSION`, `should_replay_sidecar`). `tckdb_arc.constraints` keeps its whole public API
+  (`TCKDBCalculationConstraint`, `serialize_constraints`) without a warning. Their private names (`_SAFE_LABEL`,
+  `_utcnow_iso`, `_validate`, `_coerce`, `_HYPHEN_RULES`, `_SUFFIX_COMPILED`, ...) are gone: import them from
+  `tckdb_core`. `tckdb_arc.config` and `tckdb_arc.idempotency` (and `TCKDBAdapter`, `TCKDBConfig`, `run_upload_sweep`,
+  which ARC's own repository imports) are unchanged.
 
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 

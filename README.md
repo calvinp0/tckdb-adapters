@@ -13,7 +13,7 @@ transport against the shared **`tckdb-schemas`** wire-contract.
 
 | Package    | Path         | Status | Description |
 |------------|--------------|--------|-------------|
-| `tckdb-adapters-core` | `tckdb_core/` | active | Producer-agnostic core shared by every adapter: payload writer, upload/sidecar/readiness pipeline, idempotency keys, level-identity replica, config and API-key resolution. Reads no producer's output format. |
+| `tckdb-adapters-core` | `tckdb_core/` | active | Producer-agnostic core shared by every adapter: payload writer, upload/sidecar/readiness pipeline, idempotency keys, level-identity replica, config and API-key resolution, shared numerics and TCKDB rule pre-checks, the warning-code registry type, and the contract test kit (`tckdb_core.testing`). Reads no producer's output format. See [`tckdb_core/README.md`](tckdb_core/README.md). |
 | `tckdb-arc`| `tckdb_arc/` | active | ARC → TCKDB upload adapter (ARC output reader + payload builders; uploads through `tckdb_core`). |
 | `tckdb_rmg`| —            | future | RMG adapter (placeholder; not yet created). |
 | `tckdb_chemtrayzer` | — | future | Chemtrayzer adapter (placeholder). |
@@ -33,6 +33,33 @@ working from the checkout: `pip install -e tckdb_core -e tckdb_arc`.
 
 See the [current ARC integration audit](docs/contract/CURRENT_ARC_INTEGRATION.md)
 for verified mappings, validation results, and remaining producer/server gaps.
+
+## Running the tests
+
+Install the core first (`tckdb-arc` depends on it), then either package's suite runs on its own or
+both together. The backend comparison tests need a TCKDB `backend/` checkout at the pinned revision
+(`TCKDB_BACKEND_PATH`; `TCKDB_REQUIRE_BACKEND=1` makes a missing backend a failure, as in CI).
+
+```bash
+pip install -e "tckdb_core[test]" -e "tckdb_arc[test]"
+export TCKDB_BACKEND_PATH=/path/to/TCKDB/backend TCKDB_REQUIRE_BACKEND=1
+
+# 1. both suites together, from the repository root
+python -m pytest tckdb_arc/tests tckdb_core/tests
+
+# 2. each package from its own directory (what CI does)
+(cd tckdb_core && python -m pytest)
+(cd tckdb_arc && python -m pytest)
+
+# 3. one file or test: path it from the root, or from the package directory
+python -m pytest tckdb_arc/tests/test_warning_registry.py -q
+```
+
+From a git worktree whose `tckdb_core` / `tckdb_arc` editable installs point at another checkout, put the
+worktree's packages first instead of reinstalling: `PYTHONPATH=$PWD/tckdb_core:$PWD/tckdb_arc python -m pytest ...`.
+At the repository root both package directories are also importable as namespace packages
+(`tckdb_core.__file__` is `None` there), so test code that needs a package's directory must not use
+`tckdb_core.__file__`.
 
 ## The shared layer (pinned)
 
