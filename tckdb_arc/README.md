@@ -303,6 +303,21 @@ Adapter 0.10.0 (batch K, tckdb-schemas 0.73 / client 0.111; details in
   `backend/` (CI does).
 - Not in this release: the `composite` calculation type (waits on ARC B18), transport, core extraction.
 
+Adapter 0.11.0 (core extraction, batch L1; no behaviour change):
+
+- The producer-agnostic half moved to the new `tckdb-adapters-core` package (`tckdb_core/`, import name
+  `tckdb_core`; `tckdb-arc` now depends on it, `>=0.1,<0.2`): the payload writer and sidecar types, idempotency-key
+  composition (the key namespace is a parameter; ARC binds `"arc"`), constraints, the TCKDB level-identity replica, the
+  config fields and API-key resolution, and the upload / sidecar / readiness / artifact-batch pipeline
+  (`TCKDBUploaderBase`, which `TCKDBAdapter` inherits), with its outcome types and endpoint constants.
+- Every payload, sidecar file, warning, idempotency key and log line is byte-identical to 0.10.0 (checked by building
+  every route over eight fixtures, in all three upload modes, against both packages and diffing the JSON). Each name
+  that moved is still importable from where it was (`tckdb_arc.adapter`, `.config`, `.payload_writer`, `.idempotency`,
+  `.constraints`, `.level_rules`), so callers and tests are unchanged.
+- ARC-specific code stays here: reading `output.yml`, the payload builders, `TCKDBConfig.from_dict` (a thin subclass of
+  the core config) and the CLI/sweep. Install `tckdb_core` before `tckdb_arc` when working from the checkout
+  (`pip install -e tckdb_core -e tckdb_arc`).
+
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 
 <!-- tckdb-drift:changelog -->

@@ -4,4 +4,4 @@
 # specific adapter with `pip install -e ./tckdb_arc[test]`.
 
 [tool.tckdb_adapters]
-packages = ["tckdb_arc"]
+packages = ["tckdb_core", "tckdb_arc"]

@@ -13,7 +13,8 @@ tool never edits a workflow file. Modes:
     10 = drift, anything else = error.
 
 ``--bump --sha SHA --schemas X.Y.Z --client A.B.C [--allow-downgrade]``
-    Move the pins: the ``tckdb_arc/pyproject.toml`` dependency bounds, the
+    Move the pins: the ``tckdb_arc/pyproject.toml`` and ``tckdb_core/pyproject.toml``
+    dependency bounds, the
     ``TARGET_SCHEMAS_LINE`` in ``tckdb_arc/tests/_contract.py``, the ``sha`` in
     ``tckdb-pin.toml``, the install lines and "tested contract" sentence in
     ``README.md``, the version sentence and a changelog line in
@@ -56,6 +57,8 @@ EXIT_DRIFT = 10
 
 # Paths of the files this tool reads and rewrites, relative to the repo root.
 ADAPTER_PYPROJECT = "tckdb_arc/pyproject.toml"
+# tckdb_core pins the same two packages; it must move in lockstep with the adapter.
+CORE_PYPROJECT = "tckdb_core/pyproject.toml"
 PKG_README = "tckdb_arc/README.md"
 CHANGELOG_MARKER = "<!-- tckdb-drift:changelog -->"
 CONTRACT_PY = "tckdb_arc/tests/_contract.py"
@@ -142,9 +145,11 @@ def read_pin_file(text: str) -> dict:
 
 def read_pins(root: Path) -> dict:
     pyproject = (root / ADAPTER_PYPROJECT).read_text()
+    core = (root / CORE_PYPROJECT).read_text()
+    # The older of the two pins counts as "pinned", so a stale core reports drift.
     return {
-        "schemas_line": pinned_line(pyproject, "tckdb-schemas"),
-        "client_line": pinned_line(pyproject, "tckdb-client"),
+        "schemas_line": min(pinned_line(pyproject, "tckdb-schemas"), pinned_line(core, "tckdb-schemas")),
+        "client_line": min(pinned_line(pyproject, "tckdb-client"), pinned_line(core, "tckdb-client")),
         "sha": read_pin_file((root / PIN_FILE).read_text())["sha"],
     }
 
@@ -300,7 +305,7 @@ def run_check(root: Path, repo: str, ref: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def rewrite_pyproject(text: str, schemas_line: Line, client_line: Line) -> str:
+def rewrite_pyproject(text: str, schemas_line: Line, client_line: Line, where: str = ADAPTER_PYPROJECT) -> str:
     """Replace each package's version specifier, keeping its extras and marker."""
     for package, line in (("tckdb-schemas", schemas_line), ("tckdb-client", client_line)):
         text, n = re.subn(
@@ -309,7 +314,7 @@ def rewrite_pyproject(text: str, schemas_line: Line, client_line: Line) -> str:
             text, count=1,
         )
         if n != 1:
-            raise DriftError(f'no "{package}..." dependency string in {ADAPTER_PYPROJECT}')
+            raise DriftError(f'no "{package}..." dependency string in {where}')
     return text
 
 
@@ -398,10 +403,10 @@ def run_bump(root: Path, sha: str, schemas: str, client: str, allow_downgrade: b
     def read(rel: str) -> str:
         return (root / rel).read_text()
 
-    old = {rel: read(rel) for rel in (ADAPTER_PYPROJECT, CONTRACT_PY, PIN_FILE, README, PKG_README)}
+    old = {rel: read(rel) for rel in (ADAPTER_PYPROJECT, CORE_PYPROJECT, CONTRACT_PY, PIN_FILE, README, PKG_README)}
     if not allow_downgrade:
         for package, new_line in (("tckdb-schemas", schemas_line), ("tckdb-client", client_line)):
-            current = pinned_line(old[ADAPTER_PYPROJECT], package)
+            current = min(pinned_line(old[rel], package) for rel in (ADAPTER_PYPROJECT, CORE_PYPROJECT))
             if new_line < current:
                 raise DriftError(
                     f"refusing to move {package} back from {fmt_line(current)} to {fmt_line(new_line)}; "
@@ -410,6 +415,7 @@ def run_bump(root: Path, sha: str, schemas: str, client: str, allow_downgrade: b
     repo = read_pin_file(old[PIN_FILE])["repo"]
     pyproject = rewrite_pyproject(old[ADAPTER_PYPROJECT], schemas_line, client_line)
     new = {
+        CORE_PYPROJECT: rewrite_pyproject(old[CORE_PYPROJECT], schemas_line, client_line, CORE_PYPROJECT),
         CONTRACT_PY: rewrite_contract_py(old[CONTRACT_PY], schemas_line),
         PIN_FILE: rewrite_pin_file(old[PIN_FILE], sha),
         README: rewrite_readme(old[README], repo, sha, schemas_line, client_line),

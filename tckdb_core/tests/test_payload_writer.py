@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-"""Unit tests for tckdb_arc.payload_writer."""
+"""Unit tests for tckdb_core.payload_writer."""
 
 import json
 import shutil
 import tempfile
 import unittest
 
-from tckdb_arc.payload_writer import (
+from tckdb_core.payload_writer import (
     PayloadWriter,
     SidecarMetadata,
     should_replay_sidecar,

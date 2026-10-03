@@ -13,19 +13,23 @@ transport against the shared **`tckdb-schemas`** wire-contract.
 
 | Package    | Path         | Status | Description |
 |------------|--------------|--------|-------------|
-| `tckdb-arc`| `tckdb_arc/` | active | ARC → TCKDB upload adapter (payload builder + sidecar writer + uploader). |
+| `tckdb-adapters-core` | `tckdb_core/` | active | Producer-agnostic core shared by every adapter: payload writer, upload/sidecar/readiness pipeline, idempotency keys, level-identity replica, config and API-key resolution. Reads no producer's output format. |
+| `tckdb-arc`| `tckdb_arc/` | active | ARC → TCKDB upload adapter (ARC output reader + payload builders; uploads through `tckdb_core`). |
 | `tckdb_rmg`| —            | future | RMG adapter (placeholder; not yet created). |
 | `tckdb_chemtrayzer` | — | future | Chemtrayzer adapter (placeholder). |
 
-The three-package ecosystem:
+The ecosystem:
 
 - **`tckdb-schemas`** (in `TCKDB_v2`) — canonical Pydantic wire-contract. Owns the schema.
 - **`tckdb-client`** (in `TCKDB_v2`) — HTTP transport + idempotency + replay. Tool-neutral.
 - **`tckdb-adapters`** (this repo) — per-tool extractors. Depend on the two above;
   each *may* optionally depend on its own tool.
 
-The dependency direction is acyclic: `tckdb_arc → {tckdb-client, tckdb-schemas, arc(optional)}`.
-Nothing in the shared layer ever points back at a producing tool.
+The dependency direction is acyclic: `tckdb_arc → tckdb_core → {tckdb-client, tckdb-schemas}`, and
+`tckdb_arc → arc(optional)`. Nothing in the shared layer or in `tckdb_core` ever points back at a
+producing tool; `tckdb_core/tests` has a guard test for that. A new producer adds a sibling package
+(`tckdb_rmg/`, ...) that depends on `tckdb_core` the way `tckdb_arc` does. Install the core first when
+working from the checkout: `pip install -e tckdb_core -e tckdb_arc`.
 
 See the [current ARC integration audit](docs/contract/CURRENT_ARC_INTEGRATION.md)
 for verified mappings, validation results, and remaining producer/server gaps.

@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tckdb-arc"
-version = "0.10.0"
+version = "0.11.0"
 description = "ARC → TCKDB upload adapter (payload builder + sidecar writer + uploader)."
 requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "MIT" }
 dependencies = [
+    "tckdb-adapters-core>=0.1,<0.2",  # producer-agnostic upload pipeline, payload writer, idempotency
     "tckdb-client>=0.111,<0.112",   # tested transport + replay contract
     "tckdb-schemas>=0.73,<0.74", # the producer contract module ships from 0.52
     "PyYAML>=6",                  # vendored read_yaml_file + element data loader

@@ -23,6 +23,14 @@ dependencies = [
     "PyYAML>=6",
 ]
 ''',
+    "tckdb_core/pyproject.toml": '''[project]
+name = "tckdb-adapters-core"
+version = "0.1.0"
+dependencies = [
+    "tckdb-client>=0.95,<0.96",   # transport
+    "tckdb-schemas>=0.54,<0.55", # contract
+]
+''',
     "tckdb_arc/tests/_contract.py": '"""doc"""\n\nTARGET_SCHEMAS_LINE = (0, 54)\nOTHER = 1\n',
     "tckdb-pin.toml": f'''# pin
 [tckdb]
@@ -60,6 +68,7 @@ Other text.
 #: The files a bump rewrites; the rest of FILES must stay byte-identical.
 BUMPED = [
     "tckdb_arc/pyproject.toml",
+    "tckdb_core/pyproject.toml",
     "tckdb_arc/tests/_contract.py",
     "tckdb-pin.toml",
     "README.md",
