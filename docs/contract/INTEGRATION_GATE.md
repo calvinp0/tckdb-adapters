@@ -19,9 +19,12 @@ loopback too. So the run fails unless all three hold:
 The adapter reads its key from `TCKDB_INTEGRATION_API_KEY`, so an ambient
 `TCKDB_API_KEY` is never used.
 
-Validated against TCKDB_v2 `f22d3a80` (the pinned sha), with tckdb-client 0.102.0,
-tckdb-schemas 0.64.0 and tckdb-arc 0.9.0: 62 passed and no xfails, fresh and on replay
-(a second run against the same database). That run covers the 0.64 `imaginary_mode` and
+Validated against TCKDB_v2 `96b71b09` (the pinned sha), with tckdb-client 0.111.0,
+tckdb-schemas 0.73.0 and tckdb-arc 0.10.0: 62 passed and no xfails, fresh (empty database)
+and on replay (a second run against the same database). The 0.65-0.73 server changes are
+additive for these corpora: none of the new warning codes (`named_composite_deposited_as_opt/sp`,
+`level_of_theory_method_names_correction_table`, `composite_delta_prefer_scheme_terms`) and none
+of the 0.65 `*_role_duplicate` refusals fired. The run covers the 0.64 `imaginary_mode` and
 `energy_ordering` evidence (`golden_ts_evidence`: bundle with both kinds read back with
 their stored values and cited calculations, standalone TS with `imaginary_mode`), which
 exercises the server-only rules (stored-row ownership of each compared energy, the
@@ -36,6 +39,22 @@ corrections as not applied, so the adapter (correctly, for a pre-1.3 document) d
 below match on server warning codes and read-back shapes, so a TCKDB change to
 either can flip them without any adapter change.
 
+## Server warning codes seen at `96b71b09`
+
+Server warnings (`response_body.warnings`) by corpus; identical fresh and on replay. These
+are the codes the gate has observed, not a contract. `ts_atom_map_sample`,
+`current_arc_h2o` and `synthetic_species_as_shipped` drew none.
+
+| Corpus | Server warning codes |
+|---|---|
+| `golden` (species, conformer, reaction, TS, artifacts) | `freq_list_incomplete_for_geometry`, `missing_software_release_provenance`, `multiplicity_mismatch` (sample log, artifact test), `reaction_atom_map_absent`, `transition_state_missing_irc_evidence` |
+| `golden_kinetics`, `synthetic_reaction` | `freq_list_incomplete_for_geometry`, `reaction_atom_map_absent`, `transition_state_missing_irc_evidence` (`synthetic_reaction` also `missing_software_release_provenance`) |
+| `golden_irc_failed` | `freq_list_incomplete_for_geometry`, `reaction_atom_map_absent`, `transition_state_missing_irc_evidence` |
+| `golden_irc_passed`, `golden_ts_evidence` | `freq_list_incomplete_for_geometry`, `reaction_atom_map_absent` |
+| `ts_atom_map_derived` | `freq_list_incomplete_for_geometry`, `missing_frequency_scale_factor_provenance` |
+| `arc_1_2` | `converged_opt_no_usable_energy`, `missing_software_release_provenance` |
+| `arc_1_2_corrections` | `missing_energy_correction_scheme_software`, `missing_frequency_scale_factor_provenance`, `missing_literature_provenance`, `missing_statmech_frequency_source` |
+
 ## Prerequisites
 
 - `tckdb_env` (conda) has the TCKDB backend installed editable
@@ -47,6 +66,13 @@ either can flip them without any adapter change.
   `PYTHONPATH=$TCKDB/clients/python/src conda run -n arc_env python -m pytest ...`. Its `tckdb_schemas` is an editable install of
   `$TCKDB/schemas/python/tckdb-schemas`, so the adapter validates against
   whatever that working tree holds.
+- If the checkout is newer than the editable install, shadow it instead of reinstalling:
+  at `96b71b09` `tckdb_env` carried tckdb-schemas 0.51, which lacks
+  `tckdb_schemas.composite_total` that the backend imports, so run alembic, uvicorn and
+  `bootstrap_admin.py` with
+  `PYTHONPATH=$TCKDB/backend:$TCKDB/schemas/python/tckdb-schemas`, and the adapter with
+  `PYTHONPATH=$PWD/tckdb_arc` (the editable `tckdb_arc` in `arc_env` points at another
+  checkout). Check `app.__file__` and `tckdb_arc.adapter.__file__` before running.
 - Docker, with the two images below available locally or pullable.
 
 ## Bring up an isolated backend
