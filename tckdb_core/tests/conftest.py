@@ -1,6 +1,6 @@
 """Pytest configuration for the tckdb_core test suite.
 
-Puts the tests directory on ``sys.path`` so helper imports (``_backend_import``)
+Puts the tests directory on ``sys.path`` so helper imports
 resolve regardless of the invocation cwd, and registers the contract hook's marker.
 """
 

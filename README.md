@@ -45,7 +45,7 @@ pip install -e "tckdb_core[test]" -e "tckdb_arc[test]"
 export TCKDB_BACKEND_PATH=/path/to/TCKDB/backend TCKDB_REQUIRE_BACKEND=1
 
 # 1. both suites together, from the repository root
-python -m pytest tckdb_arc/tests tckdb_core/tests
+python -m pytest   # or name paths: python -m pytest tckdb_core/tests tckdb_arc/tests
 
 # 2. each package from its own directory (what CI does)
 (cd tckdb_core && python -m pytest)
@@ -57,9 +57,11 @@ python -m pytest tckdb_arc/tests/test_warning_registry.py -q
 
 From a git worktree whose `tckdb_core` / `tckdb_arc` editable installs point at another checkout, put the
 worktree's packages first instead of reinstalling: `PYTHONPATH=$PWD/tckdb_core:$PWD/tckdb_arc python -m pytest ...`.
-At the repository root both package directories are also importable as namespace packages
-(`tckdb_core.__file__` is `None` there), so test code that needs a package's directory must not use
-`tckdb_core.__file__`.
+The root `pyproject.toml` sets pytest's `pythonpath = ["tckdb_core", "tckdb_arc"]` (inserted ahead of the
+current directory), which is what makes way 1 work; each package's own `pyproject.toml` sets `pythonpath = ["."]`
+for the same reason when pytest picks that ini (a single file path under a package, or a run from its directory). Without it the outer `tckdb_core/` and `tckdb_arc/`
+directories would be picked up as namespace packages at the root and `from tckdb_arc import ...` would fail.
+Pytest uses the nearest ini above the given paths, so a path under one package uses that package's ini.
 
 ## The shared layer (pinned)
 

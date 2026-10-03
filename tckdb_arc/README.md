@@ -335,7 +335,7 @@ Adapter 0.12.0 (core extraction, batch L2; no behaviour change; needs `tckdb-ada
 - Logging: the shared pipeline logs through the adapter instance and the moved functions take the adapter module's
   `logger`, so `mock.patch("tckdb_arc.adapter.logger")` intercepts them; the core's process-global `set_logger_name`
   is gone.
-- The contract test kit moved to `tckdb_core.testing` (`tests/_contract.py` and `_backend_import.py` are re-exports;
+- The contract test kit moved to `tckdb_core.testing` (`tests/_contract.py` is a re-export;
   `tests/conftest.py` registers the contract hook against this adapter's builders; the live gate's guards and fixture
   come from `tckdb_core.testing.live`). `TARGET_SCHEMAS_LINE` is the single line in
   `tckdb_core/tckdb_core/testing/contract.py`; `tools/tckdb_drift.py` rewrites it there.
