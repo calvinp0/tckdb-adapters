@@ -7,11 +7,8 @@ ones a declaration can trip, so the tests replay them here.
 Replicated from TCKDB (checked against the backend when it is importable, see
 ``test_energy_level_declaration.py::test_hash_matches_the_backend``):
 
-* ``backend/app/services/calculation_resolution.py::_level_of_theory_hash``:
-  a level's identity hashes method, basis (through ``basis_identity_key``),
-  aux_basis, cabs_basis, dispersion, solvent, solvent_model, keywords and
-  ``spin_treatment``, where NULL folds to ``"unknown"`` (DR-0034).
-* ``backend/app/chemistry/basis_set_names.py::basis_identity_key``.
+* ``backend/app/services/calculation_resolution.py::_level_of_theory_hash`` and
+  its identity keys: now ``tckdb_arc/level_rules.py`` (see its docstring).
 * ``backend/app/services/calculation_levels.py::assert_role_consistency``,
   R2' level uniformity and R4'/R5: a declared energy level must resolve to the
   linked sp calculations' shared level, or, with no sp linked, to every linked
@@ -20,42 +17,9 @@ Replicated from TCKDB (checked against the backend when it is importable, see
 
 from __future__ import annotations
 
-import hashlib
-import json
-import re
-
-_HYPHEN_RULES = (
-    (re.compile(r"(?<![^-])def2(?=[a-z])"), "def2-"),
-    (re.compile(r"(?<![^-])ccp(?=(?:w?c)?v)"), "cc-p"),
-)
-
-
-def basis_identity_key(name):
-    if name is None:
-        return None
-    key = name.strip().lower()
-    if not key:
-        return None
-    for pattern, replacement in _HYPHEN_RULES:
-        key = pattern.sub(replacement, key)
-    return key
-
-
-def level_hash(ref) -> str:
-    payload = {
-        "method": ref["method"],
-        "basis": basis_identity_key(ref.get("basis")),
-        "aux_basis": basis_identity_key(ref.get("aux_basis")),
-        "cabs_basis": basis_identity_key(ref.get("cabs_basis")),
-        "dispersion": ref.get("dispersion"),
-        "solvent": ref.get("solvent"),
-        "solvent_model": ref.get("solvent_model"),
-        "keywords": ref.get("keywords"),
-        "spin_treatment": ref.get("spin_treatment") or "unknown",
-    }
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+# The hash lives in the package so the adapter can pre-check identity at build time;
+# the tests import it from there (and test_level_rules pins it to TCKDB's literals).
+from tckdb_arc.level_rules import basis_identity_key, level_hash  # noqa: F401
 
 
 def energy_level_verdict(block, calculations_by_key):

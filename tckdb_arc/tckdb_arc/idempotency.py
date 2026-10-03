@@ -94,7 +94,13 @@ class ArtifactIdempotencyInputs:
     is scoped to a (species, conformer) — but artifact uploads target a
     concrete TCKDB calculation row, and the same calculation can carry
     multiple artifacts of different kinds. So the artifact key tail is
-    ``(calculation_id, artifact_kind, artifact_sha256)``.
+    ``(calculation_ref, artifact_kind, artifact_sha256)``: the calculation's
+    ``calc_`` ref (TCKDB public refs, #599), with the integer id only as a
+    fallback for a response that carried no ref. A key built from a pre-0.10
+    sidecar's integer id differs and would not replay (the server keeps one
+    artifact row per upload), so the adapter checks for a pre-0.10 sidecar of
+    the same artifact first and skips an artifact it records as uploaded
+    (``TCKDBAdapter._legacy_uploaded_artifact``).
 
     The artifact's bytes-hash is part of the key so that re-uploading
     different content for the same kind under the same calculation
@@ -104,16 +110,25 @@ class ArtifactIdempotencyInputs:
 
     project_label: str | None
     species_label: str
-    calculation_id: int
+    calculation_id: int | None
     artifact_kind: str
     artifact_sha256: str
+    calculation_ref: str | None = None
+
+    @property
+    def calculation_handle(self) -> int | str:
+        """The ``calc_`` ref when the response gave one, else the integer id (fallback)."""
+        handle = self.calculation_ref or self.calculation_id
+        if handle is None:
+            raise ValueError("an artifact idempotency key needs a calculation_ref or calculation_id")
+        return handle
 
 
 def build_artifact_idempotency_key(inputs: ArtifactIdempotencyInputs) -> str:
     """Compose a stable per-artifact idempotency key.
 
     Shape:
-        ``arc:<project>:<species>:artifact:<calc_id>:<kind>:<sha-prefix>``
+        ``arc:<project>:<species>:artifact:<calc_ref>:<kind>:<sha-prefix>``
 
     The artifact sha256 is truncated to 16 hex chars to keep the key
     well under the 200-char server cap while preserving collision
@@ -126,7 +141,7 @@ def build_artifact_idempotency_key(inputs: ArtifactIdempotencyInputs) -> str:
         [
             inputs.species_label,
             "artifact",
-            str(inputs.calculation_id),
+            str(inputs.calculation_handle),
             inputs.artifact_kind,
             inputs.artifact_sha256[:16],
         ]

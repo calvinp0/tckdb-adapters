@@ -4,7 +4,7 @@ Convert ARC `output/output.yml` and portable parser evidence into TCKDB
 species, reaction, and transition-state uploads. Payloads and upload metadata
 are written locally before any network request, allowing inspection and replay.
 
-Requires Python 3.11+, `tckdb-client` 0.102.x and `tckdb-schemas` 0.64.x.
+Requires Python 3.11+, `tckdb-client` 0.111.x and `tckdb-schemas` 0.73.x.
 For development with sibling checkouts:
 
 ```bash
@@ -265,9 +265,48 @@ what ARC states (details in `docs/contract/CURRENT_ARC_INTEGRATION.md`, A14):
   leaves the record out (`ts_energy_ordering_evidence_not_sent`). ARC leaves `e_elect` unset when its `E0`
   check passed, and then nothing is sent.
 
+Adapter 0.10.0 (batch K, tckdb-schemas 0.73 / client 0.111; details in
+`docs/contract/CURRENT_ARC_INTEGRATION.md`, "tckdb-schemas 0.65 to 0.73"):
+
+- **Public refs.** Artifacts are posted to `/calculations/{calc_ref}/artifacts`, and the sweep names a
+  calculation by the response's `primary_calculation.calculation_ref`. The integer `calculation_id` is a fallback only for a
+  response with no ref, with a `calculation_ref_not_returned` warning. `UploadOutcome.submission_ref` and
+  `.calculation_key_refs` carry the response's `sub_` ref and (computed-reaction) key-to-`calc_` map. The adapter makes no
+  rights-attestation call.
+- **Artifact sidecars and idempotency.** The artifact idempotency key is built from
+  `(calculation_ref, artifact_kind, artifact_sha256)` (it was the integer id before), and the sidecar records
+  `calculation_ref` beside `calculation_id` and is named after the ref. **A project uploaded before 0.10 holds integer-id
+  keys, so a re-run would re-post each artifact under a new key, and TCKDB keeps one `calculation_artifact` row per upload
+  even for identical bytes (it would duplicate the row).** The adapter therefore looks for the pre-0.10 sidecar
+  (`<species>.calc<int>.<kind>.artifact.meta.json`, the response still carries the integer id) before building a
+  ref-keyed upload; if its status is `uploaded`, its sha256 is the artifact's and it was posted to the same server, the
+  artifact is skipped as already uploaded. Otherwise (no sidecar, pending or failed, changed bytes) it uploads under the
+  ref key. Nothing needs deleting.
+- **BAC frequency level.** Only a `bac_petersson` / `bac_melius` scheme whose record's `matched_arkane_key` is a
+  `CompositeLevelOfTheory(freq=..., energy=...)` carries `frequency_level_of_theory`, taken from the key's freq half
+  (tckdb-schemas 0.66: a scheme keyed on one level sends none; in RMG-database only 4 of 47 Petersson keys are composite).
+  A single-level key, no key or an unparseable one sends none. If ARC's stated freq-job level disagrees with the key's
+  freq half the field is omitted with a `bac_frequency_level_conflict` warning. It joins scheme identity, so a composite-keyed
+  BAC is one new scheme row. Atom-energy schemes send none, and the adapter never sends `application_role: composite_delta`.
+- **Method guards.** No `//` ever reaches a `level_of_theory.method` (a compound level is refused with a log line
+  `level_method_is_compound`). An Arkane level that is a correction-table name (`cbs-qb3-paraskevas`, `cbsqb32023`) is sent
+  as its method stem with the table name as the scheme `name` (warning `correction_table_method_split`). A calculation whose
+  level method is a table name (ARC runs `cbs-qb3-paraskevas` as CBS-QB3) is sent with the stem too (logged with the original
+  string). A calculation level with `//` is not built; its skip reason starts with `level_method_is_compound`.
+- **G4 / G4MP2 on Gaussian 16 Revision A.03.** ARC's energy for such a composite run is the shifted 298 K value, so the
+  record's sp energy, the E0-derived thermo content (H298, NASA, point H and G), statmech energy links and the kinetics
+  built on it are withheld, with `g4_energy_loader_shifted_label_gaussian16_a03`, until ARC exports a correct E0. S298 and
+  Cp (from statmech) are kept. Only output 1.3 records carry `ess_versions.composite`, so the guard cannot fire on an
+  earlier document.
+- **Identity replica.** `tckdb_arc.level_rules` replicates TCKDB's level-of-theory hash (aliases, folded dispersion,
+  `core_treatment` only when stated). Run `test_hash_matches_the_backend` with `TCKDB_BACKEND_PATH` set to a TCKDB
+  `backend/` (CI does).
+- Not in this release: the `composite` calculation type (waits on ARC B18), transport, core extraction.
+
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 
 <!-- tckdb-drift:changelog -->
+- Adapter 0.10.0: tracked TCKDB 96b71b0 (schemas 0.73.0, client 0.111.0).
 - Adapter 0.6.9: tracked TCKDB f22d3a8 (schemas 0.64.0, client 0.102.0).
 - Adapter 0.6.8: tracked TCKDB a515fb9 (schemas 0.58.0, client 0.98.0).
 

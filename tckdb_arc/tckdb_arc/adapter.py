@@ -39,6 +39,7 @@ from tckdb_client import TCKDBClient
 from tckdb_client.errors import TCKDBError
 from tckdb_schemas.enthalpy_reference import enthalpy_reference_error
 from tckdb_schemas.fragments.refs import (
+    correction_table_method_stem,
     W_SOFTWARE_RELEASE_VERSION_IS_COMPOSITE,
     SoftwareReleaseRef,
 )
@@ -76,6 +77,7 @@ from tckdb_arc.idempotency import (
     build_artifact_idempotency_key,
     build_idempotency_key,
 )
+from tckdb_arc.level_rules import method_identity_key
 from tckdb_arc.constraints import serialize_constraints
 from tckdb_arc.evidence import EvidenceStore
 from tckdb_arc.payload_writer import (
@@ -928,6 +930,11 @@ class UploadOutcome:
     primary_calculation: dict[str, Any] | None = None
     additional_calculations: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
+    # TCKDB 0.57+/#599 public refs: the submission's ``sub_`` ref (what a later
+    # request such as a rights attestation names) and, on computed-reaction, the
+    # bundle-local calculation key -> ``calc_`` ref map.
+    submission_ref: str | None = None
+    calculation_key_refs: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -937,11 +944,13 @@ class ArtifactUploadOutcome:
     status: str  # uploaded | failed | skipped
     sidecar_path: Path | None
     idempotency_key: str | None
-    calculation_id: int
+    # ``calculation_id`` is ``None`` when the target was named by its ``calc_`` ref only.
+    calculation_id: int | None
     kind: str
     error: str | None = None
     response: Any = None
     skip_reason: str | None = None
+    calculation_ref: str | None = None
     # The server's per-item findings from the artifact response body
     # (e.g. ``software_release_version_filled_from_artifact``,
     # ``multiplicity_mismatch``), the same list the sidecar records.
@@ -956,7 +965,7 @@ class _ArtifactBatchResult:
     which ``TCKDBClient.upload_artifacts`` discards in favour of the body.
     """
 
-    calculation_id: int
+    handle: int | str
     calculation_keys: tuple[str, ...]
     artifact_count: int
     response: Any
@@ -968,13 +977,19 @@ class _PreparedArtifactUpload:
 
     written: WrittenArtifact
     calculation_key: str
-    calculation_id: int
+    calculation_id: int | None
     path: Path
     kind: str
     label: str | None
     sha256: str
     bytes: int
     filename: str
+    calculation_ref: str | None = None
+
+    @property
+    def handle(self) -> int | str:
+        """What names the calculation in the URL: its ``calc_`` ref, else the integer id."""
+        return self.calculation_ref if self.calculation_ref else self.calculation_id  # type: ignore[return-value]
 
 
 class TCKDBReadinessError(RuntimeError):
@@ -1243,6 +1258,7 @@ class TCKDBAdapter:
 
         build_warnings: list[dict[str, Any]] = []
         output_doc = self._with_adaptive_levels(output_doc, build_warnings)
+        species_record = _withhold_unreliable_composite_energies(output_doc, species_record, build_warnings)
         skipped = _irc_endpoint_skip(output_doc, species_record)
         if skipped is not None:
             return skipped
@@ -1290,7 +1306,8 @@ class TCKDBAdapter:
         *,
         output_doc: Mapping[str, Any],
         species_record: Mapping[str, Any],
-        calculation_id: int,
+        calculation_id: int | None = None,
+        calculation_ref: str | None = None,
         calculation_type: str,
         file_path: str | Path,
         kind: str = "output_log",
@@ -1310,13 +1327,20 @@ class TCKDBAdapter:
         implemented in ARC, file path missing, or file exceeds
         ``max_size_mb``.
 
+        ``calculation_ref`` is the calculation's ``calc_`` ref from the upload
+        response (``calculation_ref``); it names the calculation in the URL and
+        in the artifact idempotency key. ``calculation_id`` is the integer
+        fallback for a response that carries no ref (an older server): it is used
+        only then, with a warning, and never preferred over a ref.
+
         ``calculation_type`` is recorded in the sidecar but does not feed
-        the URL — the endpoint takes the calc id directly.
+        the URL — the endpoint takes the calculation handle directly.
         """
         outcomes = self.submit_artifact_batch_for_calculation(
             output_doc=output_doc,
             species_record=species_record,
             calculation_id=calculation_id,
+            calculation_ref=calculation_ref,
             calculation_type=calculation_type,
             artifacts=[(kind, file_path)],
         )
@@ -1329,13 +1353,29 @@ class TCKDBAdapter:
         *,
         output_doc: Mapping[str, Any],
         species_record: Mapping[str, Any],
-        calculation_id: int,
+        calculation_id: int | None = None,
+        calculation_ref: str | None = None,
         calculation_type: str,
         artifacts: list[tuple[str, str | Path]],
     ) -> list[ArtifactUploadOutcome] | None:
-        """Upload artifacts for one calculation with client-side batch grouping."""
+        """Upload artifacts for one calculation with client-side batch grouping.
+
+        The calculation is named by ``calculation_ref`` (``calc_...``); the
+        integer ``calculation_id`` is a fallback, warned about, for a response that
+        returned no ref.
+        """
         if not self._config.enabled:
             return None
+        calculation_ref = calculation_ref or None
+        if calculation_ref is None:
+            if calculation_id is None:
+                raise ValueError("an artifact upload needs a calculation_ref or a calculation_id")
+            logger.warning(
+                "TCKDB %s: the upload response carried no calculation_ref for calculation "
+                "%s; naming it by its integer id, which the server deprecates.",
+                _W_CALCULATION_REF_NOT_RETURNED, calculation_id,
+            )
+        handle = calculation_ref if calculation_ref else calculation_id
 
         species_label = species_record.get("label") or "unlabeled"
         artifact_cfg = self._config.artifacts
@@ -1347,6 +1387,7 @@ class TCKDBAdapter:
                 output_doc=output_doc,
                 species_label=species_label,
                 calculation_id=calculation_id,
+                calculation_ref=calculation_ref,
                 kind=kind,
                 file_path=file_path,
                 artifact_cfg=artifact_cfg,
@@ -1363,7 +1404,7 @@ class TCKDBAdapter:
         first = prepared[0]
         prepared[0] = _PreparedArtifactUpload(
             written=first.written,
-            calculation_key=f"calc{calculation_id}-{batch_digest}",
+            calculation_key=(f"{handle}-{batch_digest}" if isinstance(handle, str) else f"calc{handle}-{batch_digest}"),
             calculation_id=first.calculation_id,
             path=first.path,
             kind=first.kind,
@@ -1371,6 +1412,7 @@ class TCKDBAdapter:
             sha256=first.sha256,
             bytes=first.bytes,
             filename=first.filename,
+            calculation_ref=first.calculation_ref,
         )
 
         batch_outcomes = self._upload_artifact_batch(
@@ -1416,6 +1458,7 @@ class TCKDBAdapter:
 
         build_warnings: list[dict[str, Any]] = []
         output_doc = self._with_adaptive_levels(output_doc, build_warnings)
+        species_record = _withhold_unreliable_composite_energies(output_doc, species_record, build_warnings)
         skipped = _irc_endpoint_skip(output_doc, species_record)
         if skipped is not None:
             return skipped
@@ -1520,6 +1563,7 @@ class TCKDBAdapter:
             arkane_release=_arkane_workflow_tool_release(output_doc),
             scheme_data_revisions=_scheme_data_revisions(output_doc),
             aec_yml_digest=_arc_aec_yml_digest(output_doc),
+            bac_frequency_level=_bac_frequency_level(output_doc, species_record),
             omitted_bac_reasons=omitted_bacs,
         )
         if applied_corrections:
@@ -2807,6 +2851,8 @@ class TCKDBAdapter:
 
         build_warnings: list[dict[str, Any]] = []
         output_doc = self._with_adaptive_levels(output_doc, build_warnings)
+        output_doc = _withhold_unreliable_energies_in_doc(output_doc, build_warnings)
+        reaction_record = _withhold_reaction_kinetics(output_doc, reaction_record, build_warnings)
         payload = self._build_computed_reaction_payload(
             output_doc=output_doc,
             reaction_record=reaction_record,
@@ -3353,6 +3399,7 @@ class TCKDBAdapter:
             arkane_release=_arkane_workflow_tool_release(output_doc),
             scheme_data_revisions=_scheme_data_revisions(output_doc),
             aec_yml_digest=_arc_aec_yml_digest(output_doc),
+            bac_frequency_level=_bac_frequency_level(output_doc, species_record),
             omitted_bac_reasons=omitted_bacs,
         )
         _note_omitted_bac_on_thermo(
@@ -3881,6 +3928,7 @@ class TCKDBAdapter:
             arkane_release=_arkane_workflow_tool_release(output_doc),
             scheme_data_revisions=_scheme_data_revisions(output_doc),
             aec_yml_digest=_arc_aec_yml_digest(output_doc),
+            bac_frequency_level=_bac_frequency_level(output_doc, ts_record),
         )
         if applied_corrections:
             ts_block["applied_energy_corrections"] = applied_corrections
@@ -3924,6 +3972,9 @@ class TCKDBAdapter:
 
         build_warnings: list[dict[str, Any]] = []
         output_doc = self._with_adaptive_levels(output_doc, build_warnings)
+        output_doc = _withhold_unreliable_energies_in_doc(output_doc, build_warnings)
+        ts_record = _withhold_unreliable_composite_energies(output_doc, ts_record, build_warnings)
+        reaction_record = _withhold_reaction_kinetics(output_doc, reaction_record, build_warnings)
         payload = self._compose_transition_state_request(
             output_doc=output_doc,
             ts_record=ts_record,
@@ -4352,6 +4403,7 @@ class TCKDBAdapter:
             arkane_release=_arkane_workflow_tool_release(output_doc),
             scheme_data_revisions=_scheme_data_revisions(output_doc),
             aec_yml_digest=_arc_aec_yml_digest(output_doc),
+            bac_frequency_level=_bac_frequency_level(output_doc, species_record),
             omitted_bac_reasons=omitted_bacs,
         )
         if applied_corrections:
@@ -4529,6 +4581,12 @@ class TCKDBAdapter:
                 f"level of theory for {calc_type} is missing method; "
                 "cannot build TCKDB calculation payload."
             )
+        if "//" in str(method):
+            raise ValueError(
+                f"{_W_LEVEL_METHOD_IS_COMPOUND}: the {calc_type} level method {str(method)!r} "
+                "contains '//' (two levels of theory, which TCKDB refuses in a method); which "
+                "half belongs to this calculation is not stated, so the calculation is not built."
+            )
         if not arc13.has_levels(record):
             # Before output.yml 1.3 the scan's own program was not relied on.
             observed_software = observed_version = None
@@ -4571,6 +4629,14 @@ class TCKDBAdapter:
             )
 
         level_of_theory = _arc_level_to_tckdb_lot(level)
+        if level_of_theory is not None and level_of_theory["method"] != str(level["method"]):
+            message = (
+                f"ARC's {calc_type} level method {str(level['method'])!r} names a correction "
+                f"table, not a method; the {calc_type} calculation is sent with method "
+                f"{level_of_theory['method']!r} (the calculation that ran)."
+            )
+            logger.warning("TCKDB %s: %s: %s", f"calculation.{calc_type}",
+                           _W_CORRECTION_TABLE_METHOD_SPLIT, message)
         if level_of_theory is None:
             # method was already validated above; this is defensive against
             # a future change to _arc_level_to_tckdb_lot that drops the row.
@@ -4795,6 +4861,7 @@ class TCKDBAdapter:
                 sc.idempotency_key,
             )
         primary, additional = _extract_calc_refs(response_data)
+        submission_ref, key_refs = _extract_submission_refs(response_data)
         return UploadOutcome(
             status="uploaded",
             payload_path=written.payload_path,
@@ -4804,6 +4871,8 @@ class TCKDBAdapter:
             primary_calculation=primary,
             additional_calculations=additional,
             warnings=sc.warnings,
+            submission_ref=submission_ref,
+            calculation_key_refs=key_refs,
         )
 
     def _record_failure(
@@ -4984,16 +5053,38 @@ class TCKDBAdapter:
         self._preflight_error = last_error
         raise self._preflight_error
 
+    def _legacy_uploaded_artifact(
+        self, species_label: str, calculation_id: int | None, kind: str, sha256: str,
+    ) -> Path | None:
+        """Path of the pre-0.10 (``calc{int}``) sidecar when it records this artifact as uploaded.
+
+        It counts only when its status is ``uploaded``, its sha256 is this artifact's, and, when
+        both state one, it was posted to the same server (an integer id means nothing on another).
+        """
+        found = self._writer.read_legacy_artifact_sidecar(
+            species_label=species_label, calculation_id=calculation_id, kind=kind)
+        if found is None:
+            return None
+        path, data = found
+        if data.get("status") != "uploaded" or data.get("sha256") != sha256:
+            return None
+        old_url, new_url = data.get("base_url"), self._config.base_url
+        if old_url and new_url and str(old_url).rstrip("/") != str(new_url).rstrip("/"):
+            return None
+        return path
+
     def _prepare_artifact_upload(
         self,
         *,
         output_doc: Mapping[str, Any],
         species_label: str,
-        calculation_id: int,
+        calculation_id: int | None,
         kind: str,
         file_path: str | Path,
         artifact_cfg: Any,
+        calculation_ref: str | None = None,
     ) -> _PreparedArtifactUpload | ArtifactUploadOutcome:
+        handle = calculation_ref if calculation_ref else calculation_id
         # Defense-in-depth: in bundle modes the bundle payload already
         # carries input/output_log artifacts inline under each calc.
         if (
@@ -5004,12 +5095,13 @@ class TCKDBAdapter:
                 calculation_id, kind,
                 f"upload_mode={self._config.upload_mode!r} carries kind={kind!r} "
                 "inline in the bundle; standalone artifact upload suppressed",
+                calculation_ref,
             )
 
         if not artifact_cfg.upload:
-            return _skip(calculation_id, kind, "artifacts.upload is False")
+            return _skip(calculation_id, kind, "artifacts.upload is False", calculation_ref)
         if kind not in artifact_cfg.kinds:
-            return _skip(calculation_id, kind, f"kind {kind!r} not in config.kinds")
+            return _skip(calculation_id, kind, f"kind {kind!r} not in config.kinds", calculation_ref)
         if kind not in IMPLEMENTED_ARTIFACT_KINDS:
             return _skip(
                 calculation_id, kind,
@@ -5018,7 +5110,7 @@ class TCKDBAdapter:
 
         resolved = self._resolve_local_path(file_path)
         if resolved is None or not resolved.is_file():
-            return _skip(calculation_id, kind, f"file missing: {file_path!r}")
+            return _skip(calculation_id, kind, f"file missing: {file_path!r}", calculation_ref)
 
         size_bytes = resolved.stat().st_size
         max_bytes = artifact_cfg.max_size_mb * 1024 * 1024
@@ -5028,24 +5120,41 @@ class TCKDBAdapter:
                 kind,
                 f"file {resolved.name} is {size_bytes} bytes "
                 f"(>{artifact_cfg.max_size_mb} MB cap)",
+                calculation_ref,
             )
 
         with resolved.open("rb") as fh:
             content = fh.read()
         sha256 = hashlib.sha256(content).hexdigest()
 
+        if calculation_ref:
+            # A project uploaded before 0.10 keyed (and named the sidecar of) each artifact by the
+            # calculation's integer id. TCKDB keeps one calculation_artifact row per upload, even for
+            # identical bytes, so re-posting under the ref-keyed key would duplicate the row: an
+            # artifact the old sidecar records as uploaded, with the same bytes, is done.
+            done = self._legacy_uploaded_artifact(species_label, calculation_id, kind, sha256)
+            if done is not None:
+                return _skip(
+                    calculation_id, kind,
+                    f"already uploaded by a pre-0.10 run (sidecar {done.name}, same sha256); "
+                    "re-posting would add a second calculation_artifact row",
+                    calculation_ref,
+                )
+
         project_label = self._config.project_label or output_doc.get("project")
         idempotency_key = build_artifact_idempotency_key(ArtifactIdempotencyInputs(
             project_label=project_label,
             species_label=species_label,
             calculation_id=calculation_id,
+            calculation_ref=calculation_ref,
             artifact_kind=kind,
             artifact_sha256=sha256,
         ))
-        endpoint = ARTIFACTS_ENDPOINT_TEMPLATE.format(calculation_id=calculation_id)
+        endpoint = ARTIFACTS_ENDPOINT_TEMPLATE.format(calculation_id=handle)
         written_artifact = self._writer.write_artifact_sidecar(
             species_label=species_label,
             calculation_id=calculation_id,
+            calculation_ref=calculation_ref,
             kind=kind,
             filename=resolved.name,
             sha256=sha256,
@@ -5065,6 +5174,7 @@ class TCKDBAdapter:
             sha256=sha256,
             bytes=size_bytes,
             filename=resolved.name,
+            calculation_ref=calculation_ref,
         )
 
     def _upload_artifact_batch(
@@ -5103,13 +5213,13 @@ class TCKDBAdapter:
             _close_quietly(client, "after artifact upload success")
 
         batch_summary = _summarize_artifact_batch_results(batch_results)
-        result_by_calculation = {result.calculation_id: result for result in batch_results}
+        result_by_calculation = {result.handle: result for result in batch_results}
         outcomes: list[ArtifactUploadOutcome] = []
         for item in prepared:
             sc = item.written.sidecar
             # Each item takes the transport metadata and findings of the
             # response to *its own* calculation's batch.
-            result = result_by_calculation[item.calculation_id]
+            result = result_by_calculation[item.handle]
             response = result.response
             response_data = getattr(response, "data", None)
             sc.status = "uploaded"
@@ -5124,16 +5234,19 @@ class TCKDBAdapter:
             _append_request_id(sc, "artifact_upload", result)
             sc.idempotency_replayed = bool(getattr(response, "idempotency_replayed", False))
             sc.last_error = None
+            if not item.calculation_ref:
+                sc.warnings = [*sc.warnings, _calculation_ref_not_returned_warning(item.calculation_id)]
             self._writer.update_artifact_sidecar(item.written.sidecar_path, sc)
             logger.info(
                 "TCKDB artifact batch upload succeeded: calc=%s kind=%s key=%s",
-                sc.calculation_id, sc.kind, sc.idempotency_key,
+                sc.calculation_ref or sc.calculation_id, sc.kind, sc.idempotency_key,
             )
             outcomes.append(ArtifactUploadOutcome(
                 status="uploaded",
                 sidecar_path=item.written.sidecar_path,
                 idempotency_key=sc.idempotency_key,
                 calculation_id=sc.calculation_id,
+                calculation_ref=sc.calculation_ref,
                 kind=sc.kind,
                 response=sc.response_body,
                 warnings=list(sc.warnings),
@@ -5162,18 +5275,18 @@ class TCKDBAdapter:
         from tckdb_client.idempotency import validate_idempotency_key
 
         results: list[_ArtifactBatchResult] = []
-        for calculation_id, group, body in _artifact_batch_bodies(prepared):
-            first_key = group[0].calculation_key if group else str(calculation_id)
+        for handle, group, body in _artifact_batch_bodies(prepared):
+            first_key = group[0].calculation_key if group else str(handle)
             response = client.request_json(
                 "POST",
-                ARTIFACTS_ENDPOINT_TEMPLATE.format(calculation_id=calculation_id),
+                ARTIFACTS_ENDPOINT_TEMPLATE.format(calculation_id=handle),
                 json=body,
                 idempotency_key=validate_idempotency_key(
                     f"{idempotency_key_prefix}:{first_key}:artifact-batch"
                 ),
             )
             results.append(_ArtifactBatchResult(
-                calculation_id=calculation_id,
+                handle=handle,
                 calculation_keys=tuple(item.calculation_key for item in group),
                 artifact_count=len(group),
                 response=response,
@@ -5235,6 +5348,7 @@ class TCKDBAdapter:
             sidecar_path=written.sidecar_path,
             idempotency_key=sc.idempotency_key,
             calculation_id=sc.calculation_id,
+            calculation_ref=sc.calculation_ref,
             kind=sc.kind,
             error=message,
         )
@@ -5249,7 +5363,7 @@ def _artifact_batch_digest(items: list[_PreparedArtifactUpload]) -> str:
     """Content digest for a calculation-scoped artifact batch idempotency key."""
     h = hashlib.sha256()
     for item in items:
-        h.update(str(item.calculation_id).encode("utf-8"))
+        h.update(str(item.handle).encode("utf-8"))
         h.update(b"\0")
         h.update(item.kind.encode("utf-8"))
         h.update(b"\0")
@@ -5282,8 +5396,10 @@ def _summarize_artifact_batch_results(batch_results: Any) -> Any:
         for result in batch_results:
             response = getattr(result, "response", result)
             response_data = getattr(response, "data", response)
+            handle = getattr(result, "handle", None)
             summarized.append({
-                "calculation_id": getattr(result, "calculation_id", None),
+                "calculation_id": handle if isinstance(handle, int) else None,
+                "calculation_ref": handle if isinstance(handle, str) else None,
                 "calculation_keys": list(getattr(result, "calculation_keys", ()) or ()),
                 "artifact_count": getattr(result, "artifact_count", None),
                 "response": response_data,
@@ -5294,18 +5410,18 @@ def _summarize_artifact_batch_results(batch_results: Any) -> Any:
 
 def _artifact_batch_bodies(
     prepared: list[_PreparedArtifactUpload],
-) -> list[tuple[int, list[_PreparedArtifactUpload], dict[str, Any]]]:
+) -> list[tuple[int | str, list[_PreparedArtifactUpload], dict[str, Any]]]:
     """Group a plan by calculation and build each ``ArtifactsUploadRequest`` body.
 
     Groups keep first-seen order; each artifact carries its kind, filename,
     base64 content and the declared sha256 and byte count.
     """
-    groups: dict[int, list[_PreparedArtifactUpload]] = {}
+    groups: dict[int | str, list[_PreparedArtifactUpload]] = {}
     for item in prepared:
-        groups.setdefault(item.calculation_id, []).append(item)
+        groups.setdefault(item.handle, []).append(item)
     return [
         (
-            calculation_id,
+            handle,
             group,
             {"artifacts": [
                 {
@@ -5318,7 +5434,7 @@ def _artifact_batch_bodies(
                 for item in group
             ]},
         )
-        for calculation_id, group in groups.items()
+        for handle, group in groups.items()
     ]
 
 
@@ -6649,10 +6765,21 @@ def _arc_args_to_keywords(args: Any) -> str | None:
     return "; ".join(parts)
 
 
-def _arc_level_to_tckdb_lot(level: Mapping[str, Any] | None) -> dict[str, Any] | None:
+_W_LEVEL_METHOD_IS_COMPOUND = "level_method_is_compound"
+_W_CORRECTION_TABLE_METHOD_SPLIT = "correction_table_method_split"
+
+
+def _arc_level_to_tckdb_lot(
+    level: Mapping[str, Any] | None, *, split_table: bool = True,
+) -> dict[str, Any] | None:
     """Project ARC's per-job level dict (output.yml shape) onto TCKDB's
     ``LevelOfTheoryRef`` shape, applying field-name translation and
     flattening ``args`` into ``keywords``.
+
+    A method that names a correction table (``cbs-qb3-paraskevas``, which ARC accepts as a
+    composite method and runs as CBS-QB3) is sent as its stem (``cbs-qb3``): tckdb-schemas
+    0.67 would store the table name as a separate level of theory. ``split_table=False``
+    keeps the string, for a scheme level whose caller names the table on the scheme.
 
     Returns ``None`` if ``level`` is missing or has no ``method`` —
     callers decide whether to error or skip.
@@ -6660,6 +6787,18 @@ def _arc_level_to_tckdb_lot(level: Mapping[str, Any] | None) -> dict[str, Any] |
     if not isinstance(level, Mapping):
         return None
     if not level.get("method"):
+        return None
+    if "//" in str(level["method"]):
+        # ``energy//geometry`` is two levels of theory, not one method (tckdb-schemas
+        # 0.67 refuses it: ``level_of_theory_method_is_compound``). ARC splits the shorthand
+        # when it reads it (arc/main.py), so a compound method here is a hand-edited or
+        # foreign document; which half belongs to this job is not stated, so the level is
+        # refused rather than forwarded or guessed.
+        logger.warning(
+            "TCKDB %s: level method %r contains '//' (two levels of theory); the level is "
+            "not sent, since which half belongs to this calculation is not stated.",
+            _W_LEVEL_METHOD_IS_COMPOUND, str(level["method"]),
+        )
         return None
     out: dict[str, Any] = {}
     for src, dst in _ARC_TO_TCKDB_LOT_FIELDS.items():
@@ -6669,6 +6808,10 @@ def _arc_level_to_tckdb_lot(level: Mapping[str, Any] | None) -> dict[str, Any] |
     keywords = _arc_args_to_keywords(level.get("args"))
     if keywords:
         out["keywords"] = keywords
+    if split_table:
+        stem = correction_table_method_stem(out["method"])
+        if stem is not None:
+            out["method"] = stem
     return out
 
 
@@ -6677,7 +6820,143 @@ def _scheme_level_of_theory(scheme: Mapping[str, Any]) -> dict[str, Any] | None:
     ``LevelOfTheoryRef`` shape. The scheme dict comes from the same
     ``_level_to_dict(arkane_level_of_theory)`` producer as opt/freq/sp
     levels, so the same field-name translation applies."""
-    return _arc_level_to_tckdb_lot(scheme.get("level_of_theory"))
+    return _arc_level_to_tckdb_lot(scheme.get("level_of_theory"), split_table=False)
+
+
+#: Scheme kinds Arkane keys on ``CompositeLevelOfTheory(freq=..., energy=...)``.
+#: Atom-energy schemes are keyed on the energy level alone and never carry a frequency level.
+_FREQ_KEYED_SCHEME_KINDS = frozenset({"bac_petersson", "bac_melius"})
+
+
+def _bac_frequency_level(
+    output_doc: Mapping[str, Any], record: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    """ARC's stated frequency level behind a record's BAC (``scheme.frequency_level_of_theory``).
+
+    Arkane keys a Petersson or Melius BAC on ``energy//freq`` and ARC's correction
+    record names the energy half only (``level_of_theory``), so the frequency half
+    is the level of the record's frequency job, and only when ARC states it:
+
+    * an output 1.3 record: ``levels.freq``. A record whose frequencies are the
+      composite job's own (``levels.freq`` null by design, or a ``freq_log`` that is
+      the composite log) names none, so none is sent;
+    * an earlier record: the header ``freq_level``, only when the adapter attributes
+      it to this record's frequency calculation that way (``_resolve_level``: not
+      under ``adaptive_levels``, where the level of a job type the adaptive levels
+      name is per species and not exported). A null header ``freq_level`` (ARC wrote
+      it null because the frequencies share the opt level) states nothing about the
+      BAC, so none is sent: the opt level is not substituted.
+
+    ``None`` means no frequency level is stated; the scheme is then sent without one,
+    as before 0.10.
+    """
+    if record is None:
+        return None
+    if arc13.has_levels(record):
+        recorded = arc13.recorded_level(record, "freq")
+        if recorded is None or recorded.level is None or recorded.job_key == "composite":
+            return None
+        return recorded.level
+    header = output_doc.get("freq_level")
+    if not isinstance(header, Mapping) or not header.get("method"):
+        return None
+    if _adaptive_kind_named(output_doc, "freq") or _adaptive_kind_named(output_doc, "opt"):
+        return None
+    return header
+
+
+_ARKANE_COMPOSITE_KEY_RE = re.compile(
+    r"^\s*CompositeLevelOfTheory\(\s*freq\s*=\s*LevelOfTheory\((?P<freq>[^()]*)\)\s*,"
+    r"\s*energy\s*=\s*LevelOfTheory\((?P<energy>[^()]*)\)\s*\)\s*$",
+    re.DOTALL,
+)
+_ARKANE_KEY_FIELD_RE = re.compile(r"\s*(?P<name>[A-Za-z_]+)\s*=\s*'(?P<value>[^']*)'\s*(?:,|$)")
+_W_BAC_FREQUENCY_LEVEL_CONFLICT = "bac_frequency_level_conflict"
+
+
+def _arkane_key_half(body: str) -> dict[str, str] | None:
+    """Parse the ``name='value',...`` body of one ``LevelOfTheory(...)`` into a dict, or ``None``."""
+    fields: dict[str, str] = {}
+    pos = 0
+    body = body.strip()
+    while pos < len(body):
+        m = _ARKANE_KEY_FIELD_RE.match(body, pos)
+        if m is None or m.group("name") in fields:
+            return None
+        fields[m.group("name")] = m.group("value")
+        pos = m.end()
+    return fields or None
+
+
+def _arkane_composite_key_halves(matched_arkane_key: Any) -> dict[str, dict[str, str]] | None:
+    """``{"freq": {...}, "energy": {...}}`` for a ``CompositeLevelOfTheory(freq=..., energy=...)`` key.
+
+    ``None`` for any other key (a single ``LevelOfTheory``, no key, an unparseable string).
+    """
+    if not isinstance(matched_arkane_key, str):
+        return None
+    shape = _ARKANE_COMPOSITE_KEY_RE.match(matched_arkane_key)
+    if shape is None:
+        return None
+    freq, energy = _arkane_key_half(shape.group("freq")), _arkane_key_half(shape.group("energy"))
+    if not freq or not energy or not freq.get("method"):
+        return None
+    return {"freq": freq, "energy": energy}
+
+
+def _norm_level_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _bac_key_frequency_level(
+    matched_arkane_key: Any,
+    arc_freq_level: Mapping[str, Any] | None,
+    *,
+    kind: str,
+    warning_field: str,
+    warnings: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """The ``frequency_level_of_theory`` of a BAC scheme: the freq half of Arkane's composite key.
+
+    tckdb-schemas 0.66: only a scheme Arkane keys on ``CompositeLevelOfTheory(freq=..., energy=...)``
+    carries a frequency level; "for an atom-energy scheme or a scheme keyed on one level, send
+    nothing new". So the record's ``matched_arkane_key`` decides: a single-level key, no key or an
+    unparseable one sends none. For a composite key the level is the key's freq half (the table's
+    own key, not ARC's job level). If ARC states a frequency-job level (``arc_freq_level``) that
+    disagrees with the key's freq half (method, basis, and software when both state it), which one
+    keys the table is unclear, so none is sent and a warning says so.
+    """
+    halves = _arkane_composite_key_halves(matched_arkane_key)
+    if halves is None:
+        return None
+    key_freq = halves["freq"]
+    if isinstance(arc_freq_level, Mapping) and arc_freq_level.get("method"):
+        mismatched = [
+            f for f in ("method", "basis", "software")
+            if f in key_freq and arc_freq_level.get(f)
+            and _norm_level_token(key_freq[f]) != _norm_level_token(arc_freq_level.get(f))
+        ]
+        if mismatched:
+            arc_stated = {k: arc_freq_level.get(k) for k in ("method", "basis", "software")}
+            message = (
+                f"The {kind} table's Arkane key {matched_arkane_key!r} has frequency level "
+                f"{key_freq!r}, but ARC states the frequency job ran at {arc_stated!r} "
+                f"(differs in {', '.join(mismatched)}). Which one keys the table is unclear, so "
+                f"scheme.frequency_level_of_theory is omitted."
+            )
+            logger.warning("TCKDB %s: %s: %s", warning_field, _W_BAC_FREQUENCY_LEVEL_CONFLICT, message)
+            if warnings is not None:
+                warnings.append({
+                    "code": _W_BAC_FREQUENCY_LEVEL_CONFLICT,
+                    "message": message,
+                    "field": f"{warning_field}.scheme.frequency_level_of_theory",
+                    "context": {"source": "tckdb_arc_self_check",
+                                "action": "scheme_frequency_level_omitted",
+                                "scheme_kind": kind, "arkane_key_freq": dict(key_freq),
+                                "arc_freq_level": arc_stated},
+                })
+            return None
+    return _arc_level_to_tckdb_lot(key_freq)
 
 
 _ARKANE_KEY_RE = re.compile(r"^\s*LevelOfTheory\((?P<body>.*)\)\s*$", re.DOTALL)
@@ -6882,6 +7161,7 @@ def _build_applied_energy_corrections(
     omitted_bac_reasons: list[str] | None = None,
     scheme_data_revisions: Mapping[str, str] | None = None,
     aec_yml_digest: str | None = None,
+    bac_frequency_level: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Translate ``output.yml`` per-species ``applied_energy_corrections``
     into the TCKDB ``AppliedEnergyCorrectionUploadPayload`` shape.
@@ -6917,6 +7197,13 @@ def _build_applied_energy_corrections(
     unknown) say whether a componentless total is honest: only a monatomic
     species has no bond to decompose. ``omitted_bac_reasons`` collects the
     reason of each omitted BAC so the caller can note it on the thermo record.
+
+    ``bac_frequency_level`` (see ``_bac_frequency_level``) is ARC's stated frequency level
+    behind a BAC; it is sent as ``scheme.frequency_level_of_theory`` on ``bac_petersson`` and
+    ``bac_melius`` schemes that carry a ``level_of_theory`` (tckdb-schemas 0.66: the field is
+    refused on any other kind and without the energy level) and never on an atom-energy
+    scheme. It joins the scheme's identity: one new scheme row per BAC scheme the adapter
+    sent before without it.
 
     ``arkane_release`` (see ``_arkane_workflow_tool_release``) is stamped as
     ``scheme.workflow_tool_release`` on ``atom_energy``, ``bac_petersson`` and
@@ -7019,7 +7306,41 @@ def _build_applied_energy_corrections(
             )
         lot_ref = _scheme_level_of_theory(scheme_in)
         if lot_ref is not None:
+            table_stem = correction_table_method_stem(lot_ref["method"])
+            if table_stem is not None:
+                # ARC's Arkane level string names a correction table, not a method
+                # (``cbs-qb3-paraskevas``, ``cbsqb32023``): the calculation that ran is
+                # the stem. tckdb-schemas 0.67 warns on such a method and stores it as a
+                # separate level of theory; it says to send the method and name the table on
+                # the scheme. The scheme's ``name`` is that name (the table label, as ARC
+                # states it); the level carries the method.
+                table_name = lot_ref["method"]
+                lot_ref = {**lot_ref, "method": table_stem}
+                scheme_out["name"] = table_name
+                message = (
+                    f"ARC's Arkane level string {table_name!r} names a correction table, not a "
+                    f"method. The {scheme_out.get('kind')} scheme is sent with level method "
+                    f"{table_stem!r} and the table name as the scheme name."
+                )
+                logger.warning("TCKDB %s: %s: %s", warning_field, _W_CORRECTION_TABLE_METHOD_SPLIT, message)
+                if warnings is not None:
+                    warnings.append({
+                        "code": _W_CORRECTION_TABLE_METHOD_SPLIT,
+                        "message": message,
+                        "field": f"{warning_field}.scheme.level_of_theory.method",
+                        "context": {"source": "tckdb_arc_self_check",
+                                    "action": "correction_table_named_on_scheme",
+                                    "table": table_name, "method": table_stem,
+                                    "scheme_kind": str(scheme_out.get("kind"))},
+                    })
             scheme_out["level_of_theory"] = lot_ref
+            if scheme_out.get("kind") in _FREQ_KEYED_SCHEME_KINDS:
+                freq_ref = _bac_key_frequency_level(
+                    rec.get("matched_arkane_key"), bac_frequency_level,
+                    kind=str(scheme_out.get("kind")), warning_field=warning_field, warnings=warnings,
+                )
+                if freq_ref is not None:
+                    scheme_out["frequency_level_of_theory"] = freq_ref
         # ``scheme.software`` is the program that computed the scheme's
         # parameters (contract: "The program release that computed this
         # scheme's parameters"). That is the ``software`` of the Arkane
@@ -7851,6 +8172,10 @@ def _build_thermo_block(
     # Refusals as (code, message, extra context), reported once the block's
     # fate is known.
     refusals: list[tuple[str, str, dict[str, str]]] = []
+    if thermo_record.get(_THERMO_ENTHALPY_WITHHELD_KEY):
+        # The record's E0 is one the adapter withheld (``_withhold_unreliable_composite_energies``,
+        # which has warned): H298, NASA and point H/G derive from it; S298, Cp and point S do not.
+        _strip_enthalpy_content(block)
     if _has_enthalpy_content(block):
         enthalpy_refusal = (
             (
@@ -9301,6 +9626,178 @@ def _coerce_torsion_coordinates(
     return None
 
 
+#: Marks a record whose energies the adapter withheld (see ``_withhold_unreliable_composite_energies``).
+_ENERGY_WITHHELD_KEY = "_tckdb_energy_withheld"
+_W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03 = "g4_energy_loader_shifted_label_gaussian16_a03"
+#: Marks a ``thermo`` record whose E0-derived content is withheld (``_build_thermo_block`` strips it).
+_THERMO_ENTHALPY_WITHHELD_KEY = "_tckdb_thermo_enthalpy_withheld"
+_GAUSSIAN16_A03_BANNER = re.compile(r"gaussian\s*16\b.*\brevision\s*a\.?03\b", re.IGNORECASE | re.DOTALL)
+_G4_FAMILY_METHOD_KEYS = frozenset({"g4", "g4mp2"})
+
+
+def _g4_loader_energy_unreliable(
+    output_doc: Mapping[str, Any], record: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    """``(method, banner)`` when the record's energy is one Arkane's loader mis-reads, else ``None``.
+
+    Stopgap for the G4 / G4MP2 energy of a Gaussian 16 Revision A.03 composite run: ARC reads
+    the energy from the number after the ``G4(0 K)`` / ``G4MP2(0 K)`` label (Arkane's
+    ``load_energy``, and ARC's parser alike), but on that revision the summary table is shifted
+    by one label, so the number there is the 298 K value and ARC's ``sp_energy_hartree`` is
+    wrong by 9-11 kJ/mol. The true E0 is the archive ``\\G4=`` / ``\\G4MP2=`` value, which
+    ARC does not export (ARC_TCKDB_EXPORT_BRIEF.md, Bug 8).
+
+    The record must be a composite run (``composite_log``) whose composite method (the record's
+    ``levels.composite``, else the header ``composite_method``) is G4 or G4MP2 and whose
+    composite program banner (``ess_versions.composite``) is Gaussian 16 Revision A.03. Nothing
+    is inferred: a missing banner or method is "not this case".
+    """
+    if not record.get("composite_log"):
+        return None
+    versions = record.get("ess_versions")
+    banner = versions.get("composite") if isinstance(versions, Mapping) else None
+    if not isinstance(banner, str) or _GAUSSIAN16_A03_BANNER.search(banner) is None:
+        return None
+    level = None
+    levels = arc13.levels_of(record)
+    if levels is not None and isinstance(levels.get("composite"), Mapping):
+        level = levels["composite"]
+    if level is None or not level.get("method"):
+        header = output_doc.get("composite_method")
+        level = header if isinstance(header, Mapping) else None
+    if level is None or not isinstance(level.get("method"), str):
+        return None
+    key = method_identity_key(level["method"])
+    if key not in _G4_FAMILY_METHOD_KEYS:
+        return None
+    return key, banner
+
+
+def _withhold_unreliable_composite_energies(
+    output_doc: Mapping[str, Any],
+    record: Mapping[str, Any],
+    warnings: list[dict[str, Any]] | None,
+) -> Mapping[str, Any]:
+    """The record without the energies ARC read wrongly (G4 / G4MP2 on Gaussian 16 Rev A.03).
+
+    Returns ``record`` itself when it is not that case. Otherwise a copy with
+    ``sp_energy_hartree`` unset (so no sp energy and no sp link on the statmech energy), its
+    ``thermo`` marked so the thermo block is built without its E0-derived content (H298, NASA,
+    point H and G; ``_strip_enthalpy_content``, the path the enthalpy refusals use) and with S298,
+    Cp and point S kept, and the record marked so the composite role (which would also link the
+    composite job as the energy) is withheld too. Warns once per record.
+
+    Only an output 1.3 record carries ``ess_versions.composite``, so an earlier document never
+    matches ``_g4_loader_energy_unreliable`` and is not guarded.
+    """
+    hit = _g4_loader_energy_unreliable(output_doc, record) if isinstance(record, Mapping) else None
+    if hit is None:
+        return record
+    method, banner = hit
+    label = record.get("label") or record.get("original_label") or "<unlabeled>"
+    message = (
+        f"The energies of {label!r} were not sent: it is a {method.upper()} composite run on "
+        f"{banner!r}, whose summary table shifts the {method.upper()}(0 K) label by one entry, so "
+        "the energy ARC and Arkane read for it is the 298 K value, 9-11 kJ/mol from E0. What is derived "
+        "from that energy is withheld until ARC exports E0 from the archive (ARC_TCKDB_EXPORT_BRIEF.md, Bug 8): "
+        "the single-point energy, H298, the NASA polynomials, the point enthalpies and Gibbs energies, and the "
+        "statmech energy links. S298, Cp and the point entropies, which come from statmech and not from E0, "
+        "are kept."
+    )
+    if not any(w.get("code") == _W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03
+               and (w.get("context") or {}).get("label") == label for w in (warnings or ())):
+        logger.warning("TCKDB %s: %s", _W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03, message)
+        if warnings is not None:
+            warnings.append({
+                "code": _W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03,
+                "message": message,
+                "field": f"{label}.energies",
+                "context": {"source": "tckdb_arc_self_check", "action": "record_energies_withheld",
+                            "label": label, "method": method, "ess_version": banner},
+            })
+    out = dict(record)
+    out["sp_energy_hartree"] = None
+    if isinstance(record.get("thermo"), Mapping):
+        out["thermo"] = {**record["thermo"], _THERMO_ENTHALPY_WITHHELD_KEY: True}
+    out[_ENERGY_WITHHELD_KEY] = _W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03
+    return out
+
+
+def _withhold_unreliable_energies_in_doc(
+    output_doc: Mapping[str, Any], warnings: list[dict[str, Any]] | None,
+) -> Mapping[str, Any]:
+    """``output_doc`` with every affected species / TS record neutralised and the kinetics built on them dropped.
+
+    Returns ``output_doc`` unchanged when no record is affected. See
+    ``_withhold_reaction_kinetics`` for the kinetics.
+    """
+    changed = False
+
+    def neutralise(records: Any) -> Any:
+        nonlocal changed
+        if not isinstance(records, list):
+            return records
+        out = []
+        for record in records:
+            fixed = _withhold_unreliable_composite_energies(output_doc, record, warnings)
+            changed = changed or fixed is not record
+            out.append(fixed)
+        return out
+
+    species = neutralise(output_doc.get("species"))
+    transition_states = neutralise(output_doc.get("transition_states"))
+    if not changed:
+        return output_doc
+    marked = dict(output_doc)
+    if "species" in output_doc:
+        marked["species"] = species
+    if "transition_states" in output_doc:
+        marked["transition_states"] = transition_states
+    if isinstance(output_doc.get("reactions"), list):
+        marked["reactions"] = [
+            _withhold_reaction_kinetics(marked, reaction, warnings) for reaction in output_doc["reactions"]
+        ]
+    return marked
+
+
+def _withhold_reaction_kinetics(
+    output_doc: Mapping[str, Any], reaction: Mapping[str, Any], warnings: list[dict[str, Any]] | None,
+) -> Mapping[str, Any]:
+    """The reaction without its kinetics when one of its participants' energies was withheld.
+
+    A rate coefficient is fitted from the energies of the reactants, products and the TS, so one
+    built on a withheld record is withheld too, with the same warning code. ``output_doc`` is the
+    document after ``_withhold_unreliable_energies_in_doc`` (its records carry the marker).
+    """
+    if not isinstance(reaction, Mapping) or reaction.get("kinetics") is None:
+        return reaction
+    withheld = {
+        str(record.get("label") or record.get("original_label"))
+        for key in ("species", "transition_states") for record in output_doc.get(key) or ()
+        if isinstance(record, Mapping) and record.get(_ENERGY_WITHHELD_KEY)
+    }
+    labels = {str(x) for x in (reaction.get("reactant_labels") or ())}
+    labels |= {str(x) for x in (reaction.get("product_labels") or ())}
+    labels.add(str(reaction.get("ts_label")))
+    hit = sorted(labels & withheld)
+    if not hit:
+        return reaction
+    if not any(w.get("code") == _W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03 and w.get("field") == "kinetics"
+               and (w.get("context") or {}).get("reaction") == reaction.get("label") for w in (warnings or ())):
+        message = (
+            f"The kinetics of reaction {reaction.get('label')!r} were not sent: they are fitted from the "
+            f"energies of {hit}, which were withheld ({_W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03})."
+        )
+        logger.warning("TCKDB %s: %s", _W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03, message)
+        if warnings is not None:
+            warnings.append({
+                "code": _W_G4_LOADER_SHIFTED_LABEL_GAUSSIAN16_A03, "message": message, "field": "kinetics",
+                "context": {"source": "tckdb_arc_self_check", "action": "kinetics_withheld",
+                            "reaction": reaction.get("label"), "withheld": hit},
+            })
+    return {**reaction, "kinetics": None}
+
+
 def _with_composite_role(
     record: Mapping[str, Any], calc_keys_by_role: Mapping[str, str],
 ) -> dict[str, str]:
@@ -9313,6 +9810,8 @@ def _with_composite_role(
     as ``opt``. Unchanged for any other record.
     """
     out = dict(calc_keys_by_role)
+    if record.get(_ENERGY_WITHHELD_KEY):
+        return out      # the composite job is the energy source, and that energy is withheld
     if (arc13.software_job_key(record, "opt") == "composite"
             and arc13.is_composite_run(record) and out.get(_CALC_KEY_OPT)):
         out[_ROLE_COMPOSITE] = out[_CALC_KEY_OPT]
@@ -12505,6 +13004,12 @@ def _extract_tckdb_public_refs(obj: Any) -> dict[str, list[str]]:
                 if key_str.endswith("_ref") and isinstance(child, str):
                     add(key_str, child)
                     continue
+                if key_str == "calculation_key_refs" and isinstance(child, Mapping):
+                    # computed-reaction: bundle-local key -> ``calc_`` ref
+                    for ref_value in child.values():
+                        if isinstance(ref_value, str):
+                            add("calculation_ref", ref_value)
+                    continue
                 if child is None:
                     continue
                 walk(child)
@@ -12562,19 +13067,52 @@ def _extract_calc_refs(
     return primary, additional
 
 
+_W_CALCULATION_REF_NOT_RETURNED = "calculation_ref_not_returned"
+
+
+def _calculation_ref_not_returned_warning(calculation_id: int | None) -> dict[str, Any]:
+    """Self-check finding: an artifact target was named by integer id, not ``calc_`` ref."""
+    return {
+        "code": _W_CALCULATION_REF_NOT_RETURNED,
+        "message": (
+            f"The upload response carried no calculation_ref for calculation {calculation_id}, "
+            "so its artifacts were posted to the deprecated integer-id path and the "
+            "idempotency key was built from that id."
+        ),
+        "field": "calculation_ref",
+        "context": {"source": "tckdb_arc_self_check", "calculation_id": calculation_id},
+    }
+
+
+def _extract_submission_refs(response_data: Any) -> tuple[str | None, dict[str, str]]:
+    """The response's ``submission_ref`` (``sub_...``) and ``calculation_key_refs`` map.
+
+    Both are optional (an older server omits them); a value that is not a string is ignored.
+    """
+    if not isinstance(response_data, Mapping):
+        return None, {}
+    submission_ref = response_data.get("submission_ref")
+    raw = response_data.get("calculation_key_refs")
+    key_refs = (
+        {str(k): v for k, v in raw.items() if isinstance(v, str)} if isinstance(raw, Mapping) else {}
+    )
+    return (submission_ref if isinstance(submission_ref, str) else None), key_refs
+
+
 def _skip(
-    calculation_id: int, kind: str, reason: str
+    calculation_id: int | None, kind: str, reason: str, calculation_ref: str | None = None
 ) -> "ArtifactUploadOutcome":
     """Build a skipped outcome and log the reason once."""
     logger.info(
         "TCKDB artifact upload skipped: calc=%s kind=%s reason=%s",
-        calculation_id, kind, reason,
+        calculation_ref or calculation_id, kind, reason,
     )
     return ArtifactUploadOutcome(
         status="skipped",
         sidecar_path=None,
         idempotency_key=None,
         calculation_id=calculation_id,
+        calculation_ref=calculation_ref,
         kind=kind,
         skip_reason=reason,
     )

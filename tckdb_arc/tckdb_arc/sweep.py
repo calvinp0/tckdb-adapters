@@ -588,9 +588,12 @@ def _sweep_artifacts_for_species(
         # for this species rather than guess at IDs.
         return
     for ref in refs:
+        # Name the calculation by its ``calc_`` ref (TCKDB #599); the integer id is
+        # only a fallback for a response that carries no ref, and warned about.
+        calc_ref = ref.get('calculation_ref')
         calc_id = ref.get('calculation_id')
         calc_type = ref.get('type')
-        if calc_id is None or calc_type is None:
+        if (not calc_ref and calc_id is None) or calc_type is None:
             continue
         artifact_items = []
         for kind in kinds:
@@ -610,7 +613,8 @@ def _sweep_artifacts_for_species(
             art_outcomes = adapter.submit_artifact_batch_for_calculation(
                 output_doc=output_doc,
                 species_record=species_record,
-                calculation_id=int(calc_id),
+                calculation_id=int(calc_id) if calc_id is not None else None,
+                calculation_ref=calc_ref or None,
                 calculation_type=str(calc_type),
                 artifacts=artifact_items,
             )

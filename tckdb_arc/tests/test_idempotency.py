@@ -94,6 +94,29 @@ class TestArtifactIdempotency(unittest.TestCase):
         b = build_artifact_idempotency_key(_artifact_inputs(calculation_id=2))
         self.assertNotEqual(a, b)
 
+    def test_key_is_built_from_the_calculation_ref(self):
+        key = build_artifact_idempotency_key(
+            _artifact_inputs(calculation_id=42, calculation_ref="calc_abcd2345"))
+        self.assertIn("calc_abcd2345", key)
+        self.assertNotIn(":42:", key)
+        # the integer id no longer matters once a ref is stated
+        self.assertEqual(key, build_artifact_idempotency_key(
+            _artifact_inputs(calculation_id=7, calculation_ref="calc_abcd2345")))
+        self.assertEqual(key, build_artifact_idempotency_key(
+            _artifact_inputs(calculation_id=None, calculation_ref="calc_abcd2345")))
+
+    def test_pre_0_10_integer_key_differs_from_the_ref_key(self):
+        # Sidecars written before 0.10 keyed on the integer id, so the keys never match; the
+        # adapter skips an artifact such a sidecar records as uploaded
+        # (test_artifact_batch_response.py) rather than relying on server replay.
+        self.assertNotEqual(
+            build_artifact_idempotency_key(_artifact_inputs(calculation_id=42)),
+            build_artifact_idempotency_key(_artifact_inputs(calculation_id=42, calculation_ref="calc_abcd2345")))
+
+    def test_key_needs_a_handle(self):
+        with self.assertRaises(ValueError):
+            build_artifact_idempotency_key(_artifact_inputs(calculation_id=None))
+
     def test_key_distinct_across_kind(self):
         a = build_artifact_idempotency_key(_artifact_inputs(artifact_kind="output_log"))
         b = build_artifact_idempotency_key(_artifact_inputs(artifact_kind="input"))
