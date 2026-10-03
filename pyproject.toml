@@ -5,3 +5,11 @@
 
 [tool.tckdb_adapters]
 packages = ["tckdb_core", "tckdb_arc"]
+
+# Lets `python -m pytest` run from the repo root. The outer tckdb_core/ and
+# tckdb_arc/ distribution dirs (no __init__.py) would otherwise shadow the real
+# packages as namespace packages when cwd is on sys.path; pythonpath is inserted
+# ahead of cwd. Per-package runs (cd tckdb_arc && pytest) use that package's own ini.
+[tool.pytest.ini_options]
+pythonpath = ["tckdb_core", "tckdb_arc"]
+testpaths = ["tckdb_core/tests", "tckdb_arc/tests"]

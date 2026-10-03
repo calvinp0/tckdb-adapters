@@ -124,7 +124,7 @@ _DISPERSIONS = [None, "d3bj", "D3BJ", "gd3bj", "d3(bj)", "gd3", "gd2", "d30", "d
 
 
 def test_keys_match_the_backend_over_a_corpus():
-    from _backend_import import backend_modules
+    from tckdb_core.testing.backend_import import backend_modules
 
     _, dispersion_names, _, method_names = backend_modules()
     for method in _METHODS:

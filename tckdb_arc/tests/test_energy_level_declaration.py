@@ -215,7 +215,7 @@ def test_hash_ignores_basis_spelling_and_folds_spin_to_unknown():
 
 
 def test_hash_matches_the_backend():
-    from _backend_import import backend_level_hash
+    from tckdb_core.testing.backend_import import backend_level_hash
     for level in (
         {"method": "wb97xd", "basis": "Def2TZVP"},
         {"method": "b3lyp", "basis": "def2tzvp", "spin_treatment": "restricted"},

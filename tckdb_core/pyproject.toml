@@ -28,3 +28,4 @@ tckdb_core = ["data/*.yml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]  # package dir ahead of a repo-root cwd, so the outer dir is not a namespace package

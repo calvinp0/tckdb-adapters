@@ -34,3 +34,4 @@ include = ["tckdb_arc*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = [".", "../tckdb_core"]  # sibling core + this package ahead of cwd/editable installs from another checkout
