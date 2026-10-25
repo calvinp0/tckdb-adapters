@@ -29,7 +29,8 @@ and the sidecar carries the server's own warnings beside these.
 | `conformer_geometry_not_esss_optimized` | Screened conformers were not uploaded: their geometries were not optimised by an ESS at a stated level. |
 | `conformer_program_not_stated` | Screened conformers were not uploaded: the level of their optimisation is stated but not the program. |
 | `conformer_level_not_stated` | Screened conformers were not uploaded: the level they were screened at is not stated. |
-| `geometry_isotopes_not_stated` | A geometry of an isotopically substituted species was left out: no isotope list matches the species' own geometry. |
+| `geometry_isotopes_not_stated` | A geometry of an isotopically substituted species (a conformer, Hessian, scan point or IRC point) was left out: no isotope list matches the species' own geometry. |
+| `calculation_input_geometry_not_declared` | A freq or sp declared an input geometry other than its conformer's own, which TCKDB refuses, so the declaration was left out. |
 | `enthalpy_atom_corrections_not_applied` | The atom energy corrections were not applied to the enthalpies, so they are stripped from the thermo block. |
 | `enthalpy_atom_corrections_level_mismatch` | The atom energies applied were from another level than the energy level, so the enthalpies are stripped. |
 | `enthalpy_atom_corrections_level_unverifiable` | The level the atom energies were applied at cannot be checked against the energy level, so the enthalpies are stripped. |
@@ -72,4 +73,4 @@ and the sidecar carries the server's own warnings beside these.
 
 | Code | Meaning |
 |------|---------|
-| `calculation_ref_not_returned` | The upload response carried no `calculation_ref`, so a calculation's artifacts were posted to the deprecated integer-id path and the idempotency key was built from that id. |
+| `calculation_ref_not_returned` | The upload response carried no `calculation_ref`, so a calculation's artifacts were not uploaded: TCKDB (0.116) addresses a calculation by its `calc_` ref only and refuses an integer id. |

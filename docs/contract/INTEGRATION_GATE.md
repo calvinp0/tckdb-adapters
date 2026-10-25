@@ -19,31 +19,40 @@ loopback too. So the run fails unless all three hold:
 The adapter reads its key from `TCKDB_INTEGRATION_API_KEY`, so an ambient
 `TCKDB_API_KEY` is never used.
 
-Validated against TCKDB_v2 `96b71b09` (the pinned sha), with tckdb-client 0.111.0,
-tckdb-schemas 0.73.0 and tckdb-arc 0.10.0: 62 passed and no xfails, fresh (empty database)
-and on replay (a second run against the same database). The 0.65-0.73 server changes are
-additive for these corpora: none of the new warning codes (`named_composite_deposited_as_opt/sp`,
-`level_of_theory_method_names_correction_table`, `composite_delta_prefer_scheme_terms`) and none
-of the 0.65 `*_role_duplicate` refusals fired. The run covers the 0.64 `imaginary_mode` and
-`energy_ordering` evidence (`golden_ts_evidence`: bundle with both kinds read back with
-their stored values and cited calculations, standalone TS with `imaginary_mode`), which
-exercises the server-only rules (stored-row ownership of each compared energy, the
-stored-frequency cross-check, electronic energy from an sp, one level per energy kind), and
-the ARC 1.3 reaction atom map built from `ts_atom_map` (`ts_atom_map_sample` and
-`ts_atom_map_derived`, both routes), which pass the server's atom-map rules
-(`atom_map_participant_not_declared`, `atom_map_indices_not_geometry_relative`,
-`atom_map_element_not_conserved`, `atom_map_contradicts_irc_mapping`); no case sends a map they should refuse.
-The corpus drifted once before this run: `arc_1_2_corrections` still stated CH4's bond
-corrections as not applied, so the adapter (correctly, for a pre-1.3 document) deposited no
-`bac_total`; the corpus now states them applied. The strict xfails
-below match on server warning codes and read-back shapes, so a TCKDB change to
-either can flip them without any adapter change.
+Validated against TCKDB_v2 `511253ad` (the pin when this batch was written; the pinned sha is now `c7c8df8b`, not re-run here), with tckdb-client 0.167.0, tckdb-schemas 0.134.0 and tckdb-arc 0.13.0:
+64 passed and 1 strict xfail (a TCKDB read-back bug, below), fresh (empty database) and on replay (a second run against the same database). What 0.74-0.134
+changed for these corpora, learned by running the unchanged gate first: with only the pin moved, 18 failed and 44 passed. Every
+Hessian-bearing corpus was stopped client-side by `hessian.parser_version` (0.130 made it `parser: {name, version}`), and the
+artifact tests drew the server's `422 invalid_handle` (0.116: a calculation is addressed by its `calc_` ref, and the gate passed the
+integer id). With the Hessian stamp fixed, 6 failed and 56 passed (the artifact refusal, and the Hessian read-back, which is now
+`parser_name` / `parser_version`). **No other refusal fired**: none of the 0.121 geometry/conformer codes
+(`calculation_geometry_conformer_mismatch`, `transition_state_calculation_conformer_key`,
+`transition_state_calculation_species_geometry`, `calculation_input_geometry_mismatch`), no isotope code, none of the 0.65 `*_role_duplicate`
+refusals, and none of the atom-map, TS-evidence or energy-ordering rules the earlier runs covered. The only 422 in the run is the
+deliberate one (`species_geometry_composition_mismatch` for the two-atom ethanol corpus), fresh and on replay. The one new server
+warning was `missing_level_of_theory_provenance` (0.99), on every reaction bundle with kinetics; the adapter now declares the
+kinetics `energy_level_of_theory` and the test asserts the stored level is the level of each linked energy. The run also covers
+the ARC 1.3 deuterated `iC3H7_d` (`arc_1_3_isotopes`): its Hessian and its rotor-scan points are stored with the isotope on atom 4 (the scan's third frame, in another element order, is stored as a point without geometry). With that label taken off,
+the server refuses it as `calculation_geometry_isotope_mismatch` (0.94, `hessian.geometry`), which is how the item was verified; the same refusal (`scan_result.points[1].geometry`) answers the scan with its point labels removed, posted directly to the throwaway server. A
+sp/freq `input_geometries` drifted by 2e-3 Angstrom is refused as `calculation_input_geometry_mismatch` (0.121) and is dropped by
+the adapter's pre-check, after which it uploads.
+TCKDB `511253ad`: `GET /calculations/{id}/scan-points` (and `scan-result`) fails its own response model, `CalculationScanPointRead.geometry` being handed the ORM `Geometry`, as soon as a point has a geometry (an unfiltered 500-class validation error; the points are stored correctly). `test_substituted_species_scan_points_are_read_back_with_their_isotopes` is a strict xfail on it and will flip when the route is fixed.
+The strict xfails below match on server warning codes and read-back shapes, so a TCKDB change to either can flip them without any
+adapter change.
 
-## Server warning codes seen at `96b71b09`
+Earlier validated at `96b71b09` (tckdb-schemas 0.73, adapter 0.10.0): 62 passed, no xfails. The 0.64 `imaginary_mode` and
+`energy_ordering` evidence (`golden_ts_evidence`) exercises the server-only rules (stored-row ownership of each compared energy,
+the stored-frequency cross-check, electronic energy from an sp, one level per energy kind), and the ARC 1.3 reaction atom map
+(`ts_atom_map_sample` and `ts_atom_map_derived`, both routes) passes the atom-map rules (`atom_map_participant_not_declared`,
+`atom_map_indices_not_geometry_relative`, `atom_map_element_not_conserved`, `atom_map_contradicts_irc_mapping`); no case sends a
+map they should refuse. The corpus drifted once: `arc_1_2_corrections` still stated CH4's bond corrections as not applied, so the
+adapter (correctly, for a pre-1.3 document) deposited no `bac_total`; the corpus now states them applied.
 
-Server warnings (`response_body.warnings`) by corpus; identical fresh and on replay. These
-are the codes the gate has observed, not a contract. `ts_atom_map_sample`,
-`current_arc_h2o` and `synthetic_species_as_shipped` drew none.
+## Server warning codes seen at `511253ad`
+
+Server warnings (`response_body.warnings`) by corpus; identical fresh and on replay (the 96b71b09 table
+holds unchanged). These are the codes the gate has observed, not a contract. `ts_atom_map_sample`, `current_arc_h2o`,
+`arc_1_3_isotopes` and `synthetic_species_as_shipped` drew none.
 
 | Corpus | Server warning codes |
 |---|---|
@@ -61,14 +70,15 @@ are the codes the gate has observed, not a contract. `ts_atom_map_sample`,
   (`pip install -e "$TCKDB/backend"`), so Alembic, uvicorn and
   `scripts/bootstrap_admin.py` run the checkout's code.
 - `arc_env` has `tckdb_arc` installed editable from this repository and
-  `tckdb-client` 0.95.x. If `arc_env` still has an older client, run with the
+  `tckdb-client` 0.167.x. If `arc_env` has another client, run with the
   checkout's client source first on the path:
   `PYTHONPATH=$TCKDB/clients/python/src conda run -n arc_env python -m pytest ...`. Its `tckdb_schemas` is an editable install of
   `$TCKDB/schemas/python/tckdb-schemas`, so the adapter validates against
   whatever that working tree holds.
 - If the checkout is newer than the editable install, shadow it instead of reinstalling:
   at `96b71b09` `tckdb_env` carried tckdb-schemas 0.51, which lacks
-  `tckdb_schemas.composite_total` that the backend imports, so run alembic, uvicorn and
+  `tckdb_schemas.composite_total` that the backend imports (at `511253ad` the same shadowing is all it needs; no extra
+  dependency was missing), so run alembic, uvicorn and
   `bootstrap_admin.py` with
   `PYTHONPATH=$TCKDB/backend:$TCKDB/schemas/python/tckdb-schemas`, and the adapter with
   `PYTHONPATH=$PWD/tckdb_arc` (the editable `tckdb_arc` in `arc_env` points at another
@@ -147,12 +157,13 @@ counts are taken only once two consecutive snapshots agree (see T4).
 | Corpus | Modes | Read back |
 |---|---|---|
 | `golden` (Phase 3, `tckdb_evidence.json`) | species, conformer, reaction, TS | calculation owners and types; H2 thermo stored as S and Cp only (no H298, NASA, point H or G, or reference kind), because pre-1.2 output cannot show the enthalpy is a formation enthalpy and H2 is too light for the magnitude guard, with the `enthalpy_formation_unverifiable_light_species` warning; reference pressure not stated (read back as null; the golden output records none, so the adapter omits it with the `thermo_reference_pressure_not_stated` warning) and source calculations; Hessian values; conformer-mode log and input artifacts |
-| `golden` + kinetics at T0 = 300 K and Arkane commit | reaction, TS | Arrhenius `a` = ARC's A as sent with `t0_k` = T0 (since 0.63 and adapter 0.8.0; not `A/T0**n`), `n`, `Ea`, kinetics source-calculation roles and owners, TS composition against both sides, IRC result, the standalone TS's calculations (no GSM path search since 0.6.4: ARC exports no GSM level) |
+| `golden` + kinetics at T0 = 300 K and Arkane commit | reaction, TS | Arrhenius `a` = ARC's A as sent with `t0_k` = T0 (since 0.63 and adapter 0.8.0; not `A/T0**n`), `n`, `Ea`, kinetics source-calculation roles and owners, the declared `energy_level_of_theory` (0.99: the level of every linked energy calculation, and no `missing_level_of_theory_provenance`), TS composition against both sides, IRC result, the standalone TS's calculations (no GSM path search since 0.6.4: ARC exports no GSM level) |
 | `golden` + kinetics + `ts_checks` (IRC, freq, e_elect all true) | reaction, TS | bundle: `irc`, `imaginary_mode` (count, cm^-1, cited freq calculation) and `energy_ordering` (each compared energy, cited to its own participant's sp) read back with the stored values and no `transition_state_energy_ordering_mixed_levels`; standalone TS: `irc` and `imaginary_mode` only |
 | `ts_atom_map_sample` (real ARC 1.3 writer output, `nC3H7 <=> iC3H7`) and `ts_atom_map_derived` (`OH + CH4 <=> H2O + CH3` with a TS order unlike the reactants'; `CH3 + CH3 <=> C2H6` with a repeated reactant) | reaction, TS | the one stored atom map (`include=atom_map`): `source` `inferred` with the adapter's note and no `equivalent_map_count`, on the uploaded TS entry; each participant's `atom_to_ts` equals the payload's and ARC's `ts_atom_map` counted from the species labels (elements agree with the TS atom, `ts_atom_order_follows_reactants` agrees with the stored indices); a repeated reactant is two participants of one species entry, each with its own disjoint block; mapped atom counts on both legs; none of `reaction_atom_map_absent`, `reaction_ts_atom_map_not_sent`, `reaction_species_labels_contradicted` (or the server's incompleteness and IRC-contradiction codes) from the adapter or the server. The replay snapshots also count stored map pairs, so a replay cannot add a second map |
 | `arc_1_2` (output 1.2 atom-correction flags) | species, conformer | formation enthalpy kept for CH4, stripped to S and Cp (no H298, NASA, point H or G, or reference kind) for the other five, with the producer warning |
 | `arc_1_2` CH4 + `energy_corrections` | species | applied AEC and BAC totals, units, components, source `sp` calculation |
-| `current_arc` H2O (`parser_evidence.json`) | species | Hessian stored verbatim in its own frame |
+| `current_arc` H2O (`parser_evidence.json`) | species | Hessian stored verbatim in its own frame, with its parser stamp as `parser_name` `arc-hessian` and `parser_version` `1` (0.130) |
+| `arc_1_3_isotopes` (ARC 1.3 `iC3H7_d` and `iC3H7`, parsed Hessians, a Gaussian rotor scan each whose samples state no isotopes) | species | the Hessian geometry of the deuterated species carries the isotope on atom 4 (0.94) and the ordinary one none; the server refuses the unlabelled one. The deuterated species' scan is accepted with its two frames in the record's element order labelled from the record's `xyz_isotopes` and the third frame's geometry dropped (`geometry_isotopes_not_stated`); the stored point geometries were read from the database (atom 4 mass 2 on the labelled frames only) because `GET /calculations/{id}/scan-points` is broken, see the strict xfail. IRC points of a substituted TS are covered offline only (the corpus has no TS) |
 | synthetic CHO + CH4 reaction, real compositions | reaction, TS | kinetics normalisation, source calculations and TS composition |
 | synthetic ethanol as shipped (two-atom geometry) | species | 422 refusal recorded in the sidecar |
 
@@ -161,7 +172,7 @@ replay each upload with the same key and body. The counts of calculations,
 thermo, kinetics, conformer observations, transition states, energy
 corrections, geometries, species entries, reaction entries, artifacts and
 Hessians must stay unchanged. Artifact uploads are replayed as well: the
-calculation keeps its two artifacts, whose SHA-256 and size match the local
+calculation (named by its `calc_` ref, 0.116) keeps its two artifacts, whose SHA-256 and size match the local
 files.
 
 `irc_converged` means only that ARC's IRC jobs finished; ARC's verdict on

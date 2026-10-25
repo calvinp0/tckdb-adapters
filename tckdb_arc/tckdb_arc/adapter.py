@@ -133,7 +133,6 @@ from tckdb_core.uploader import (  # noqa: F401
     _artifact_batch_digest,
     _attach_preflight,
     _build_readiness_error,
-    _calculation_ref_not_returned_warning as _core_calculation_ref_not_returned_warning,
     _close_quietly,
     _coerce_artifact_filename,
     _extract_calc_refs,
@@ -304,11 +303,17 @@ def _neutral_scan_result_to_tckdb(
                 point[key] = float(sample[key])
         geometry = _normalize_xyz_text(sample.get("geometry_xyz"), f"scan_point_{point_index}")
         if geometry is not None:
-            # The sample's own stated isotopes (1.3 ``geometry_isotopes``); for a
-            # substituted species a sample that states none is left out.
+            # The sample's own stated isotopes (1.3 ``geometry_isotopes``). A sample whose scan
+            # log states none (a Gaussian opt-type scan prints no masses) is sent bare under a
+            # substituted species: ``_withhold_unlabelled_point_geometries`` labels it from the
+            # structure the scan started from (order-preserving program, same element sequence) or
+            # drops it with a warning. A sample that states a list that contradicts the record is
+            # left out here.
+            stated = sample.get("geometry_isotopes")
             payload = (
-                _geometry_payload(record, geometry, sample.get("geometry_isotopes"))
-                if record is not None else {"xyz_text": geometry})
+                {"xyz_text": geometry}
+                if record is None or (stated is None and _isotopic_substitutions(record))
+                else _geometry_payload(record, geometry, stated))
             if payload is not None:
                 point["geometry"] = payload
         points.append(point)
@@ -732,14 +737,16 @@ def _hessian_parser_block(stamp: str) -> dict[str, Any]:
     """The Hessian's ``parser`` block (tckdb-schemas 0.130 ``ParserStamp``) from ARC's stamp.
 
     ARC spells the parser as one token, ``arc-hessian-1`` (``HESSIAN_PARSER_VERSION``);
-    TCKDB wants the name beside the version and refuses a name that embeds one, so the
-    trailing ``-<version>`` is split off (kept as the text ARC wrote). The stamp is always
-    that token: evidence validation (``evidence.py``) rejects any other value, and the
-    parse fallback uses ``_HESSIAN_PARSER_VERSION``.
+    TCKDB wants the name beside the version and refuses a name that embeds one. The split
+    is ARC's own ``<name>-<version>`` shape: the trailing ``-<digits>`` is the version
+    (kept as the text ARC wrote) and what precedes it the name. A stamp that does not
+    have that shape is not guessed at: the block is left out (``parser`` is optional)
+    rather than invent a name.
     """
-    name, _, version = str(stamp).rpartition("-")
+    name, sep, version = str(stamp).rpartition("-")
+    if not sep or not name or not version.isdigit():
+        return {}
     return {"parser": {"name": name, "version": version}}
-
 
 # ESS name (from ``arc.parser.parser.determine_ess``) → TCKDB
 # ``HessianSource`` enum value. Gaussian prints the Hessian inside the log
@@ -1314,13 +1321,24 @@ class TCKDBAdapter(TCKDBUploaderBase):
         calculation_ref = calculation_ref or None
         if calculation_ref is None:
             if calculation_id is None:
-                raise ValueError("an artifact upload needs a calculation_ref or a calculation_id")
-            logger.warning(
-                "TCKDB %s: the upload response carried no calculation_ref for calculation "
-                "%s; naming it by its integer id, which the server deprecates.",
-                _W_CALCULATION_REF_NOT_RETURNED, calculation_id,
-            )
-        handle = calculation_ref if calculation_ref else calculation_id
+                raise ValueError("an artifact upload needs a calculation_ref")
+            # tckdb-schemas 0.116: ``POST /calculations/{calculation_ref}/artifacts`` takes the
+            # ``calc_`` ref only; an integer id in any spelling is refused (422 ``invalid_handle``)
+            # and ``tckdb-client`` raises before posting. Nothing is sent, and the integer id is
+            # not turned into a ref: a handle is the server's to mint.
+            reason = (
+                f"the upload response carried no calculation_ref for calculation {calculation_id}; "
+                "TCKDB addresses a calculation's artifacts by its calc_ ref only (0.116)")
+            logger.warning("TCKDB %s: %s; its artifacts were not uploaded.",
+                           _W_CALCULATION_REF_NOT_RETURNED, reason)
+            return [
+                ArtifactUploadOutcome(
+                    status="skipped", sidecar_path=None, idempotency_key=None,
+                    calculation_id=calculation_id, calculation_ref=None, kind=kind,
+                    skip_reason=f"{_W_CALCULATION_REF_NOT_RETURNED}: {reason}")
+                for kind, _ in artifacts
+            ]
+        handle = calculation_ref
 
         species_label = species_record.get("label") or "unlabeled"
         artifact_cfg = self._config.artifacts
@@ -1349,7 +1367,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
         first = prepared[0]
         prepared[0] = _PreparedArtifactUpload(
             written=first.written,
-            calculation_key=(f"{handle}-{batch_digest}" if isinstance(handle, str) else f"calc{handle}-{batch_digest}"),
+            calculation_key=f"{handle}-{batch_digest}",
             calculation_id=first.calculation_id,
             path=first.path,
             kind=first.kind,
@@ -1413,6 +1431,8 @@ class TCKDBAdapter(TCKDBUploaderBase):
             conformer_key=conformer_label,
             warnings=build_warnings,
         )
+        _enforce_geometry_anchoring(payload, "computed_species", build_warnings)
+        _withhold_unlabelled_point_geometries(payload, "computed_species", build_warnings)
         self._report_adaptive_omissions(output_doc, build_warnings)
 
         idempotency_inputs = IdempotencyInputs.from_payload(
@@ -1470,6 +1490,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
             species_record=species_record,
             conformer_key=conformer_key,
             unbuilt_scans=unbuilt_scans,
+            warnings=warnings,
         )
 
         # Additional screened conformers, if ARC surfaced them in the
@@ -1610,6 +1631,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
         species_record: Mapping[str, Any],
         conformer_key: str,
         unbuilt_scans: dict[str, str] | None = None,
+        warnings: list[dict[str, Any]] | None = None,
     ) -> tuple[list[str], dict[str, Any]]:
         """Build one ConformerInBundle and return (included_calc_keys, block).
 
@@ -1708,6 +1730,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
                     depends_on=[{"parent_calculation_key": _CALC_KEY_OPT, "role": "freq_on"}],
                     tckdb_origin=None,
                     conformer_xyz_text=conformer_xyz_text,
+                    warnings=warnings,
                 ))
                 included.append(_CALC_KEY_FREQ)
             except ValueError as exc:
@@ -2088,8 +2111,12 @@ class TCKDBAdapter(TCKDBUploaderBase):
         output_log_path: str | None = None,
         observed_software: str | None = None,
         observed_version: str | None = None,
+        warnings: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Build one CalculationInBundle dict.
+
+        ``warnings``, when given, receives the sidecar findings of the optional pieces left out
+        while building (an isotope-unlabellable Hessian).
 
         ``observed_software`` / ``observed_version`` are the program and banner a
         rotor scan states for its own log (output.yml 1.3 ``rotor_scans[]``).
@@ -2173,6 +2200,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
                 output_doc=output_doc,
                 species_record=species_record,
                 geometry_xyz_text=conformer_xyz_text,
+                warnings=warnings,
             )
             if hessian is not None:
                 calc["hessian"] = hessian
@@ -2502,6 +2530,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
         output_doc: Mapping[str, Any],
         species_record: Mapping[str, Any],
         geometry_xyz_text: str | None,
+        warnings: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         """Build the optional ``hessian`` payload for a freq calculation.
 
@@ -2530,8 +2559,11 @@ class TCKDBAdapter(TCKDBUploaderBase):
         )
         if lookup.state == "available":
             value = lookup.value or {}
+            geometry = _hessian_geometry(species_record, value["geometry_xyz_text"], warnings)
+            if geometry is None:
+                return None
             return {
-                "geometry": {"xyz_text": value["geometry_xyz_text"]},
+                "geometry": geometry,
                 "lower_triangle_hartree_bohr2": list(value["lower_triangle"]),
                 "source": value["source"],
                 **_hessian_parser_block(value["parser_version"]),
@@ -2589,8 +2621,11 @@ class TCKDBAdapter(TCKDBUploaderBase):
             return None
         if not triangle:
             return None
+        geometry = _hessian_geometry(species_record, geometry_xyz_text, warnings)
+        if geometry is None:
+            return None
         return {
-            "geometry": {"xyz_text": geometry_xyz_text},
+            "geometry": geometry,
             "lower_triangle_hartree_bohr2": triangle,
             "source": source,
             **_hessian_parser_block(_HESSIAN_PARSER_VERSION),
@@ -2773,6 +2808,8 @@ class TCKDBAdapter(TCKDBUploaderBase):
             reaction_record=reaction_record,
             warnings=build_warnings,
         )
+        _enforce_geometry_anchoring(payload, "computed_reaction", build_warnings)
+        _withhold_unlabelled_point_geometries(payload, "computed_reaction", build_warnings)
         self._report_adaptive_omissions(output_doc, build_warnings)
 
         idempotency_inputs = IdempotencyInputs.from_payload(
@@ -2987,6 +3024,25 @@ class TCKDBAdapter(TCKDBUploaderBase):
                 schema_1_3=_is_output_schema_1_3_or_later(output_doc),
             )
             if kinetics_block is not None:
+                # tckdb-schemas 0.99: the level the fit's energies came from, declared only when
+                # ARC states it for every participant and they all agree (see
+                # ``_kinetics_energy_level``); otherwise TCKDB warns
+                # ``missing_level_of_theory_provenance`` and nothing is claimed.
+                declared = _kinetics_energy_level(
+                    output_doc=output_doc,
+                    kinetics_block=kinetics_block,
+                    reactant_keys=reactant_keys,
+                    product_keys=product_keys,
+                    key_by_label=key_by_label,
+                    species_index=species_index,
+                    ts_record=ts_index.get(ts_label) if ts_label else None,
+                    calculations=_calculations_by_key(
+                        *(c for b in species_blocks
+                          for c in [b["conformers"][0]["calculation"], *b.get("calculations", ())]),
+                        (ts_block or {}).get("calculations") or ()),
+                )
+                if declared is not None:
+                    kinetics_block["energy_level_of_theory"] = declared
                 kinetics_blocks.append(kinetics_block)
 
         bundle: dict[str, Any] = {
@@ -3148,6 +3204,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
                     depends_on=[{"parent_calculation_key": opt_key, "role": "freq_on"}],
                     tckdb_origin=None,
                     conformer_xyz_text=conformer_xyz_text,
+                    warnings=warnings,
                 )
                 # Server requires non-opt species calcs to reference a
                 # conformer geometry by key (BundleSpeciesIn validator
@@ -3579,6 +3636,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
                     tckdb_origin=None,
                     conformer_xyz_text=conformer_xyz_text,
                     include_artifacts=include_artifacts,
+                    warnings=warnings,
                 ))
                 calc_keys[_CALC_KEY_FREQ] = ts_freq_key
             except ValueError as exc:
@@ -3890,6 +3948,8 @@ class TCKDBAdapter(TCKDBUploaderBase):
             reaction_record=reaction_record,
             warnings=build_warnings,
         )
+        _enforce_geometry_anchoring(payload, "transition_state", build_warnings)
+        _withhold_unlabelled_point_geometries(payload, "transition_state", build_warnings)
         self._report_adaptive_omissions(output_doc, build_warnings)
 
         idempotency_inputs = IdempotencyInputs.from_payload(
@@ -8955,6 +9015,42 @@ def _build_kinetics_block(
     return block
 
 
+def _kinetics_energy_level(
+    *,
+    output_doc: Mapping[str, Any],
+    kinetics_block: Mapping[str, Any],
+    reactant_keys: Sequence[str],
+    product_keys: Sequence[str],
+    key_by_label: Mapping[str, str],
+    species_index: Mapping[str, Mapping[str, Any]],
+    ts_record: Mapping[str, Any] | None,
+    calculations: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    """The ``energy_level_of_theory`` to declare on a kinetics block, or ``None``.
+
+    The rule is TCKDB's (``assert_kinetics_energy_level_consistency``) and lives in
+    :func:`tckdb_core.rules.kinetics_energy_level_declaration`. The ARC part is stating the
+    level each linked energy came from: for the reactants and products the level their record
+    states (``_thermo_energy_level``: the sp level, or the composite method), and for the
+    transition state its own. One participant ARC cannot attribute a level to (adaptive runs)
+    means nothing is declared.
+    """
+    links = kinetics_block.get("source_calculations") or ()
+    roles = {link.get("role") for link in links}
+    stated: list[Mapping[str, Any] | None] = []
+    labels_by_key = {key: label for label, key in key_by_label.items()}
+    for key in {*reactant_keys, *product_keys}:
+        if not any(r in roles for r in ("reactant_energy", "product_energy")):
+            break
+        record = species_index.get(labels_by_key.get(key))
+        level = _thermo_energy_level(output_doc, record) if record is not None else None
+        stated.append(_arc_level_to_tckdb_lot(level) if isinstance(level, Mapping) else None)
+    if "ts_energy" in roles:
+        level = _thermo_energy_level(output_doc, ts_record) if ts_record is not None else None
+        stated.append(_arc_level_to_tckdb_lot(level) if isinstance(level, Mapping) else None)
+    return _rules.kinetics_energy_level_declaration(links, calculations=calculations, stated_levels=stated)
+
+
 def _build_kinetics_source_calculations(
     *,
     reactant_keys: list[str],
@@ -11238,6 +11334,159 @@ def _assert_isotopes_reconcile(record: Mapping[str, Any]) -> None:
         raise error
 
 
+_W_CALCULATION_INPUT_GEOMETRY_NOT_DECLARED = ArcWarning.CALCULATION_INPUT_GEOMETRY_NOT_DECLARED.value
+
+
+def _enforce_geometry_anchoring(payload: dict[str, Any], route: str, warnings: list[dict[str, Any]]) -> None:
+    """Never send a payload whose calculations contradict their conformer's geometry (tckdb-schemas 0.121).
+
+    Two rules, both from TCKDB #635:
+
+    * keys: a calculation's ``conformer_key`` and ``geometry_key`` must name one conformer, a
+      transition state's calculations carry neither a ``conformer_key`` nor a species
+      geometry (:func:`tckdb_core.rules.geometry_anchor_refusals`, the shipped
+      ``bundle_source_rules``). The adapter builds its keys from one conformer, so a finding here
+      is a defect: the build is refused (``ValueError``) instead of posting what TCKDB refuses.
+    * input geometries: a ``freq``/``sp`` that declares ``input_geometries`` declares its owner's
+      geometry or is refused (``calculation_input_geometry_mismatch``). ARC runs both on the
+      optimisation's output, which is the conformer's own ``xyz`` the adapter sends, so the two
+      are the same text. A declaration that is not (:func:`tckdb_core.rules.undeclarable_input_geometries`)
+      is left out, with a warning, and TCKDB takes the owner's geometry: ARC's re-printed log
+      coordinates are never offered as the job's input.
+    """
+    refusals = _rules.geometry_anchor_refusals(payload, route)
+    if refusals:
+        raise ValueError(
+            f"{route} payload would be refused by TCKDB: "
+            + "; ".join(f"{code}: {detail}" for code, detail in refusals))
+    for calc, field in _rules.undeclarable_input_geometries(payload, route):
+        calc.pop("input_geometries", None)
+        message = (
+            f"{field} ({calc.get('type')}) declared an input geometry other than its conformer's own, "
+            "which TCKDB refuses as calculation_input_geometry_mismatch; the declaration was left out "
+            "and TCKDB takes the conformer's geometry. ARC runs freq and sp on the optimisation's "
+            "output, so the conformer's own xyz is the only input geometry the adapter can state.")
+        logger.warning("TCKDB %s: %s", _W_CALCULATION_INPUT_GEOMETRY_NOT_DECLARED, message)
+        warnings.append(_self_check(
+            _W_CALCULATION_INPUT_GEOMETRY_NOT_DECLARED, message, f"{field}.input_geometries",
+            {"action": "input_geometries_omitted", "calculation_key": calc.get("key")}))
+
+
+def _hessian_geometry(
+    record: Mapping[str, Any], xyz_text: str, warnings: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """The Hessian's ``geometry`` block, or ``None`` when it cannot be stated honestly (tckdb-schemas 0.94).
+
+    TCKDB checks a Hessian's geometry against the isotopes of the subject its calculation is
+    filed under (``calculation_geometry_isotope_mismatch``), because it reads the Hessian back
+    with masses taken from that geometry. For a species with no substitutions the block is the
+    frame's xyz as before. For an isotopically substituted record the frame (the freq job's own
+    input orientation: the same atoms in the same order as the record's final geometry) is labelled
+    with the record's ``xyz_isotopes``; a frame in another atom order, or one the stated list does
+    not reconcile with, is not labelled by guesswork: the Hessian (which is optional) is omitted,
+    logged and, when ``warnings`` is given, recorded as ``geometry_isotopes_not_stated``.
+    """
+    substitutions = _isotopic_substitutions(record)
+    if not substitutions:
+        return {"xyz_text": xyz_text}
+    record_symbols = _isotopes._xyz_symbols(_normalize_xyz_text(record.get("xyz"), record.get("label")))
+    geometry = None
+    if record_symbols is not None and _isotopes._xyz_symbols(xyz_text) == record_symbols:
+        geometry = _geometry_payload(record, xyz_text, record.get("xyz_isotopes"))
+    if geometry is None:
+        message = (
+            f"the Hessian of the isotopically substituted {record.get('label')!r} was left out: its frame is "
+            "not the record's own atoms in the record's order, so ARC's isotope list cannot label it.")
+        logger.warning("TCKDB %s: %s", _W_GEOMETRY_ISOTOPES_NOT_STATED, message)
+        if warnings is not None:
+            warnings.append(_self_check(
+                _W_GEOMETRY_ISOTOPES_NOT_STATED, message, "hessian.geometry",
+                {"action": "hessian_omitted"}))
+    return geometry
+
+
+def _withhold_unlabelled_point_geometries(
+    payload: dict[str, Any], route: str, warnings: list[dict[str, Any]],
+) -> None:
+    """Label, or else leave out, the point geometries of an isotopically substituted subject (0.94).
+
+    TCKDB checks every ``irc_result`` / ``scan_result`` / ``path_search_result`` point geometry
+    against the isotopes its calculation's subject declares (a species' SMILES; a transition
+    state's reactants'), and a geometry with no ``isotopes`` is the unsubstituted molecule.
+    Under a subject that declares a substitution:
+
+    * a scan or IRC point is labelled like the Hessian is: with the isotopes of the structure the
+      job started from (the owner's geometry, ARC's ``xyz_isotopes``) when its frame has that
+      structure's element sequence in order and the calculation's program keeps atom order
+      (:func:`tckdb_core.isotopes.label_point_geometries`); ARC's scan and IRC jobs run from the
+      record's own geometry. The element sequence does not prove the permutation of identical
+      elements, which is the stated caveat;
+    * any other point (a path-search point, a frame of another element order, a program that may
+      renumber atoms) has its geometry dropped (the point's energy and coordinate stay), with
+      ``geometry_isotopes_not_stated``, rather than deposited as an unsubstituted structure.
+
+    A subject without substitutions is untouched.
+    """
+    def smiles_of(entry: Any) -> Any:
+        return (entry.get("species_entry") or {}).get("smiles") if isinstance(entry, Mapping) else None
+
+    def first_geometry(conformers: Any) -> Any:
+        return next((c.get("geometry") for c in conformers or () if isinstance(c, Mapping)), None)
+
+    # (subject isotope multiset, [(path, calculation, geometry the calculation started from)])
+    groups: list[tuple[dict[tuple[str, int], int], list[tuple[str, Any, Any]]]] = []
+    if route == "computed_species":
+        subject = _isotopes.subject_isotope_multiset(smiles_of(payload))
+        calcs = []
+        for ci, conf in enumerate(payload.get("conformers") or ()):
+            reference = conf.get("geometry")
+            calcs.append((f"conformers[{ci}].primary_calculation", conf.get("primary_calculation"), reference))
+            calcs += [(f"conformers[{ci}].additional_calculations[{ai}]", a, reference)
+                      for ai, a in enumerate(conf.get("additional_calculations") or ())]
+        groups.append((subject, calcs))
+    elif route == "computed_reaction":
+        by_key = {sp.get("key"): sp for sp in payload.get("species") or ()}
+        for si, sp in enumerate(payload.get("species") or ()):
+            reference = first_geometry(sp.get("conformers"))
+            groups.append((_isotopes.subject_isotope_multiset(smiles_of(sp)),
+                           [(f"species[{si}].calculations[{ai}]", a, reference)
+                            for ai, a in enumerate(sp.get("calculations") or ())]))
+        ts = payload.get("transition_state")
+        if isinstance(ts, Mapping):
+            subject = _isotopes.subject_isotope_multiset(
+                *(smiles_of(by_key.get(k)) for k in payload.get("reactant_keys") or ()))
+            groups.append((subject, [(f"transition_state.calculations[{ai}]", a, ts.get("geometry"))
+                                     for ai, a in enumerate(ts.get("calculations") or ())]))
+    elif route == "transition_state":
+        subject = _isotopes.subject_isotope_multiset(
+            *(smiles_of(r) for r in (payload.get("reaction") or {}).get("reactants") or ()))
+        reference = payload.get("geometry")
+        calcs = [("primary_opt", payload.get("primary_opt"), reference)]
+        calcs += [(f"additional_calculations[{ai}]", a, reference)
+                  for ai, a in enumerate(payload.get("additional_calculations") or ())]
+        groups.append((subject, calcs))
+    for subject, calcs in groups:
+        if not subject:
+            continue
+        for where, calc, reference in calcs:
+            if not isinstance(calc, dict):
+                continue
+            software = (calc.get("software_release") or {}).get("name")
+            for field, point in _isotopes.label_point_geometries(
+                    calc, reference_geometry=reference, software=software):
+                point.pop("geometry", None)
+                message = (
+                    f"{where}.{field} was left out: its subject declares isotope substitution "
+                    f"{sorted(subject)} and the point cannot be labelled from the structure the job started "
+                    "from (not a scan or IRC point of an order-preserving program with that structure's "
+                    "element sequence), so TCKDB would read it as the unsubstituted molecule "
+                    "(calculation_geometry_isotope_mismatch).")
+                logger.warning("TCKDB %s: %s", _W_GEOMETRY_ISOTOPES_NOT_STATED, message)
+                warnings.append(_self_check(
+                    _W_GEOMETRY_ISOTOPES_NOT_STATED, message, f"{where}.{field}",
+                    {"action": "geometry_omitted"}))
+
+
 def _geometry_payload(
     record: Mapping[str, Any], xyz_text: str, isotopes: Any, *, key: str | None = None,
 ) -> dict[str, Any] | None:
@@ -11286,13 +11535,6 @@ def _artifact_batch_idempotency_prefix(project_label: Any, species_label: Any) -
     """ARC's artifact-batch key prefix, ``arc:<project>:<species>:artifact`` (see tckdb_core)."""
     return _core_artifact_batch_idempotency_prefix(
         project_label, species_label, namespace=TCKDBAdapter.IDEMPOTENCY_NAMESPACE,
-    )
-
-
-def _calculation_ref_not_returned_warning(calculation_id: int | None) -> dict[str, Any]:
-    """Self-check finding: an artifact target was named by integer id, not ``calc_`` ref."""
-    return _core_calculation_ref_not_returned_warning(
-        calculation_id, producer=TCKDBAdapter.PRODUCER_TAG,
     )
 
 

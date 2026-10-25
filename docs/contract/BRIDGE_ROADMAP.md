@@ -944,6 +944,11 @@ batch, pending **ARC B18** (the composite 0 K energy as printed in the log, sepa
 (`g4_energy_loader_shifted_label_gaussian16_a03`): ARC and Arkane read the shifted `G4(0 K)` label, 9-11 kJ/mol off
 (**ARC Bug 8**). See CURRENT_ARC_INTEGRATION.md, "tckdb-schemas 0.65 to 0.73".
 
+**Status (adapter 0.14.0, batch M).** Unchanged: composite runs stay deferred on B18. Two optional ARC exports follow from
+TCKDB 0.94 and 0.96 (`ARC_TCKDB_EXPORT_BRIEF.md` A7): **B19** the isotopes of IRC, scan and path-search points (until then the
+adapter labels scan and IRC points from the record's own list when the frame keeps its element order, and drops path-search points' geometries and any it cannot label, under a substituted species) and **B20** the direction of a kinetics fit.
+See CURRENT_ARC_INTEGRATION.md, "tckdb-schemas 0.74 to 0.134".
+
 
 **What.** For CBS-QB3 or G4 runs only `paths['composite']` is set, and `output.yml` has no
 log, deck, ESS version or spin diagnostic for it.

@@ -269,8 +269,7 @@ Adapter 0.10.0 (batch K, tckdb-schemas 0.73 / client 0.111; details in
 `docs/contract/CURRENT_ARC_INTEGRATION.md`, "tckdb-schemas 0.65 to 0.73"):
 
 - **Public refs.** Artifacts are posted to `/calculations/{calc_ref}/artifacts`, and the sweep names a
-  calculation by the response's `primary_calculation.calculation_ref`. The integer `calculation_id` is a fallback only for a
-  response with no ref, with a `calculation_ref_not_returned` warning. `UploadOutcome.submission_ref` and
+  calculation by the response's `primary_calculation.calculation_ref`. (Since 0.14.0 there is no integer-id fallback; see below.) `UploadOutcome.submission_ref` and
   `.calculation_key_refs` carry the response's `sub_` ref and (computed-reaction) key-to-`calc_` map. The adapter makes no
   rights-attestation call.
 - **Artifact sidecars and idempotency.** The artifact idempotency key is built from
@@ -318,6 +317,30 @@ Adapter 0.11.0 (core extraction, batch L1; no behaviour change):
   the core config) and the CLI/sweep. Install `tckdb_core` before `tckdb_arc` when working from the checkout
   (`pip install -e tckdb_core -e tckdb_arc`).
 
+Adapter 0.14.0 (batch M; needs `tckdb-adapters-core` `>=0.4,<0.5`; details and the release-by-release table in
+`docs/contract/CURRENT_ARC_INTEGRATION.md`, "tckdb-schemas 0.74 to 0.134"). The tested contract line is 0.154 / client 0.184
+(the pin from 0.13.0); the yes/no table covers 0.74 to 0.134, and the 0.135 to 0.154 rows belong to the Hessian branch
+that follows:
+
+- **Hessian parser stamp (0.130).** A Hessian carries `parser: {name, version}` instead of `parser_version`. ARC's token
+  `arc-hessian-1` is split at its own trailing version (`arc-hessian`, `1`); a stamp without that shape sends no `parser`.
+  Payload hashes of documents with a Hessian change; nothing else in them does.
+- **Geometry and conformer agree (0.121).** The built computed-reaction payload is checked with the shipped
+  `bundle_source_rules` helpers before it is written (a finding refuses the build), and a freq/sp whose declared
+  `input_geometries` are not its conformer's own is sent without them, with `calculation_input_geometry_not_declared`.
+- **Isotopes on Hessian and path points (0.94).** A substituted species' Hessian is labelled with ARC's `xyz_isotopes` (omitted,
+  with `geometry_isotopes_not_stated` in the sidecar, if its frame is not the record's atoms in order). A scan or IRC point under a
+  substituted subject is labelled the same way when its frame has the record's element sequence in order and the calculation's
+  program is Gaussian or ORCA (they keep the input atom order); any other point (path search, another element order, another
+  program) has its geometry left out with `geometry_isotopes_not_stated`. Matching the element sequence does not prove which of
+  several identical atoms is the substituted one.
+- **Artifacts need a `calc_` ref (0.116).** A response without `calculation_ref` leaves its artifacts unposted (`skipped`,
+  `calculation_ref_not_returned` in the reason); the integer-id fallback is gone, since the server refuses it.
+- **Kinetics energy level (0.99).** `energy_level_of_theory` is declared on a kinetics block when every linked energy shares one
+  level and ARC states it; the server warning `missing_level_of_theory_provenance` no longer fires on these corpora.
+- Not changed: thermo is mapped by the adapter, never through `tckdb_client.builders` (pinned by a test, so a client default for
+  `enthalpy_reference_kind` cannot change what is declared).
+
 Adapter 0.12.0 (core extraction, batch L2; no behaviour change; needs `tckdb-adapters-core` `>=0.2,<0.3`):
 
 - Moved to `tckdb_core` 0.2.0, each still resolvable from `tckdb_arc.adapter` / `.arc13` / `._vendor`: the NASA and
@@ -353,6 +376,7 @@ Adapter 0.12.0 (core extraction, batch L2; no behaviour change; needs `tckdb-ada
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 
 <!-- tckdb-drift:changelog -->
+- Adapter 0.14.0: batch M rules on the same pin (TCKDB c7c8df8, schemas 0.154.0, client 0.184.0); no new pin.
 - Adapter 0.13.0: tracked TCKDB c7c8df8 (schemas 0.154.0, client 0.184.0). A Hessian now carries `parser: {name, version}` (schemas 0.130) instead of `parser_version`.
 - Adapter 0.10.0: tracked TCKDB 96b71b0 (schemas 0.73.0, client 0.111.0).
 - Adapter 0.6.9: tracked TCKDB f22d3a8 (schemas 0.64.0, client 0.102.0).

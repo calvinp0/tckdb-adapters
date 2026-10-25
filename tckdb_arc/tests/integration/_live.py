@@ -40,6 +40,7 @@ FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 GOLDEN = FIXTURES / "golden"
 CURRENT_ARC = FIXTURES / "current_arc"
 ARC_1_2 = FIXTURES / "arc_1_2" / "output.yml"
+ARC_1_3_LEVELS = FIXTURES / "arc_1_3_levels"
 TS_ATOM_MAP_DERIVED = FIXTURES / "arc_1_3_ts_atom_map" / "output.yml"
 TS_ATOM_MAP_SAMPLE = FIXTURES / "arc_1_3_samples_ebc88ec8" / "reaction_kinetics.output.yml"
 # A real Gaussian log shipped with the package, used only as artifact bytes.
@@ -177,6 +178,41 @@ def arc_1_2_corrections():
     return doc, []
 
 
+def arc_1_3_isotopes():
+    """ARC 1.3's deuterated iC3H7 beside its ordinary isotopologue, with their parsed Hessians (parser evidence) and a rotor scan each.
+
+    Since tckdb-schemas 0.94 a Hessian's geometry, and every scan point's, is held to the isotopes of
+    the species its calculation is filed under, so the substituted species' Hessian and scan points
+    must carry ``isotopes`` (``{"4": 2}``). The scans are Gaussian scans (an order-preserving program)
+    whose samples state no isotopes (``geometry_isotopes`` null, as a Gaussian opt-type scan log
+    does): the adapter labels each point of the deuterated species from the record's own isotope
+    list, and drops the geometry of one frame (the third) whose element order is not the
+    record's. The shipped fixture stages other species' logs, so route lines are dropped as for the
+    atom-map corpora.
+    """
+    doc = _load_yaml(ARC_1_3_LEVELS / "output.yml")
+    doc["species"] = [s for s in doc["species"] if s["label"] in ("iC3H7", "iC3H7_d")]
+    doc["transition_states"], doc["reactions"] = [], []
+    for record in doc["species"]:
+        for key in ("opt_route", "freq_route", "sp_route"):
+            record[key] = None
+        frame = record["xyz"].strip().splitlines()
+        swapped = [frame[3], *frame[1:3], frame[0], *frame[4:]]          # C and an H exchanged: another element order
+        samples = [
+            {"source_index": i, "angle_degrees": 60.0 * i, "relative_energy_kj_mol": float(i),
+             "electronic_energy_hartree": -118.0 - 0.001 * i,
+             "geometry_xyz": "\n".join(lines), "geometry_isotopes": None}
+            for i, lines in enumerate([frame, frame, swapped])]
+        record["rotor_scans"] = [{
+            "key": "scan_rotor_0", "ess_software": "gaussian", "ess_version": "Gaussian 09, Revision D.01",
+            "source_log": None,
+            "result": {"dimension": 1, "relaxed": True,
+                       "coordinate": {"coordinate_type": "dihedral", "atom_indices": [1, 2, 3, 4],
+                                      "index_base": 1, "unit": "degree"},
+                       "samples": samples}}]
+    return doc, [ARC_1_3_LEVELS / "parser_evidence.json"]
+
+
 def current_arc_h2o():
     """The current-ARC fixture's H2O made uploadable, geometry in the Hessian frame.
 
@@ -251,6 +287,7 @@ CORPORA = {
     "ts_atom_map_derived": ts_atom_map_derived,
     "arc_1_2": arc_1_2,
     "arc_1_2_corrections": arc_1_2_corrections,
+    "arc_1_3_isotopes": arc_1_3_isotopes,
     "current_arc_h2o": current_arc_h2o,
     "synthetic_reaction": synthetic_reaction,
 }

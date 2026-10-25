@@ -53,6 +53,9 @@ and schema versions; their percentages are not current coverage measurements.
   the frequency level on BAC schemes, the `//` and correction-table method guards, a faithful replica of the
   level-of-theory identity hash, and a G4 / G4MP2 Gaussian 16 Rev A.03 stopgap. See
   [tckdb-schemas 0.65 to 0.73 (adapter 0.10.0, batch K)](#tckdb-schemas-065-to-073-adapter-0100-batch-k).
+- **Adapter 0.14.0, batch M (tckdb-schemas 0.134, client 0.167, TCKDB `511253ad`):** the Hessian parser stamp (0.130), geometry/conformer
+  agreement (0.121), Hessian and path-point isotopes (0.94), the artifact `calc_` ref (0.116) and the kinetics energy level (0.99). See
+  [tckdb-schemas 0.74 to 0.134 (adapter 0.14.0, batch M)](#tckdb-schemas-074-to-0134-adapter-0140-batch-m).
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
@@ -937,7 +940,7 @@ below says so. The golden corpus hashes are unchanged.
 | TCKDB release / item | What the adapter does |
 |---|---|
 | 0.65 (#615, atoms with an `sp` primary on the network route) | Not applicable: the adapter never calls `/uploads/networks/pdep`. |
-| **6.2** public refs (0.57 + #599): `submission_ref`, `calculation_ref`, `calculation_key_refs` | **Done.** `UploadOutcome.submission_ref` and `.calculation_key_refs` (computed-reaction) carry what the response states; every `*_ref` is also in the sidecar's `public_refs` (`calculation_key_refs` values land under `calculation_refs`). The sweep names an artifact target by `primary_calculation.calculation_ref`; the URL (`/calculations/{calc_ref}/artifacts`), the batch idempotency key and the sidecar file name are built from the ref. The integer `calculation_id` is a fallback only for a response that carries no ref: it is used then with a `calculation_ref_not_returned` warning (log and sidecar) and never preferred. The adapter makes no rights-attestation call (neither does tckdb-client 0.111), so there is nothing to feed a `sub_` ref to; the ref is on the outcome for a caller that attests. The live-gate read helper (`tckdb_core.testing.live.commit_probe`, re-exported by `tests/integration/_live.py`) still reads by integer id: `GET /calculations/{id}` takes an integer. |
+| **6.2** public refs (0.57 + #599): `submission_ref`, `calculation_ref`, `calculation_key_refs` | **Done.** `UploadOutcome.submission_ref` and `.calculation_key_refs` (computed-reaction) carry what the response states; every `*_ref` is also in the sidecar's `public_refs` (`calculation_key_refs` values land under `calculation_refs`). The sweep names an artifact target by `primary_calculation.calculation_ref`; the URL (`/calculations/{calc_ref}/artifacts`), the batch idempotency key and the sidecar file name are built from the ref. **Since 0.14.0 (TCKDB 0.116) the integer `calculation_id` is no longer a fallback:** the server refuses it (422 `invalid_handle`), so a response without a ref leaves the artifacts unposted (`skipped`, reason `calculation_ref_not_returned: ...`, logged) instead of being sent to the integer path. The adapter makes no rights-attestation call (neither does tckdb-client 0.111), so there is nothing to feed a `sub_` ref to; the ref is on the outcome for a caller that attests. The live-gate read helper (`tckdb_core.testing.live.commit_probe`, re-exported by `tests/integration/_live.py`) still reads by integer id: `GET /calculations/{id}` takes an integer. |
 | artifact idempotency key | `(calculation_ref, artifact_kind, artifact_sha256)`, shape `arc:<project>:<species>:artifact:<calc_ref>:<kind>:<sha16>`. A sidecar written before 0.10 holds an integer-id key, so a new key would not replay and TCKDB keeps one `calculation_artifact` row per upload even for identical bytes (`backend/app/db/models/calculation.py`): re-posting would **duplicate the row**. Before building a ref-keyed artifact upload the adapter reads the pre-0.10 sidecar of the same artifact (`<species>.calc<int>.<kind>.artifact.meta.json`; the response still carries the integer id) and, if its status is `uploaded`, its sha256 matches and it was posted to the same `base_url` (when both state one), skips the artifact as done (`_legacy_uploaded_artifact`). No sidecar, a pending or failed one, or different bytes: upload under the ref key. Replaying a pre-0.10 sidecar itself (the replay tool) still posts under its old key. See `tckdb_arc/README.md`. |
 | **6.4** correction schemes (0.66): `scheme.frequency_level_of_theory` | **Done.** Sent only on a `bac_petersson` / `bac_melius` scheme whose record's `matched_arkane_key` (ARC 1.3 export) is a `CompositeLevelOfTheory(freq=..., energy=...)`, with the key's freq half (`_bac_key_frequency_level`). Contract 0.66: a scheme Arkane keys on one level, and every atom-energy scheme, send nothing new; in RMG-database `quantum_corrections/data.py` only 4 of 47 Petersson keys are composite-keyed, so most BAC schemes carry none. ARC's freq-job level (`levels.freq`, or the header `freq_level` for a record without `levels`, see `_bac_frequency_level`) is only a cross-check: if it disagrees with the key's freq half (method, basis, software when both state it, compared ignoring case and punctuation) the field is omitted with a `bac_frequency_level_conflict` warning; a composite key with no ARC freq level sends the key's half. A pre-1.3 record has no `matched_arkane_key` and so sends none. **Identity consequence:** the field joins scheme identity, so a composite-keyed BAC scheme deposited by an earlier adapter and the same table now sent with a frequency level are two schemes (one new `energy_correction_scheme` row per distinct frequency level). A frequency level equal to the energy level is stored as absent by TCKDB. |
 | `composite_delta_prefer_scheme_terms` (0.66) | **Never triggered.** The adapter only ever sends `application_role` `aec_total` and `bac_total`; pinned by `tests/test_correction_scheme_levels.py` (behaviour over the three routes, and the adapter source does not name `composite_delta`). |
@@ -994,3 +997,91 @@ shapes and the offline replica of the server's evidence rules). Each ARC functio
 [`WARNING_CODES.md`](WARNING_CODES.md)) are new homes, not new behaviour. Every payload, sidecar, warning, key and log line is
 byte-identical to 0.11.0: four fixtures, all four upload modes, with an accepting, a refusing and an offline client, were
 built at the 0.11.0 commit and at 0.12.0 and compared (an empty diff).
+
+## tckdb-schemas 0.74 to 0.134 (adapter 0.14.0, batch M)
+
+Read first: `python -m tckdb_schemas.contract --since 0.73.0` (54 releases) and `--print`. The pin moved with
+`tools/tckdb_drift.py --bump` (first to TCKDB `511253ad`, schemas 0.134.0; the pin since moved to `c7c8df8b`, schemas 0.154.0, client 0.184.0 with `tckdb_core` 0.3.0 / `tckdb_arc` 0.13.0; this batch is `tckdb_core` 0.4.0, `tckdb_arc` 0.14.0).
+
+### What the bump broke, before any mapping changed
+
+- **Offline suite: 60 failures, all one cause** except one. 59 were `hessian.parser_version` refused as an extra field
+  (0.130: the Hessian carries `parser: {name, version}`, `ParserStamp`; the conftest hook validates every built request with the
+  0.134 models, so narrowing shows up there first). The sixtieth, `test_fragment_shapes_validate`, named
+  `CalculationWithResultsPayload`, which is no longer a model any route's schema defines (a transition-state calculation is
+  `TransitionStateCalculationIn` since 0.105); the test now names that.
+- **Live gate, unchanged code, fresh database: 18 failed, 44 passed.** Client-side `parser_version` refusals stopped every
+  Hessian-bearing corpus before the server saw it (14 tests); the other 5 were artifact uploads refused by the server,
+  `422 invalid_handle: '72' is not a <prefix>_<body> public ref` (0.116: the gate and the adapter's integer-id fallback named the
+  calculation by integer). With only the Hessian stamp fixed (to see the server): **6 failed, 56 passed**, the same artifact
+  refusal in 5 and the Hessian read-back moving to `parser_name`/`parser_version` in 1. **No other refusal fired**: none of the
+  0.121 geometry/conformer codes, no `calculation_input_geometry_mismatch`, no isotope code (the corpora carry no substituted
+  species; the check below adds one). One new server warning, `missing_level_of_theory_provenance`, appeared on every kinetics-bearing
+  reaction bundle (0.99; see the table).
+
+### Release by release: does it affect the adapter?
+
+| Release | Item | Affects the adapter? Reason |
+|---|---|---|
+| 0.134 | `check_inputs_not_supported`, `assessment_input_check_limit`, `check_inputs_needs_assessments` | No. `check_inputs` is a query flag of the thermo/kinetics read lists; the adapter issues no list reads and sends no `check_inputs`. |
+| 0.133 | `lowest_energy_across_levels` | No. A `/lookup` read refusal; the adapter and the gate send no lookup. |
+| 0.132 | `browse_parameter_removed`, `parameter_renamed`, `export_selection_ambiguous`, `export_ref_unmatched` | No. Read and export routes; the adapter calls none (the gate's reads use ids and `include=`). |
+| 0.131 | manifest `schema_version` exactly integer 1 | No. The adapter sends no execution-environment manifest. |
+| **0.130** | parser stamps; `bundle_version` integer; manifest `schema_name`/`schema_version` | **Yes (Hessian).** `hessian.parser_version` became `hessian.parser: {name, version}`. ARC stamps one token, `arc-hessian-1`; the adapter splits ARC's own `<name>-<version>` shape (`arc-hessian`, `1`) and leaves `parser` out (it is optional) for a stamp without that shape, never inventing a name. No: `parameters_parser` (the adapter sends `parameters` without a parser stamp), `bundle_version` (the adapter writes no contribution bundle), manifest fields. |
+| 0.129 | `ContributionBundle` surface rename | No. No contribution bundle is written. |
+| 0.128 | `unknown_manifest_schema` | No. Release read/verify routes only. |
+| 0.127 | `structure_finding_*`, curator route | No. Curator route. |
+| 0.126 | `VersionRef` model | No. Nothing in the wire contract uses it yet. |
+| 0.125, 0.124 | relative conformer energy read refusals | No. Read routes. |
+| 0.123 | `superseded_record_not_approvable` | No. Curator route. |
+| 0.122 | `unknown_query_parameter` | No. `GET /scientific/statmech/search`; the adapter does not search. |
+| **0.121** | geometry vs conformer (#635): four codes | **Yes.** The adapter's keys already agree (freq/sp state `geometry_key` of their conformer and the conformer's own xyz as `input_geometries`; a TS carries no `conformer_key` and no species geometry), so nothing was refused on the gate. Added as pre-checks so it stays so: `tckdb_core.rules.geometry_anchor_refusals` runs the shipped `bundle_source_rules` helpers (`assert_conformer_primaries_agree`, `assert_calculation_geometry_matches_conformer`, `assert_transition_state_calculations_unanchored`) on the built computed-reaction payload and refuses the build rather than post a refusal; `undeclarable_input_geometries` replicates `calculation_input_geometry_mismatch` (workflow-side, no shipped rule) as textual identity and leaves a non-matching `input_geometries` out with `calculation_input_geometry_not_declared`. Honest because ARC runs freq/sp on the optimisation's output (`Scheduler.run_freq_job`/`run_sp_job` pass `species.get_xyz`/`final_xyz`), which is the conformer's own xyz the adapter sends; ARC's re-printed log coordinates are never offered. Probed live: a coordinate drift in the sp/freq input is refused by the server as `calculation_input_geometry_mismatch` and is dropped by the pre-check. |
+| 0.120 | statmech selection read routes | No. Reads. |
+| 0.119 | scf stability source cycle/unanchored; `/networks/pdep` `scf_stability` narrowing; `ts_energy_ordering_source_type_mismatch`; network energy sources; `term_symbol_*`; `hessian_not_stored_*` | No. The adapter sends `scf_stability` on the primary opt with no `source_calculation_key`, no network upload, cites an `sp` for each `energy_ordering` energy (a type that carries it), leaves `term_symbol` null, and uploads logs and inputs, not `.hess` files. |
+| 0.117.1 | contract layout; same-order comparison allowance | No. |
+| 0.117 | `database_request_failed` (500) | No. Any non-2xx is already a recorded failure with the server's code in the sidecar. |
+| **0.116** | `calc_` ref only for `POST /calculations/{ref}/artifacts` and rights attestations | **Yes (artifacts).** The adapter already addressed artifacts by ref but fell back to the integer id for a response without one; the server now refuses that (`invalid_handle`), so the fallback is removed: nothing is posted, the artifacts are `skipped` with `calculation_ref_not_returned` in the reason. The gate's artifact helper passed the id and now passes `primary_calculation.calculation_ref`. The adapter makes no rights-attestation call. |
+| 0.114 | statmech selection codes | No. Reads. |
+| 0.113 | statmech `model_declaration` | No. Optional; ARC states no statistical-model recipe beyond what the adapter sends (never defaulted). |
+| 0.112.2 | refusal codes as their own file | No (`contract.refusal_codes_path()` exists; the adapter does not read it). |
+| 0.112.1 | network `zpe_calculation_key`, `zpe_scale_factor` | No. No network upload. |
+| 0.112.0 | `exponential_sqrt` extrapolation | No. The adapter builds no composite scheme (composite runs deferred, ARC brief B18). |
+| 0.111.1 | wording | No. |
+| 0.111.0 | Arrhenius A-units vs the order of the side the coefficient is a rate of | No change. The adapter states no `direction` (ARC states none, ARC brief A7 B20), so units of either side are accepted; the gate's kinetics corpora pass. |
+| 0.108.1 | four models listed in the contract | No. |
+| 0.108, 0.107, 0.106 | structure selection reads and bounds | No. Reads. |
+| 0.105 | `actual_protocol_declaration`, `structure_determinations`, `TransitionStateCalculationIn.key` | No. Optional claims ARC does not state (electronic state and root, ECP, numerical approximations, determinations); nothing is defaulted. The key is optional. |
+| 0.104, 0.103, 0.102, 0.101 | network export/select, bounds, declarations | No. No network upload or reads. |
+| **0.99** | `BundleKineticsIn.energy_level_of_theory`; `kinetics_energy_level_contradiction` | **Yes.** Without it every kinetics-bearing reaction bundle drew the server warning `missing_level_of_theory_provenance`. `tckdb_core.rules.kinetics_energy_level_declaration` declares the level only when every linked `reactant_energy`/`product_energy`/`ts_energy` calculation carries one identical level as sent (spin treatment included, since the server compares resolved rows) and ARC states that energy level for every participant (`_thermo_energy_level`); otherwise nothing is declared. The gate asserts the stored declaration equals the level of each linked energy and that the warning is gone. |
+| 0.98 | changelog file layout | No. |
+| 0.97 | `kinetics_selection_population_too_large` | No. Read. |
+| 0.96 | kinetics `determination`/`applicability`/`protocol`, `direction`, `reaction.reversible` optional | No. ARC states none of the first four (ARC brief A7 B20 asks for `direction`); `reversible` is already sent as ARC states it, on the bundle route. |
+| 0.95 | network state energy sources | No. No network upload. |
+| **0.94** | Hessian, scan-point and IRC-point geometries checked against the subject's elements and isotopes | **Yes.** A Hessian under a deuterated species with an unlabelled geometry is refused `calculation_geometry_isotope_mismatch` (reproduced live). The adapter labels a substituted record's Hessian with ARC's `xyz_isotopes` when the frame is the record's own atoms in order (the freq job's input orientation), and omits the Hessian otherwise; a scan sample that states its own `geometry_isotopes` is sent with them; for the other scan points and the points of an IRC the adapter does what it does for the Hessian: it labels the point with the isotopes of the structure the job started from (the species' `xyz_isotopes`; a TS stating `xyz_isotopes`: those) when the frame has that structure's element sequence in order and the calculation's recorded program is Gaussian or ORCA. ARC's scan and IRC jobs run from the record's own geometry and neither program renumbers atoms. A point of another program, of another element order, or of a path search (never labelled) has its geometry dropped (energy and coordinate kept) with `geometry_isotopes_not_stated`, as does an unlabellable Hessian (sidecar warning, `action: hessian_omitted`). **Caveat:** an element-sequence match does not prove the permutation of identical atoms (two H atoms exchanged look the same), so the label rests on the program keeping atom order, not on the frame; B19 (ARC stating the isotopes of each point) would remove the assumption. Plain species are unchanged. ARC brief A7 B19 asks for the statement that would let them be sent. |
+| 0.93, 0.80, 0.74 | no-optimisation duplicate rule for a reordered, moved or shifted structure | No. The adapter links one `sp` per role and structure. |
+| 0.90 | thermo select read | No. |
+| 0.89 | `D`/`T` element spelling means 2H/3H | No. ARC writes element symbols with a separate isotope list, which the adapter sends as `isotopes`; it never spells `D`/`T`. |
+| 0.87 | calculation geometry isotopes vs the subject | Covered by batch E (every geometry the adapter sends is labelled from ARC's isotope lists) and 0.94 above. |
+| 0.86 | contract layout | No. |
+| 0.85 | thermo `thermodynamic_target`/`protocol` | No. Optional; ARC states neither. |
+| 0.81 | TS energy ordering held against stored energies; `zpe_scale_factor` | No change. The adapter sends electronic energies only, each cited to its own `sp`; `e0` is not sent (ARC's `e0_kj_mol` carries corrections), so no ZPE factor. The gate's evidence corpus passes. |
+| 0.79, 0.76 | network energy source subject and type | No. No network upload. |
+| 0.77 | `LevelOfTheorySummary.label` always a string | No. Read shape; the gate reads ids. |
+| 0.75 | bundle warnings | No. The adapter does not call `/bundles`. |
+
+### Other changes in this batch
+
+- **Gate corpus `arc_1_3_isotopes`** (ARC 1.3's deuterated `iC3H7_d` beside `iC3H7`, with their parsed Hessians): the Hessian of
+  the substituted species is stored with its isotope on atom 4. With the label removed the server refuses it, which is how the
+  0.94 item was verified. The corpus also carries a Gaussian rotor scan on each species whose samples state no isotopes: the two
+  frames in the record's element order are stored on the deuterated species with the isotope on atom 4, and the third (another
+  element order) is stored as a point without geometry.
+- **Thermo never goes through the client.** The brief at `TCKDB_v2/paper/notes/enthalpy_reference_client_default_2026-10-25/` proposes
+  that `tckdb_client.builders.thermo` default `enthalpy_reference_kind` to `formation_298k` when enthalpy content is present. The
+  adapter does not use those builders and its guards strip an enthalpy it cannot verify, which a client default would declare
+  anyway. `tests/test_thermo_independent_of_client_defaults.py` pins both facts (no import of `tckdb_client.builders` in either
+  package; the corpus builds with every client `Thermo` constructor poisoned; every block with enthalpy content carries the
+  declaration, every stripped block none).
+- **Deviations from the batch brief.** The Hessian `parser.name` is derived from ARC's token (the only stamp that exists), not a
+  new name. `tckdb_core.rules.geometry_anchor_refusals` raises (refuses the build) where the batch brief said to pre-check, because
+  the adapter builds those keys from one conformer: a finding there is a defect, and dropping a key would hide it.

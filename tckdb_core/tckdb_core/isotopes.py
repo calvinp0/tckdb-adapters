@@ -179,3 +179,82 @@ def geometry_payload(
     if subs:
         out["isotopes"] = {str(index): mass for index, mass in subs.items()}
     return out
+
+
+#: The calculation results whose ``points[*].geometry`` TCKDB checks against the subject's isotopes (0.94).
+POINT_RESULT_FIELDS = ("irc_result", "scan_result", "path_search_result")
+
+
+def subject_isotope_multiset(*smiles: Any) -> dict[tuple[str, int], int]:
+    """The summed substitutions the SMILES of a calculation's subject declare (empty for none).
+
+    A species is its own SMILES; a transition state is the sum over its reaction's reactants,
+    which is the reference TCKDB compares a transition-state geometry with (0.87).
+    """
+    total: dict[tuple[str, int], int] = {}
+    for text in smiles:
+        for key, count in (smiles_isotope_multiset(text) or {}).items():
+            total[key] = total.get(key, 0) + count
+    return total
+
+
+def unlabelled_point_geometries(calc: Mapping[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """``(field, point)`` for each IRC, scan or path-search point of ``calc`` that carries a geometry without ``isotopes``.
+
+    TCKDB (0.94, #680) checks every such point geometry against the isotopes its calculation's
+    subject declares and refuses ``calculation_geometry_isotope_mismatch`` when they differ. A
+    geometry with no ``isotopes`` is the unsubstituted molecule, so under a substituted subject it
+    is a contradiction. The caller decides what to do with the points listed (drop their
+    ``geometry``); it only calls this for a subject that declares substitutions.
+    """
+    found: list[tuple[str, dict[str, Any]]] = []
+    for name in POINT_RESULT_FIELDS:
+        result = calc.get(name)
+        if not isinstance(result, Mapping):
+            continue
+        for index, point in enumerate(result.get("points") or ()):
+            geometry = point.get("geometry") if isinstance(point, dict) else None
+            if isinstance(geometry, Mapping) and not geometry.get("isotopes"):
+                found.append((f"{name}.points[{index}].geometry", point))
+    return found
+
+
+#: The point results a producer may label from its own geometry's isotope list (see :func:`label_point_geometries`).
+LABELLABLE_POINT_FIELDS = ("scan_result", "irc_result")
+
+#: Programs whose scan and IRC jobs keep the input geometry's atom order in every frame they print.
+#: A frame of another program is never labelled: if a program may renumber atoms (symmetry
+#: re-ordering, Z-matrix rebuilds), the position of a substituted atom in its frames is unknown.
+ORDER_PRESERVING_ESS = frozenset({"gaussian", "orca"})
+
+
+def label_point_geometries(
+    calc: Mapping[str, Any],
+    *,
+    reference_geometry: Mapping[str, Any] | None,
+    software: Any,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Label the scan and IRC points of ``calc`` from ``reference_geometry``'s isotopes; return those still unlabelled.
+
+    ``reference_geometry`` is the geometry block (``xyz_text`` and its ``isotopes``) of the structure
+    the path or scan was run from. A scan or IRC job starts from that geometry and keeps its atom order
+    (``software`` is checked against :data:`ORDER_PRESERVING_ESS`), so a point whose frame has the
+    reference's element sequence in order gets the reference's ``isotopes`` (copied). The element
+    sequence matching does not prove the substituted atom was not exchanged with an identical element
+    (two H atoms permuted look the same); it is the evidence the producer has, and the order-preserving
+    program is what makes it sufficient. A point of another program, of a frame in another element
+    order, or under a reference with no isotopes, stays unlabelled and is returned (the caller drops
+    its geometry). Path-search points are never labelled.
+    """
+    isotopes = reference_geometry.get("isotopes") if isinstance(reference_geometry, Mapping) else None
+    symbols = _xyz_symbols(reference_geometry.get("xyz_text")) if isinstance(reference_geometry, Mapping) else None
+    can_label = bool(isotopes) and symbols is not None and str(software or "").strip().lower() in ORDER_PRESERVING_ESS
+    remaining: list[tuple[str, dict[str, Any]]] = []
+    for field, point in unlabelled_point_geometries(calc):
+        geometry = point["geometry"]
+        if (can_label and field.split(".")[0] in LABELLABLE_POINT_FIELDS
+                and _xyz_symbols(geometry.get("xyz_text")) == symbols):
+            geometry["isotopes"] = dict(isotopes)
+        else:
+            remaining.append((field, point))
+    return remaining

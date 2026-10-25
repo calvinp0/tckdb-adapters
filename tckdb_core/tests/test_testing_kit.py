@@ -54,17 +54,3 @@ def test_warning_code_registry_type():
     assert issubclass(CoreWarning, CodedEnum)
     rows = list(registry(CoreWarning))
     assert rows[0][0] == "calculation_ref_not_returned" and "\n" not in rows[0][1]
-
-
-def test_the_warning_dict_for_a_core_code_is_unchanged():
-    from tckdb_core.uploader import _calculation_ref_not_returned_warning
-
-    assert _calculation_ref_not_returned_warning(5, producer="demo") == {
-        "code": "calculation_ref_not_returned",
-        "message": ("The upload response carried no calculation_ref for calculation 5, "
-                    "so its artifacts were posted to the deprecated integer-id path and the "
-                    "idempotency key was built from that id."),
-        "field": "calculation_ref",
-        "context": {"source": "demo_self_check", "calculation_id": 5},
-    }
-    assert type(_calculation_ref_not_returned_warning(5, producer="demo")["code"]) is str
