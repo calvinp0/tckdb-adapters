@@ -32,6 +32,8 @@ from tckdb_arc.sweep import run_upload_sweep
 from _live import (
     CURRENT_ARC,
     GOLDEN,
+    HESSIAN_DECKS,
+    PROJECT_FILES,
     assert_integration_backend,
     assert_loopback_url,
     attach_log,
@@ -372,7 +374,7 @@ def test_substituted_species_scan_points_are_accepted_labelled_or_without_geomet
 
 
 @pytest.mark.xfail(strict=True, raises=TCKDBValidationError,
-                   reason="TCKDB 511253ad: GET /calculations/{id}/scan-points fails its own response model "
+                   reason="TCKDB 511253ad and f6cfecbf: GET /calculations/{id}/scan-points fails its own response model "
                           "(CalculationScanPointRead.geometry is given the ORM Geometry) once a point has a geometry")
 def test_substituted_species_scan_points_are_read_back_with_their_isotopes(live_tckdb, tmp_path):
     outcomes = _submit_species(live_tckdb, tmp_path, "arc_1_3_isotopes")
@@ -698,15 +700,17 @@ def _assert_atom_map_stored(live, outcome, response, *, doc, reaction, ts_entry_
     assert identity is ts_map["ts_atom_order_follows_reactants"]
 
     # The participants the map points at are the reaction's: a repeated reactant is two participants of one
-    # species entry, each with its own block and its own TS atoms.
+    # species entry, each with its own block and its own TS atoms. The species read model (f6cfecbf) lists one
+    # member per species entry, a repeat shown as its ``stoichiometry``; the atom map keeps one participant per slot.
     for side, labels in (("reactant", reaction["reactant_species_labels"]),
                          ("product", reaction["product_species_labels"])):
         members = species[f"{side}s"]
-        assert [m["participant_index"] for m in members] == list(range(1, len(labels) + 1))
-        assert [m["smiles"] for m in members] == [species_by_label[label]["smiles"] for label in labels]
+        distinct = list(dict.fromkeys(labels))
+        assert [m["participant_index"] for m in members] == list(range(1, len(distinct) + 1))
+        assert [m["smiles"] for m in members] == [species_by_label[label]["smiles"] for label in distinct]
+        assert [m["stoichiometry"] for m in members] == [Counter(labels)[label] for label in distinct]
         for label, count in Counter(labels).items():
             slots = [i for i, name in enumerate(labels, start=1) if name == label]
-            assert len({members[i - 1]["species_entry_ref"] for i in slots}) == 1
             assert len(slots) == count
             if count > 1:
                 blocks = [{p["ts_atom_index"] for p in by_slot[(side, i)]} for i in slots]
@@ -823,6 +827,59 @@ def test_artifact_sidecars_capture_transport_metadata(live_tckdb, tmp_path, fiel
 
 
 # ---------------------------------------------------------------------------
+# Species stereochemistry (TCKDB 0.138) and the Hessian method against a shipped deck (0.144)
+# ---------------------------------------------------------------------------
+
+
+def test_smiles_stereo_agreeing_with_the_geometry_is_accepted(live_tckdb, tmp_path):
+    # TCKDB 0.138 refuses SMILES stereo marks, geometry and label that name different configurations
+    # (422 ``species_stereo_contradiction``). The adapter sends ARC's SMILES and geometry and no label; an E
+    # alkene (``C/C=C/C``) with a trans geometry (C-C=C-C dihedral 180) is accepted without that code.
+    outcome = _submit_species(live_tckdb, tmp_path, "stereo_consistent")["trans-2-butene"]
+    _uploaded(live_tckdb, outcome)
+    assert "species_stereo_contradiction" not in _codes(outcome.warnings)
+    assert "species_stereo_contradiction" not in (outcome.error or "")
+
+
+def test_smiles_stereo_contradicting_the_geometry_is_refused(live_tckdb, tmp_path):
+    # The same SMILES with the cis geometry (dihedral 0): 422 ``species_stereo_contradiction``, recorded in the sidecar.
+    outcome = _submit_species(live_tckdb, tmp_path, "stereo_contradicting")["trans-2-butene-cis-geometry"]
+    assert outcome.status == "failed"
+    sidecar = json.loads(outcome.sidecar_path.read_text())
+    assert sidecar["status"] == "failed"
+    assert sidecar["response_status_code"] == 422
+    assert sidecar["response_body"]["code"] == "species_stereo_contradiction"
+    assert "species_stereo_contradiction" in sidecar["last_error"]
+
+
+def test_a_shipped_freq_deck_and_the_stated_hessian_method_agree_and_are_stored(live_tckdb, tmp_path):
+    # TCKDB 0.144 reads the shipped freq deck and refuses a stated method it contradicts
+    # (``hessian_method_contradicts_input_deck``). Both decks are real Gaussian inputs: a bare ``freq`` with ARC's
+    # ``analytic`` (no directive, so the stated value stands) and ``freq=numer`` with ``finite_difference_gradient``.
+    project, doc = materialize(tmp_path, "hessian_deck")
+    adapter = make_adapter(live_tckdb.url, project, "hessian_deck", "computed_species", artifacts=True)
+    for record in doc["species"]:
+        label = record["label"]
+        keyword, method = HESSIAN_DECKS[label]
+        assert f"def2tzvp {keyword}\n" in (project / record["freq_input"]).read_text()
+        outcome = adapter.submit_computed_species_from_output(output_doc=doc, species_record=record)
+        response = _uploaded(live_tckdb, outcome)
+        assert "hessian_method_contradicts_input_deck" not in (outcome.error or "")
+        freq_id = _species_calcs(response)["freq"]
+        stored = live_tckdb.get(f"/calculations/{freq_id}/parameters")
+        rows = [p for p in stored if p["canonical_key"] == "freq.hessian_method"]
+        # The adapter's own parameter is stored once, as sent; every row for the key says the same thing.
+        assert [r["raw_value"] for r in rows if r["raw_key"] == "freq_hessian_method"] == [method], label
+        assert {r["canonical_value"] for r in rows} == {method}, label
+        # A deck with a directive (``numer``) is also read by TCKDB's own parameter extraction: one more row, same value.
+        assert [r["raw_key"] for r in rows if r["raw_key"] != "freq_hessian_method"] == (
+            ["numer"] if "numer" in keyword else []), label
+        artifacts = live_tckdb.get(f"/calculations/{freq_id}/artifacts")
+        deck = (project / record["freq_input"]).read_bytes()
+        assert [a["sha256"] for a in artifacts if a["kind"] == "input"] == [hashlib.sha256(deck).hexdigest()], label
+
+
+# ---------------------------------------------------------------------------
 # Refusals and known gaps
 # ---------------------------------------------------------------------------
 
@@ -879,12 +936,14 @@ REPLAY_MATRIX = [
     ("synthetic_reaction", "computed_reaction"), ("synthetic_reaction", "computed_ts"),
     ("ts_atom_map_sample", "computed_reaction"), ("ts_atom_map_sample", "computed_ts"),
     ("ts_atom_map_derived", "computed_reaction"), ("ts_atom_map_derived", "computed_ts"),
+    ("stereo_consistent", "computed_species"), ("hessian_deck", "computed_species"),
 ]
 
 
 def _sweep(live, project, name, mode):
-    cfg = make_config(live.url, name, mode)
-    adapter = make_adapter(live.url, project, name, mode)
+    ships_files = name in PROJECT_FILES  # the freq deck rides in the bundle as an input artifact
+    cfg = make_config(live.url, name, mode, artifacts=ships_files)
+    adapter = make_adapter(live.url, project, name, mode, artifacts=ships_files)
     run_upload_sweep(adapter=adapter, project_directory=str(project), tckdb_config=cfg)
     sidecars = read_sidecars(project)
     _require(sidecars, f"{name}/{mode}: the sweep wrote no sidecars")

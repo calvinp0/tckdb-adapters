@@ -19,7 +19,26 @@ loopback too. So the run fails unless all three hold:
 The adapter reads its key from `TCKDB_INTEGRATION_API_KEY`, so an ambient
 `TCKDB_API_KEY` is never used.
 
-Validated against TCKDB_v2 `511253ad` (the pin when this batch was written; the pinned sha is now `c7c8df8b`, not re-run here), with tckdb-client 0.167.0, tckdb-schemas 0.134.0 and tckdb-arc 0.13.0:
+Validated against TCKDB_v2 `f6cfecbf` (a historical observation: the pinned sha is now `c7c8df8b`, schemas 0.154.0 / client 0.184.0, and the gate is to be re-run there), with tckdb-client 0.181.0, tckdb-schemas 0.144.0, tckdb-core 0.3.1 and tckdb-arc 0.13.1:
+69 passed and 1 strict xfail, fresh (empty database) and on replay (a second run against the same database); 70 tests, of which 5 are new (three tests and two replay cases)
+(below). The xfail is the scan-points read-back, **still failing at `f6cfecbf`** (`GET /calculations/{id}/scan-points` still fails its own response model once a
+point has a geometry; the strict xfail did not flip). What 0.135-0.144 changed for these corpora, learned by running the unchanged gate first (with only the
+pin moved): **no refusal fired and no adapter payload changed**; one read-back shape moved. The species read model of `/scientific/reaction-entries/{id}/full`
+(`include=species`) now lists one member per species entry with a `stoichiometry`, so the repeated reactant of `CH3 + CH3 <=> C2H6` reads back as one member of
+stoichiometry 2 (it was two members); the atom map still has one participant per slot. The two atom-map tests for that corpus (bundle and standalone) now assert the
+new shape. New server codes seen: none beyond the deliberate 422 below. The two TCKDB rules this release brought that bear on what the adapter sends are covered live:
+
+- **0.138 `species_stereo_contradiction`.** `stereo_consistent` (SMILES `C/C=C/C`, an E alkene, with a trans geometry, C-C=C-C dihedral 180.0) is accepted with no
+  `species_stereo_contradiction` (the only server warning is `converged_opt_no_usable_energy`, the corpus having no energy); `stereo_contradicting` (the same SMILES
+  with a cis geometry, dihedral 0.0) is refused 422 `species_stereo_contradiction`, recorded in the sidecar. The adapter sends ARC's SMILES and geometry and no
+  `stereo_label`, and does not pre-check the rule. Both geometries are RDKit ETKDG + MMFF embeddings.
+- **0.144 `hessian_method_contradicts_input_deck`.** `hessian_deck` (arc_1_3_thermo's two butanols) ships a real Gaussian freq input in the bundle as an `input` artifact:
+  `sBuOH` a bare `freq` paired with ARC's `analytic`, `nBuOH` `freq=numer` paired with `finite_difference_gradient`. Both are accepted, the stored
+  `freq.hessian_method` is read back from `GET /calculations/{id}/parameters` (the adapter's row `raw_key` `freq_hessian_method`, once, as sent), and the stored `input`
+  artifact's SHA-256 equals the deck's. For the `numer` deck TCKDB's own parameter extraction adds a second `freq.hessian_method` row (`raw_key` `numer`, bool, same
+  canonical value), so that calculation has two rows that agree; the bare deck has one. Replay of both is idempotent.
+
+Earlier validated against TCKDB_v2 `511253ad`, with tckdb-client 0.167.0, tckdb-schemas 0.134.0 and tckdb-arc 0.13.0:
 64 passed and 1 strict xfail (a TCKDB read-back bug, below), fresh (empty database) and on replay (a second run against the same database). What 0.74-0.134
 changed for these corpora, learned by running the unchanged gate first: with only the pin moved, 18 failed and 44 passed. Every
 Hessian-bearing corpus was stopped client-side by `hessian.parser_version` (0.130 made it `parser: {name, version}`), and the
@@ -36,7 +55,7 @@ the ARC 1.3 deuterated `iC3H7_d` (`arc_1_3_isotopes`): its Hessian and its rotor
 the server refuses it as `calculation_geometry_isotope_mismatch` (0.94, `hessian.geometry`), which is how the item was verified; the same refusal (`scan_result.points[1].geometry`) answers the scan with its point labels removed, posted directly to the throwaway server. A
 sp/freq `input_geometries` drifted by 2e-3 Angstrom is refused as `calculation_input_geometry_mismatch` (0.121) and is dropped by
 the adapter's pre-check, after which it uploads.
-TCKDB `511253ad`: `GET /calculations/{id}/scan-points` (and `scan-result`) fails its own response model, `CalculationScanPointRead.geometry` being handed the ORM `Geometry`, as soon as a point has a geometry (an unfiltered 500-class validation error; the points are stored correctly). `test_substituted_species_scan_points_are_read_back_with_their_isotopes` is a strict xfail on it and will flip when the route is fixed.
+TCKDB `511253ad` (still so at `f6cfecbf`): `GET /calculations/{id}/scan-points` (and `scan-result`) fails its own response model, `CalculationScanPointRead.geometry` being handed the ORM `Geometry`, as soon as a point has a geometry (an unfiltered 500-class validation error; the points are stored correctly). `test_substituted_species_scan_points_are_read_back_with_their_isotopes` is a strict xfail on it and will flip when the route is fixed.
 The strict xfails below match on server warning codes and read-back shapes, so a TCKDB change to either can flip them without any
 adapter change.
 
@@ -48,11 +67,11 @@ the stored-frequency cross-check, electronic energy from an sp, one level per en
 map they should refuse. The corpus drifted once: `arc_1_2_corrections` still stated CH4's bond corrections as not applied, so the
 adapter (correctly, for a pre-1.3 document) deposited no `bac_total`; the corpus now states them applied.
 
-## Server warning codes seen at `511253ad`
+## Server warning codes seen at `f6cfecbf`
 
-Server warnings (`response_body.warnings`) by corpus; identical fresh and on replay (the 96b71b09 table
-holds unchanged). These are the codes the gate has observed, not a contract. `ts_atom_map_sample`, `current_arc_h2o`,
-`arc_1_3_isotopes` and `synthetic_species_as_shipped` drew none.
+Server warnings (`response_body.warnings`) by corpus; identical fresh and on replay (the 511253ad table
+holds unchanged for the earlier corpora). These are the codes the gate has observed, not a contract. `ts_atom_map_sample`, `current_arc_h2o`,
+`arc_1_3_isotopes` and `synthetic_species_as_shipped` drew none (the latter is the deliberate 422).
 
 | Corpus | Server warning codes |
 |---|---|
@@ -63,6 +82,9 @@ holds unchanged). These are the codes the gate has observed, not a contract. `ts
 | `ts_atom_map_derived` | `freq_list_incomplete_for_geometry`, `missing_frequency_scale_factor_provenance` |
 | `arc_1_2` | `converged_opt_no_usable_energy`, `missing_software_release_provenance` |
 | `arc_1_2_corrections` | `missing_energy_correction_scheme_software`, `missing_frequency_scale_factor_provenance`, `missing_literature_provenance`, `missing_statmech_frequency_source` |
+| `stereo_consistent` | `converged_opt_no_usable_energy` (the corpus has no energy); never `species_stereo_contradiction` or `species_entry_stereo_*` |
+| `stereo_contradicting` | none: the upload is refused, 422 `species_stereo_contradiction` |
+| `hessian_deck` | `freq_list_incomplete_for_geometry`, `missing_energy_correction_scheme_software`, `missing_literature_provenance` |
 
 ## Prerequisites
 
@@ -70,7 +92,7 @@ holds unchanged). These are the codes the gate has observed, not a contract. `ts
   (`pip install -e "$TCKDB/backend"`), so Alembic, uvicorn and
   `scripts/bootstrap_admin.py` run the checkout's code.
 - `arc_env` has `tckdb_arc` installed editable from this repository and
-  `tckdb-client` 0.167.x. If `arc_env` has another client, run with the
+  `tckdb-client` 0.184.x. If `arc_env` has another client, run with the
   checkout's client source first on the path:
   `PYTHONPATH=$TCKDB/clients/python/src conda run -n arc_env python -m pytest ...`. Its `tckdb_schemas` is an editable install of
   `$TCKDB/schemas/python/tckdb-schemas`, so the adapter validates against
@@ -165,6 +187,9 @@ counts are taken only once two consecutive snapshots agree (see T4).
 | `current_arc` H2O (`parser_evidence.json`) | species | Hessian stored verbatim in its own frame, with its parser stamp as `parser_name` `arc-hessian` and `parser_version` `1` (0.130) |
 | `arc_1_3_isotopes` (ARC 1.3 `iC3H7_d` and `iC3H7`, parsed Hessians, a Gaussian rotor scan each whose samples state no isotopes) | species | the Hessian geometry of the deuterated species carries the isotope on atom 4 (0.94) and the ordinary one none; the server refuses the unlabelled one. The deuterated species' scan is accepted with its two frames in the record's element order labelled from the record's `xyz_isotopes` and the third frame's geometry dropped (`geometry_isotopes_not_stated`); the stored point geometries were read from the database (atom 4 mass 2 on the labelled frames only) because `GET /calculations/{id}/scan-points` is broken, see the strict xfail. IRC points of a substituted TS are covered offline only (the corpus has no TS) |
 | synthetic CHO + CH4 reaction, real compositions | reaction, TS | kinetics normalisation, source calculations and TS composition |
+| `stereo_consistent` (`C/C=C/C`, trans geometry) | species | accepted, no `species_stereo_contradiction` (0.138) |
+| `stereo_contradicting` (`C/C=C/C`, cis geometry) | species | 422 `species_stereo_contradiction` recorded in the sidecar |
+| `hessian_deck` (arc_1_3_thermo `sBuOH` bare `freq` + `analytic`, `nBuOH` `freq=numer` + `finite_difference_gradient`; real Gaussian decks) | computed_species, with artifacts | accepted (no `hessian_method_contradicts_input_deck`); stored `freq.hessian_method` row with the stated value (a second, deck-extracted row for `numer`); the stored `input` artifact equals the deck by SHA-256 (0.144) |
 | synthetic ethanol as shipped (two-atom geometry) | species | 422 refusal recorded in the sidecar |
 
 Every successful mode is also run as a whole sweep twice. The second pass must
