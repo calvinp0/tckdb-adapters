@@ -727,6 +727,22 @@ _ROLE_COMPOSITE = "composite"
 # changes in a way that would alter the emitted lower-triangle values.
 _HESSIAN_PARSER_VERSION = "arc-hessian-1"
 
+
+def _hessian_parser_block(stamp: str) -> dict[str, Any]:
+    """The Hessian's ``parser`` block (tckdb-schemas 0.130 ``ParserStamp``) from ARC's stamp.
+
+    ARC spells the parser as one token, ``arc-hessian-1`` (``HESSIAN_PARSER_VERSION``);
+    TCKDB wants the name beside the version and refuses a name that embeds one. The split
+    is ARC's own ``<name>-<version>`` shape: the trailing ``-<digits>`` is the version
+    (kept as the text ARC wrote) and what precedes it the name. A stamp that does not
+    have that shape is not guessed at: the block is left out (``parser`` is optional)
+    rather than invent a name.
+    """
+    name, sep, version = str(stamp).rpartition("-")
+    if not sep or not name or not version.isdigit():
+        return {}
+    return {"parser": {"name": name, "version": version}}
+
 # ESS name (from ``arc.parser.parser.determine_ess``) → TCKDB
 # ``HessianSource`` enum value. Gaussian prints the Hessian inside the log
 # (``parsed_log``); Orca writes it to a sibling ``.hess`` file
@@ -2520,7 +2536,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
                 "geometry": {"xyz_text": value["geometry_xyz_text"]},
                 "lower_triangle_hartree_bohr2": list(value["lower_triangle"]),
                 "source": value["source"],
-                "parser_version": value["parser_version"],
+                **_hessian_parser_block(value["parser_version"]),
             }
         if lookup.state == "unavailable":
             return None
@@ -2579,7 +2595,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
             "geometry": {"xyz_text": geometry_xyz_text},
             "lower_triangle_hartree_bohr2": triangle,
             "source": source,
-            "parser_version": _HESSIAN_PARSER_VERSION,
+            **_hessian_parser_block(_HESSIAN_PARSER_VERSION),
         }
 
     def _parse_irc_trajectories(

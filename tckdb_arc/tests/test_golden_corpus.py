@@ -37,7 +37,7 @@ from tckdb_arc.config import TCKDBConfig
 # Real published wire-contract models (test-only dependency).
 from tckdb_schemas.workflows.computed_species_upload import ComputedSpeciesUploadRequest
 from tckdb_schemas.workflows.computed_reaction_upload import ComputedReactionUploadRequest
-from tckdb_schemas.fragments.calculation import CalculationWithResultsPayload
+from tckdb_schemas.workflows.transition_state_upload import TransitionStateCalculationIn
 from tckdb_schemas.fragments.geometry import GeometryPayload
 from tckdb_schemas.fragments.identity import SpeciesEntryIdentityPayload
 
@@ -232,9 +232,9 @@ class TestGoldenCorpus(unittest.TestCase):
     def test_fragment_shapes_validate(self):
         _doc, _ts, _rxn, payload = _compose()
 
-        # CalculationWithResultsPayload — the primary opt calc.
+        # TransitionStateCalculationIn (0.105; a plain CalculationWithResultsPayload is no longer a contract model) — the primary opt calc.
         primary_opt = copy.deepcopy(payload["primary_opt"])
-        contract_validate(CalculationWithResultsPayload, primary_opt)
+        contract_validate(TransitionStateCalculationIn, primary_opt)
 
         # GeometryPayload — pulled from the opt calc's output geometry.
         output_geometries = primary_opt.get("output_geometries") or []
@@ -293,6 +293,49 @@ class TestGoldenCorpus(unittest.TestCase):
 
         # Canonical snapshots make any wire-shape change an explicit review.
         #
+        # All three changed for adapter 0.13.0 / tckdb-schemas 0.130 for one reason: a
+        # Hessian's ``parser_version: "arc-hessian-1"`` is now ``parser: {name:
+        # "arc-hessian", version: "1"}`` (ParserStamp). Putting ARC's one-token stamp
+        # back on exactly those blocks reproduces the previous snapshots checked next.
+        self.assertEqual(
+            {
+                "computed_species": "d0ad8d6d09725a442d373ef6c322973f1d1d16d4810eb7b55bf7d92963968496",
+                "computed_reaction": "ec0df68914de1e9c48d1f646f07c128dc146a22e587514ccde0a1d1f746c2e42",
+                "transition_state": "683c8ce1d6030d75fee11825ffdc757fb4b5e33a1250ac4f85ebdbc190be01d7",
+            },
+            {
+                "computed_species": self._canonical_sha256(species),
+                "computed_reaction": self._canonical_sha256(reaction),
+                "transition_state": self._canonical_sha256(transition_state),
+            },
+        )
+
+        def with_hessian_parser_version_restored(payload, *, hessians):
+            restored = copy.deepcopy(payload)
+            found = []
+
+            def collect(obj):
+                if isinstance(obj, dict):
+                    hessian = obj.get("hessian")
+                    if isinstance(hessian, dict):
+                        found.append(hessian)
+                    for value in obj.values():
+                        collect(value)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        collect(item)
+
+            collect(restored)
+            self.assertEqual(len(found), hessians)
+            for hessian in found:
+                self.assertEqual(hessian.pop("parser"), {"name": "arc-hessian", "version": "1"})
+                hessian["parser_version"] = "arc-hessian-1"
+            return restored
+
+        species = with_hessian_parser_version_restored(species, hessians=1)
+        reaction = with_hessian_parser_version_restored(reaction, hessians=2)
+        transition_state = with_hessian_parser_version_restored(transition_state, hessians=1)
+
         # computed_reaction changed (computed_species and transition_state did not)
         # for adapter 0.8.0 / tckdb-schemas 0.59 (TCKDB#610), for one reason: the
         # single atom H is no longer filed as a placeholder ``opt`` plus an additional
