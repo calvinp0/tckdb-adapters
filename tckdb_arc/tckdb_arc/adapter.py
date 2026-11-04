@@ -732,16 +732,14 @@ def _hessian_parser_block(stamp: str) -> dict[str, Any]:
     """The Hessian's ``parser`` block (tckdb-schemas 0.130 ``ParserStamp``) from ARC's stamp.
 
     ARC spells the parser as one token, ``arc-hessian-1`` (``HESSIAN_PARSER_VERSION``);
-    TCKDB wants the name beside the version and refuses a name that embeds one. The split
-    is ARC's own ``<name>-<version>`` shape: the trailing ``-<digits>`` is the version
-    (kept as the text ARC wrote) and what precedes it the name. A stamp that does not
-    have that shape is not guessed at: the block is left out (``parser`` is optional)
-    rather than invent a name.
+    TCKDB wants the name beside the version and refuses a name that embeds one, so the
+    trailing ``-<version>`` is split off (kept as the text ARC wrote). The stamp is always
+    that token: evidence validation (``evidence.py``) rejects any other value, and the
+    parse fallback uses ``_HESSIAN_PARSER_VERSION``.
     """
-    name, sep, version = str(stamp).rpartition("-")
-    if not sep or not name or not version.isdigit():
-        return {}
+    name, _, version = str(stamp).rpartition("-")
     return {"parser": {"name": name, "version": version}}
+
 
 # ESS name (from ``arc.parser.parser.determine_ess``) → TCKDB
 # ``HessianSource`` enum value. Gaussian prints the Hessian inside the log

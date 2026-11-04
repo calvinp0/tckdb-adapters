@@ -232,7 +232,8 @@ class TestGoldenCorpus(unittest.TestCase):
     def test_fragment_shapes_validate(self):
         _doc, _ts, _rxn, payload = _compose()
 
-        # TransitionStateCalculationIn (0.105; a plain CalculationWithResultsPayload is no longer a contract model) — the primary opt calc.
+        # TransitionStateCalculationIn: the primary opt calc. (A plain
+        # CalculationWithResultsPayload is no longer a contract model since 0.105.)
         primary_opt = copy.deepcopy(payload["primary_opt"])
         contract_validate(TransitionStateCalculationIn, primary_opt)
 
