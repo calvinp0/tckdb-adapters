@@ -1349,11 +1349,7 @@ species:
   sp_input: null
   sp_log: null
   sp_route: '#P opt=(calcfc) guess=mix uhf/3-21g IOp(2/9=2000) scf=xqc'
-  sp_spin_diagnostic:
-    log: null
-    s_squared: 0.7646
-    s_squared_annihilated: 0.7502
-    s_squared_expected: 0.0
+  sp_spin_diagnostic: null
   sp_t1_diagnostic: 0.0123
   statmech:
     arkane_rotors_applied: 2
@@ -1750,11 +1746,7 @@ species:
   sp_input: null
   sp_log: null
   sp_route: '#P opt=(calcfc) guess=mix uhf/3-21g IOp(2/9=2000) scf=xqc'
-  sp_spin_diagnostic:
-    log: null
-    s_squared: 0.7646
-    s_squared_annihilated: 0.7502
-    s_squared_expected: 0.0
+  sp_spin_diagnostic: null
   sp_t1_diagnostic: null
   statmech:
     arkane_rotors_applied: 0
@@ -2016,11 +2008,7 @@ species:
   sp_input: null
   sp_log: null
   sp_route: '#P opt=(calcfc) guess=mix uhf/3-21g IOp(2/9=2000) scf=xqc'
-  sp_spin_diagnostic:
-    log: null
-    s_squared: 0.7646
-    s_squared_annihilated: 0.7502
-    s_squared_expected: 0.0
+  sp_spin_diagnostic: null
   sp_t1_diagnostic: null
   statmech:
     arkane_rotors_applied: 0
@@ -2247,11 +2235,7 @@ transition_states:
   sp_input: null
   sp_log: null
   sp_route: '#P opt=(calcfc) guess=mix uhf/3-21g IOp(2/9=2000) scf=xqc'
-  sp_spin_diagnostic:
-    log: null
-    s_squared: 0.7646
-    s_squared_annihilated: 0.7502
-    s_squared_expected: 0.0
+  sp_spin_diagnostic: null
   sp_t1_diagnostic: null
   statmech:
     arkane_rotors_applied: 0

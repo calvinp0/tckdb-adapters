@@ -19,7 +19,10 @@ loopback too. So the run fails unless all three hold:
 The adapter reads its key from `TCKDB_INTEGRATION_API_KEY`, so an ambient
 `TCKDB_API_KEY` is never used.
 
-Validated against TCKDB_v2 `f6cfecbf` (a historical observation: the pinned sha is now `c7c8df8b`, schemas 0.154.0 / client 0.184.0, and the gate is to be re-run there), with tckdb-client 0.181.0, tckdb-schemas 0.144.0, tckdb-core 0.3.1 and tckdb-arc 0.13.1:
+Validated against TCKDB_v2 `c7c8df8b`, with tckdb-client 0.184.0, tckdb-schemas 0.154.0, tckdb-core 0.4.1 and tckdb-arc 0.14.1:
+69 passed and 1 strict xfail, fresh (empty database) and on replay (a second run against the same database), 70 tests. The xfail is the scan-points read-back, **still failing at `c7c8df8b`** (`GET /calculations/{id}/scan-points` answers 422, its response model rejecting the ORM `Geometry` once a point has a geometry; the strict xfail did not flip). Moving the pin from `f6cfecbf` through schemas 0.145-0.154 changed no count: no adapter change was needed, and the only 422s in the run are the two deliberate refusals (`species_stereo_contradiction`, and `species_geometry_composition_mismatch` for the two-atom ethanol corpus), plus the scan-points read. Of the new server warnings, two fire (`scan_point_coordinate_disagrees_with_geometry`, 0.146; `level_of_theory_disagrees_with_artifact`, 0.150; table below); none of the 0.151 (`t1_diagnostic_above_closed_shell_threshold`, `spin_contamination_above_conventional_threshold`, `spin_expected_contradicts_multiplicity`), 0.152 (`reported_setting_differs_from_requested`) or 0.154 (`output_log_job_not_bound`) warnings fires, nor `parameter_disagrees_with_artifact`, `input_deck_disagrees_with_output_log` or `output_log_disagrees_with_earlier_output_log` (0.150). The 0.151 pair would have fired on `arc_1_3_ts_atom_map` while its closed-shell fixtures carried a radical's spin block (`TS1`, multiplicity 1, `s_squared` 0.7646, `s_squared_expected` 0.75); the fixtures no longer state a spin block for a closed-shell record, as a restricted job prints no `<S**2>`, so the gate now exercises none of them (a T1 or spin value on a genuine radical or open-shell record would).
+
+Earlier validated against TCKDB_v2 `f6cfecbf`, with tckdb-client 0.181.0, tckdb-schemas 0.144.0, tckdb-core 0.3.1 and tckdb-arc 0.13.1:
 69 passed and 1 strict xfail, fresh (empty database) and on replay (a second run against the same database); 70 tests, of which 5 are new (three tests and two replay cases)
 (below). The xfail is the scan-points read-back, **still failing at `f6cfecbf`** (`GET /calculations/{id}/scan-points` still fails its own response model once a
 point has a geometry; the strict xfail did not flip). What 0.135-0.144 changed for these corpora, learned by running the unchanged gate first (with only the
@@ -67,21 +70,23 @@ the stored-frequency cross-check, electronic energy from an sp, one level per en
 map they should refuse. The corpus drifted once: `arc_1_2_corrections` still stated CH4's bond corrections as not applied, so the
 adapter (correctly, for a pre-1.3 document) deposited no `bac_total`; the corpus now states them applied.
 
-## Server warning codes seen at `f6cfecbf`
+## Server warning codes seen at `c7c8df8b`
 
-Server warnings (`response_body.warnings`) by corpus; identical fresh and on replay (the 511253ad table
-holds unchanged for the earlier corpora). These are the codes the gate has observed, not a contract. `ts_atom_map_sample`, `current_arc_h2o`,
+Server warnings (`response_body.warnings`) by corpus; identical fresh and on replay (read from the sidecars of both runs). Against the
+`f6cfecbf` table, two codes are new: `level_of_theory_disagrees_with_artifact` (0.150) on the artifact tests, whose staged sample logs state another level than the
+corpus declares, and `scan_point_coordinate_disagrees_with_geometry` (0.146) on `arc_1_3_isotopes`, whose scan samples are another geometry's frames; every other row is unchanged. These are the codes the gate has observed, not a contract. `ts_atom_map_sample`, `current_arc_h2o`,
 `arc_1_3_isotopes` and `synthetic_species_as_shipped` drew none (the latter is the deliberate 422).
 
 | Corpus | Server warning codes |
 |---|---|
-| `golden` (species, conformer, reaction, TS, artifacts) | `freq_list_incomplete_for_geometry`, `missing_software_release_provenance`, `multiplicity_mismatch` (sample log, artifact test), `reaction_atom_map_absent`, `transition_state_missing_irc_evidence` |
+| `golden` (species, conformer, reaction, TS, artifacts) | `freq_list_incomplete_for_geometry`, `level_of_theory_disagrees_with_artifact` and `multiplicity_mismatch` (sample logs, artifact tests), `missing_software_release_provenance`, `reaction_atom_map_absent`, `transition_state_missing_irc_evidence` |
 | `golden_kinetics`, `synthetic_reaction` | `freq_list_incomplete_for_geometry`, `reaction_atom_map_absent`, `transition_state_missing_irc_evidence` (`synthetic_reaction` also `missing_software_release_provenance`) |
 | `golden_irc_failed` | `freq_list_incomplete_for_geometry`, `reaction_atom_map_absent`, `transition_state_missing_irc_evidence` |
 | `golden_irc_passed`, `golden_ts_evidence` | `freq_list_incomplete_for_geometry`, `reaction_atom_map_absent` |
 | `ts_atom_map_derived` | `freq_list_incomplete_for_geometry`, `missing_frequency_scale_factor_provenance` |
 | `arc_1_2` | `converged_opt_no_usable_energy`, `missing_software_release_provenance` |
 | `arc_1_2_corrections` | `missing_energy_correction_scheme_software`, `missing_frequency_scale_factor_provenance`, `missing_literature_provenance`, `missing_statmech_frequency_source` |
+| `arc_1_3_isotopes` | `scan_point_coordinate_disagrees_with_geometry` |
 | `stereo_consistent` | `converged_opt_no_usable_energy` (the corpus has no energy); never `species_stereo_contradiction` or `species_entry_stereo_*` |
 | `stereo_contradicting` | none: the upload is refused, 422 `species_stereo_contradiction` |
 | `hessian_deck` | `freq_list_incomplete_for_geometry`, `missing_energy_correction_scheme_software`, `missing_literature_provenance` |
