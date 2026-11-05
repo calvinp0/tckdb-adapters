@@ -38,9 +38,17 @@ TRANSITION_STATE_KIND = "transition_state"
 #
 # PREFLIGHT_MAX_ATTEMPTS counts the initial probe plus retries (5 → 1
 # initial + 4 retries). Delays follow PREFLIGHT_BASE_DELAY_SECONDS * 2**i
-# (1s, 2s, 4s, 8s) capped at PREFLIGHT_MAX_DELAY_SECONDS, so the worst
-# case waits ~1+2+4+8 = 15s across the four gaps — well under a minute so
-# a genuinely-down server doesn't stall the whole run. Tunable here.
+# (1s, 2s, 4s, 8s) capped at PREFLIGHT_MAX_DELAY_SECONDS, so the backoff
+# gaps alone add ~1+2+4+8 = 15s. That is only the sleep budget: each probe
+# can itself block for the client request timeout (config
+# ``timeout_seconds``, 30s by default), and on a connect timeout httpx
+# tries every resolved address of the host in turn, each for that full
+# timeout. The worst case is therefore roughly
+#     PREFLIGHT_MAX_ATTEMPTS * n_addresses * timeout_seconds + 15s
+# e.g. 5 * 2 * 30s + 15s ~= 5.25 min for a host with two A records whose
+# packets are silently dropped (observed from an offline compute node).
+# A server that refuses the connection outright fails fast and costs
+# close to the 15s backoff alone. Tunable here.
 PREFLIGHT_MAX_ATTEMPTS = 5
 PREFLIGHT_BASE_DELAY_SECONDS = 1.0
 

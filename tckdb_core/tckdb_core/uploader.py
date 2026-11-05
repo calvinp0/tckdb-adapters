@@ -18,6 +18,7 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from tckdb_client import TCKDBClient
 from tckdb_client.errors import TCKDBError
@@ -248,7 +249,20 @@ def _readyz_body_is_ready(body: Any) -> bool:
     return isinstance(status, str) and status.lower() in {"ready", "ok"}
 
 
-def _build_readiness_error(exc: BaseException) -> TCKDBReadinessError:
+def _build_readiness_error(
+    exc: BaseException,
+    *,
+    base_url: str | None = None,
+    timeout_seconds: float | None = None,
+) -> TCKDBReadinessError:
+    """Wrap a failed ``/readyz`` request in a :class:`TCKDBReadinessError`.
+
+    An HTTP failure is described by its status code, response body and
+    request id. A failure with none of those (a timeout or connection
+    error that never produced a response) is described by
+    :func:`_describe_transport_failure` instead, so the message always
+    carries a reason.
+    """
     response_json = getattr(exc, "response_json", None)
     response_text = getattr(exc, "response_text", None)
     status_code = getattr(exc, "status_code", None)
@@ -258,6 +272,9 @@ def _build_readiness_error(exc: BaseException) -> TCKDBReadinessError:
             status_code=status_code,
             body=response_json if response_json is not None else response_text,
             request_id=_request_id_from(exc),
+            fallback_reason=_describe_transport_failure(
+                exc, base_url=base_url, timeout_seconds=timeout_seconds,
+            ),
         ),
         status_code=status_code,
         response_json=response_json,
@@ -266,11 +283,62 @@ def _build_readiness_error(exc: BaseException) -> TCKDBReadinessError:
     )
 
 
+def _describe_transport_failure(
+    exc: BaseException,
+    *,
+    base_url: str | None,
+    timeout_seconds: float | None,
+) -> str:
+    """Describe a request failure that produced no HTTP response.
+
+    The result names the exception text (when it has any), the exception
+    type chain walked through ``__cause__`` / ``__context__`` with
+    consecutive duplicate names collapsed (``TCKDBConnectionError caused
+    by ConnectTimeout``), the host (and port, when given) of ``base_url`` and
+    the per-request timeout. It is never empty and never raises.
+    """
+    names: list[str] = []
+    seen: set[int] = set()
+    link: BaseException | None = exc
+    while link is not None and id(link) not in seen:
+        seen.add(id(link))
+        name = type(link).__name__
+        if not names or names[-1] != name:
+            names.append(name)
+        link = link.__cause__ or (
+            None if link.__suppress_context__ else link.__context__
+        )
+    chain = " caused by ".join(names)
+    try:
+        text = str(exc).strip()
+    except Exception:
+        text = ""
+    parts = [f"{text} ({chain})" if text else chain]
+    # The host and timeout are best-effort context: a malformed base_url
+    # or a non-numeric timeout must never turn a readiness failure into a
+    # different exception (which would leave the preflight silently off).
+    try:
+        parsed = urlsplit(base_url) if base_url else None
+        host = parsed.hostname if parsed else None
+        if host:
+            port = parsed.port
+            parts.append(f"host={host}:{port}" if port else f"host={host}")
+    except Exception:
+        pass
+    try:
+        if timeout_seconds is not None:
+            parts.append(f"timeout={timeout_seconds:g}s")
+    except Exception:
+        pass
+    return " ".join(parts)
+
+
 def _format_readiness_message(
     *,
     status_code: Any,
     body: Any,
     request_id: Any,
+    fallback_reason: str | None = None,
 ) -> str:
     status = None
     code = None
@@ -288,6 +356,8 @@ def _format_readiness_message(
         parts.append(f"request_id={request_id}")
     if len(parts) == 1 and body:
         parts.append(str(body))
+    if len(parts) == 1 and fallback_reason:
+        parts.append(fallback_reason)
     return " ".join(parts)
 
 
@@ -789,7 +859,11 @@ class TCKDBUploaderBase:
                 # Server unreachable / timeout / 5xx during a blip. Build
                 # the readiness error now so, if this is the last attempt,
                 # we raise a message consistent with the not-ready path.
-                last_error = _build_readiness_error(exc)
+                last_error = _build_readiness_error(
+                    exc,
+                    base_url=self._config.base_url,
+                    timeout_seconds=self._config.timeout_seconds,
+                )
             else:
                 data = getattr(response, "data", None)
                 ready = _readyz_body_is_ready(data)

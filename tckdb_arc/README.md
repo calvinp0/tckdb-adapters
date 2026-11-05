@@ -317,6 +317,8 @@ Adapter 0.11.0 (core extraction, batch L1; no behaviour change):
   the core config) and the CLI/sweep. Install `tckdb_core` before `tckdb_arc` when working from the checkout
   (`pip install -e tckdb_core -e tckdb_arc`).
 
+Adapter 0.14.2 (readiness failure reason; needs `tckdb-adapters-core` 0.4.2 behaviour): a `/readyz` failure with no HTTP response (connect timeout, refused) now names the exception type chain, host and timeout in the sidecar `last_error`, the `strict=False` warning and the sweep summary; no payload change.
+
 Adapter 0.14.1 (Hessian method; tckdb-schemas 0.154 / client 0.184, the pin of 0.14.0; needs `tckdb-adapters-core` `>=0.4,<0.5`): the freq `hessian_method` ARC states is still
 passed through unchanged (only `analytic`, `finite_difference_gradient`, `finite_difference_energy`, else omitted; never derived from the
 deck). Tests pin that it agrees with the shipped input deck (TCKDB refuses a contradiction, 422

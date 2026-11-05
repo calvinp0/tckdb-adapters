@@ -462,6 +462,43 @@ class TestAdapterPayloadAndUpload(unittest.TestCase):
         self.assertFalse(any(c["path"] != "/readyz" for c in client.calls))
         self.assertIsInstance(adapter._preflight_error, TCKDBReadinessError)
 
+    def test_readiness_timeout_with_empty_text_records_reason_in_sidecar(self):
+        import httpx
+        from tckdb_client.errors import TCKDBConnectionError
+        exc = TCKDBConnectionError("")
+        exc.__cause__ = httpx.ConnectTimeout("")
+        client = _SequencedReadyzClient(
+            readyz_sequence=[exc],
+            response=_StubResponse({"conformer_observation_id": 42}),
+        )
+        adapter = TCKDBAdapter(self.cfg, client_factory=lambda c, k: client)
+        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}), \
+                mock.patch("tckdb_arc.adapter._preflight_sleep"):
+            outcome = adapter.submit_from_output(
+                output_doc=_fake_output_doc(), species_record=_fake_record(),
+            )
+        sc = json.loads(outcome.sidecar_path.read_text())
+        expected = (
+            "TCKDB readiness check failed before upload: "
+            "TCKDBConnectionError caused by ConnectTimeout "
+            f"host=localhost:8000 timeout={self.cfg.timeout_seconds:g}s"
+        )
+        self.assertEqual(sc["last_error"], expected)
+        self.assertEqual(outcome.error, expected)
+
+    def test_readiness_error_reexport_still_accepts_transport_context(self):
+        from tckdb_arc.adapter import _build_readiness_error
+        from tckdb_client.errors import TCKDBConnectionError
+        error = _build_readiness_error(
+            TCKDBConnectionError("refused"),
+            base_url="https://tckdb.example.org", timeout_seconds=30.0,
+        )
+        self.assertEqual(
+            str(error),
+            "TCKDB readiness check failed before upload: "
+            "refused (TCKDBConnectionError) host=tckdb.example.org timeout=30s",
+        )
+
     def test_readiness_exhaustion_logs_recovery_command(self):
         # On genuine exhaustion the user must get a copy-pasteable recovery
         # command telling them the payloads are on disk and how to re-run.

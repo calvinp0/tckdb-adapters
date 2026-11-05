@@ -1,5 +1,6 @@
 """The shared upload pipeline, driven by a minimal producer that knows no ARC."""
 
+import dataclasses
 import json
 import logging
 from types import SimpleNamespace
@@ -7,7 +8,7 @@ from unittest import mock
 
 import pytest
 
-from tckdb_client.errors import TCKDBError
+from tckdb_client.errors import TCKDBConnectionError, TCKDBError
 
 from tckdb_core.config import TCKDBArtifactConfig, TCKDBConfig
 from tckdb_core.constants import PREFLIGHT_MAX_ATTEMPTS
@@ -16,6 +17,7 @@ from tckdb_core.uploader import (
     TCKDBUploaderBase,
     _artifact_batch_idempotency_prefix,
     _extract_calc_refs,
+    _build_readiness_error,
     _extract_tckdb_public_refs,
 )
 
@@ -179,6 +181,114 @@ def test_readiness_is_probed_with_backoff_then_raises(tmp_path, monkeypatch):
     assert sleeps == [1.0, 2.0, 4.0, 8.0]
     with pytest.raises(TCKDBReadinessError):
         adapter._ensure_ready(client)
+
+
+def test_readiness_error_names_type_chain_when_text_is_empty():
+    exc = TCKDBConnectionError("")
+    exc.__cause__ = TimeoutError("")
+    error = _build_readiness_error(
+        exc, base_url="https://tckdb.example.org/api/v1", timeout_seconds=30.0,
+    )
+    assert str(error) == (
+        "TCKDB readiness check failed before upload: "
+        "TCKDBConnectionError caused by TimeoutError "
+        "host=tckdb.example.org timeout=30s"
+    )
+
+
+def test_readiness_error_keeps_exception_text():
+    error = _build_readiness_error(TCKDBConnectionError("Request timed out: timed out"))
+    assert str(error) == (
+        "TCKDB readiness check failed before upload: "
+        "Request timed out: timed out (TCKDBConnectionError)"
+    )
+
+
+def test_readiness_error_collapses_repeated_type_names_and_survives_a_cycle():
+    inner = ConnectionError("")
+    outer = ConnectionError("")
+    outer.__cause__ = inner
+    inner.__context__ = outer
+    assert str(_build_readiness_error(outer)) == (
+        "TCKDB readiness check failed before upload: ConnectionError"
+    )
+
+
+def test_readiness_error_shows_the_port_when_base_url_has_one():
+    error = _build_readiness_error(
+        TCKDBConnectionError(""), base_url="http://localhost:8000/api/v1", timeout_seconds=5,
+    )
+    assert str(error) == (
+        "TCKDB readiness check failed before upload: "
+        "TCKDBConnectionError host=localhost:8000 timeout=5s"
+    )
+
+
+@pytest.mark.parametrize("base_url, timeout", [
+    ("http://[bad", 30.0), ("http://host:notaport", 30.0), ("https://h.example", "soon"),
+])
+def test_readiness_error_survives_malformed_context(base_url, timeout):
+    error = _build_readiness_error(
+        TCKDBConnectionError(""), base_url=base_url, timeout_seconds=timeout,
+    )
+    assert str(error).startswith("TCKDB readiness check failed before upload: TCKDBConnectionError")
+
+
+def test_malformed_base_url_does_not_disable_the_preflight(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEMO_TCKDB_KEY", "k")
+    client = mock.Mock()
+    client.request_json.side_effect = TCKDBConnectionError("")
+    config = dataclasses.replace(_config(tmp_path, preflight=True), base_url="http://[bad")
+    adapter = DemoAdapter(config, client_factory=lambda *a, **k: client)
+    adapter._sleep_between_probes = lambda _delay: None
+    outcome = adapter._upload(_written(adapter), {})
+    assert outcome.status == "failed"
+    assert adapter._preflight_error is not None
+    with pytest.raises(TCKDBReadinessError):
+        adapter._ensure_ready(client)
+
+
+def test_readiness_error_honours_raise_from_none():
+    try:
+        try:
+            raise TimeoutError("")
+        except TimeoutError:
+            raise TCKDBConnectionError("") from None
+    except TCKDBConnectionError as exc:
+        error = _build_readiness_error(exc)
+    assert str(error) == "TCKDB readiness check failed before upload: TCKDBConnectionError"
+
+
+def test_readiness_error_with_http_detail_is_unchanged():
+    exc = TCKDBError("boom")
+    exc.status_code = 503
+    exc.response_json = {"status": "starting", "code": "db_down"}
+    error = _build_readiness_error(exc, base_url="https://h.example", timeout_seconds=5.0)
+    assert str(error) == (
+        "TCKDB readiness check failed before upload: "
+        "status_code=503 status=starting code=db_down"
+    )
+
+
+def test_readyz_failure_without_http_response_reports_cause_host_and_timeout(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEMO_TCKDB_KEY", "k")
+    exc = TCKDBConnectionError("")
+    exc.__cause__ = TimeoutError("")
+    client = mock.Mock()
+    client.request_json.side_effect = exc
+    adapter = DemoAdapter(_config(tmp_path, preflight=True), client_factory=lambda *a, **k: client)
+    adapter._sleep_between_probes = lambda _delay: None
+    outcome = adapter._upload(_written(adapter), {})
+    expected = (
+        "TCKDB readiness check failed before upload: "
+        "TCKDBConnectionError caused by TimeoutError "
+        f"host=example.invalid timeout={adapter._config.timeout_seconds:g}s"
+    )
+    assert outcome.status == "failed"
+    assert outcome.error == expected
+    with pytest.raises(TCKDBReadinessError) as info:
+        adapter._ensure_ready(client)
+    assert str(info.value) == expected
 
 
 def test_the_artifact_skip_reason_names_the_producer(tmp_path):
