@@ -317,10 +317,15 @@ Adapter 0.11.0 (core extraction, batch L1; no behaviour change):
   the core config) and the CLI/sweep. Install `tckdb_core` before `tckdb_arc` when working from the checkout
   (`pip install -e tckdb_core -e tckdb_arc`).
 
+Adapter 0.14.1 (Hessian method; tckdb-schemas 0.154 / client 0.184, the pin of 0.14.0; needs `tckdb-adapters-core` `>=0.4,<0.5`): the freq `hessian_method` ARC states is still
+passed through unchanged (only `analytic`, `finite_difference_gradient`, `finite_difference_energy`, else omitted; never derived from the
+deck). Tests pin that it agrees with the shipped input deck (TCKDB refuses a contradiction, 422
+`hessian_method_contradicts_input_deck`), and that the refusal reaches the sidecar, the log and the sweep output by its code. In strict mode the
+sweep's `failed:` line now carries the server's refusal code. Release table (0.135 to 0.154) in `docs/contract/CURRENT_ARC_INTEGRATION.md`, "tckdb-schemas 0.135 to 0.154".
+
 Adapter 0.14.0 (batch M; needs `tckdb-adapters-core` `>=0.4,<0.5`; details and the release-by-release table in
 `docs/contract/CURRENT_ARC_INTEGRATION.md`, "tckdb-schemas 0.74 to 0.134"). The tested contract line is 0.154 / client 0.184
-(the pin from 0.13.0); the yes/no table covers 0.74 to 0.134, and the 0.135 to 0.154 rows belong to the Hessian branch
-that follows:
+(the pin from 0.13.0); the yes/no table covers 0.74 to 0.134 (0.135 to 0.154 follow in adapter 0.14.1):
 
 - **Hessian parser stamp (0.130).** A Hessian carries `parser: {name, version}` instead of `parser_version`. ARC's token
   `arc-hessian-1` is split at its own trailing version (`arc-hessian`, `1`); a stamp without that shape sends no `parser`.
@@ -376,6 +381,7 @@ Adapter 0.12.0 (core extraction, batch L2; no behaviour change; needs `tckdb-ada
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 
 <!-- tckdb-drift:changelog -->
+- Adapter 0.14.1: Hessian method on the same pin (TCKDB c7c8df8, schemas 0.154.0, client 0.184.0); no new pin.
 - Adapter 0.14.0: batch M rules on the same pin (TCKDB c7c8df8, schemas 0.154.0, client 0.184.0); no new pin.
 - Adapter 0.13.0: tracked TCKDB c7c8df8 (schemas 0.154.0, client 0.184.0). A Hessian now carries `parser: {name, version}` (schemas 0.130) instead of `parser_version`.
 - Adapter 0.10.0: tracked TCKDB 96b71b0 (schemas 0.73.0, client 0.111.0).

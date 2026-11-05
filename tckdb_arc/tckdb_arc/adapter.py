@@ -5366,9 +5366,15 @@ def _freq_result_payload(
     this, update this note with it; until then, treat these raises as
     precautionary rather than evidence of a live bug.
 
-    Uploading the contradiction verbatim would 422 the whole payload
-    (``n_imag_contradicts_minimum`` / ``transition_state_no_imaginary_
-    mode`` / ``transition_state_reaction_coordinate_not_designated``).
+    Uploading the contradiction verbatim would 422 a transition state
+    (``transition_state_no_imaginary_mode`` /
+    ``transition_state_reaction_coordinate_not_designated``). For a
+    minimum the reason is different: since TCKDB 0.142 a minimum whose
+    imaginary modes all lie below ``tau`` is accepted, but the adapter
+    does not copy that tau table, and ARC never marks such a minimum
+    converged, so the path is unreachable on ARC output and the
+    adapter refuses it (``n_imag_contradicts_minimum`` is the
+    pre-0.142 name of the refusal).
     Quietly dropping just the offending field(s) is not a fix: it
     defeats TCKDB's own guard (``evaluate_transition_state_frequency``
     and ``evaluate_species_entry_frequency`` both report nothing when
@@ -5412,10 +5418,12 @@ def _freq_result_payload(
     if n_imag is not None and not is_ts and n_imag > 0:
         raise ValueError(
             f"TCKDB freq: label={label!r} is_ts=False (species_entry_kind="
-            f"'minimum') but ARC reports freq_n_imag={n_imag} — TCKDB "
-            f"0.22.0 refuses a minimum with an imaginary mode "
-            f"(n_imag_contradicts_minimum). Refusing to deposit this "
-            f"record rather than silently drop the disproving evidence. "
+            f"'minimum') but ARC reports freq_n_imag={n_imag}. ARC never "
+            f"marks a minimum converged with an imaginary mode, so this "
+            f"record is not current ARC output; the adapter refuses it "
+            f"rather than silently drop the disproving evidence "
+            f"(n_imag_contradicts_minimum; the adapter does not copy "
+            f"TCKDB's tau table of tolerable soft modes). "
             f"No path inside ARC's own pipeline is known to produce this; "
             f"likely cause is a hand-written, third-party, or non-current-"
             f"ARC output.yml whose is_ts and frequency evidence disagree. "
@@ -5635,9 +5643,11 @@ def _freq_result_payload(
             f"statmech.harmonic_frequencies_cm1 contains {imag_count} "
             f"negative value(s) "
             f"{[m['frequency_cm1'] for m in modes if m['is_imaginary']]} — "
-            f"TCKDB 0.22.0 refuses a minimum with an imaginary mode "
-            f"(n_imag_contradicts_minimum). Refusing to deposit this "
-            f"record rather than silently drop the disproving evidence."
+            f"ARC never marks a minimum converged with an imaginary mode, "
+            f"so this record is not current ARC output. Refusing to deposit "
+            f"this record rather than silently drop the disproving evidence "
+            f"(n_imag_contradicts_minimum; the adapter does not copy "
+            f"TCKDB's tau table of tolerable soft modes)."
         )
     if n_imag is not None and imag_count != n_imag:
         # Cannot reconcile modes with n_imag (e.g. a higher-order saddle

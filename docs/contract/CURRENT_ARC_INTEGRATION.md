@@ -56,6 +56,9 @@ and schema versions; their percentages are not current coverage measurements.
 - **Adapter 0.14.0, batch M (tckdb-schemas 0.134, client 0.167, TCKDB `511253ad`):** the Hessian parser stamp (0.130), geometry/conformer
   agreement (0.121), Hessian and path-point isotopes (0.94), the artifact `calc_` ref (0.116) and the kinetics energy level (0.99). See
   [tckdb-schemas 0.74 to 0.134 (adapter 0.14.0, batch M)](#tckdb-schemas-074-to-0134-adapter-0140-batch-m).
+- **Adapter 0.14.1, Hessian method (tckdb-schemas 0.144 to 0.154, client 0.184, TCKDB `c7c8df8b`):** the Hessian method ARC states is passed through and
+  checked against the shipped input deck, and the new 422 `hessian_method_contradicts_input_deck` reaches the user by its code; releases 0.145 to 0.154 are read and recorded. See
+  [tckdb-schemas 0.135 to 0.154 (adapter 0.14.1, Hessian method)](#tckdb-schemas-0135-to-0154-adapter-0141-hessian-method).
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
@@ -1085,3 +1088,59 @@ Read first: `python -m tckdb_schemas.contract --since 0.73.0` (54 releases) and 
 - **Deviations from the batch brief.** The Hessian `parser.name` is derived from ARC's token (the only stamp that exists), not a
   new name. `tckdb_core.rules.geometry_anchor_refusals` raises (refuses the build) where the batch brief said to pre-check, because
   the adapter builds those keys from one conformer: a finding there is a defect, and dropping a key would hide it.
+
+## tckdb-schemas 0.135 to 0.154 (adapter 0.14.1, Hessian method)
+
+Read first: `python -m tckdb_schemas.contract --since 0.134.0` (20 releases) and `--print`. This section was first written against 0.144
+(TCKDB `f6cfecbf`, client 0.181.0, `tckdb_core` 0.3.1, `tckdb_arc` 0.13.1) and rebased onto the batch M branch, which pins TCKDB `c7c8df8b`
+(schemas 0.154.0, client 0.184.0); it now carries `tckdb_core` 0.4.1 and `tckdb_arc` 0.14.1 and a row for each release up to 0.154. No code change came from 0.145 to 0.154:
+the rows below are read from `python -m tckdb_schemas.contract --since 0.144.0`, and the live gate has not been re-run at `c7c8df8b`.
+Base: the batch M branch (adapter 0.14.0).
+
+### Release by release: does it affect the adapter?
+
+| Release | Item | Affects the adapter? Reason |
+|---|---|---|
+| **0.154** | New warning `output_log_job_not_bound`; a short Gaussian route (under 60 characters) is now closed correctly, so about 197 junk raw rows per ARC payload log are no longer stored | No (server side only). The adapter sends an `output_log` artifact for the calculations that have one, and the route echo it ships is unchanged; the fix removes junk rows TCKDB stored from it and the new warning appears in `response_body.warnings`, which the uploader copies whole into the sidecar. No field, refusal or adapter payload changes. The `--Link1--` multi-job case that earns the warning is not one ARC's per-job logs produce. |
+| 0.153 | `tckdb_schemas.program_default_settings` lists an assumed SCF convergence (`tight`) for Gaussian 09/16 and ORCA optimisations | No. Used when a record is read, never stored; the adapter sends no `scf.convergence` parameter. |
+| 0.152 | Reversed rule: where a deck and the log state the same setting, the log's value is kept; new warning `reported_setting_differs_from_requested`; documented default grid | No (warnings and read-back only). The adapter sends the input deck and the output log as artifacts but no setting parameter other than `freq.hessian_method`, which the deck rule leaves to the Hessian check, so which row wins changes only what is stored. The new warning, like `input_deck_disagrees_with_output_log` (0.150), can appear in the sidecar when ARC's deck and log differ; it refuses nothing. |
+| 0.151 | Warnings `t1_diagnostic_above_closed_shell_threshold`, `spin_contamination_above_conventional_threshold`, `spin_expected_contradicts_multiplicity` | Yes, as warnings only. The adapter attaches a `spin_diagnostic` (`s_squared`, `s_squared_expected` from `sp_spin_diagnostic`) and a `wavefunction_diagnostic` (`t1_diagnostic` from 1.3's `sp_t1_diagnostic`) to every sp when ARC states them, so all three can fire on adapter payloads: `t1_diagnostic_above_closed_shell_threshold` (restricted CC, closed shell, T1 above 0.02), `spin_contamination_above_conventional_threshold` (`s_squared` more than 0.1 from S(S+1) of the declared multiplicity) and `spin_expected_contradicts_multiplicity` (`s_squared_expected` not S(S+1) of the declared multiplicity). None refuses; the calculation is stored as sent. The live gate records which fire (`docs/contract/INTEGRATION_GATE.md`). |
+| 0.150 | Warnings `parameter_disagrees_with_artifact`, `input_deck_disagrees_with_output_log`, `level_of_theory_disagrees_with_artifact`, `output_log_disagrees_with_earlier_output_log`; output logs are read for parameters; `source` on parameter reads | No refusal. These are warnings on an accepted deposit: the adapter's only typed parameter is `freq.hessian_method` (excluded from the first rule), and the adapter's own `level_of_theory_contradicted_by_route` check is the producer-side sibling of the third, so a server warning may now appear next to it. The live gate has not been re-run to see which fire for the corpora. |
+| 0.149 | `electronic_state_label_invalid`, `term_symbol_invalid` (422); canonical spelling of labels and term symbols | No. The adapter sends no electronic states (no `electronic_state_label` or `term_symbol`). |
+| 0.148 | Cyclic allene in a ring of 6 to 8 read from geometry; `Ra`/`Sa` labels accepted for those rings | No. The adapter sends ARC's SMILES and geometry and no `stereo_label`. No fixture SMILES carries an allene or an `@` chirality mark (the only `=[C` hit in the test fixtures is the radical `CHO=[CH]=O` in a comment of `test_adapter.py`, not an allene mark), so `species_stereo_contradiction` cannot fire on them. |
+| 0.147 | A chirality mark on an allene's central atom in a SMILES is read | No. Same reason as 0.148: no fixture SMILES has an allene mark, and the live `stereo_*` corpora are an `E` alkene (`C/C=C/C`, 0.138). A real ARC species with an allene mark would be judged against its geometry by TCKDB. |
+| 0.146 | Warning `scan_point_coordinate_disagrees_with_geometry`; shipped `tckdb_schemas/contract/WARNING_CODES.md` (`--warnings`) | No refusal. The adapter sends each scan point's `coordinate_value` as the angle ARC reports for that point (`sample["angle_degrees"]`), i.e. the coordinate itself, not an offset from `start_value`, so the "relative sweep" pattern the warning names is not what is sent; the live scan corpus was not re-run, so whether it fires is untested. The shipped `WARNING_CODES.md` is the **server's** warning reference; this repository's `docs/contract/WARNING_CODES.md` is a different file, the adapter's producer-side codes generated from `tckdb_arc.warning_codes` and the core registry. |
+| 0.145 | A warning's `message` is TCKDB's sentence for its `code` (`UploadWarning.from_code`); `context.depositor_supplied` | No. The adapter matches on `code` and copies each server warning dict whole into the sidecar; it does not parse messages. |
+| **0.144** | `freq.hessian_method` resolves `tau` through the program's assumed default at validation; input decks read before judging; `hessian_method_contradicts_input_deck` (422); `tckdb_schemas.hessian_method_detection` / `hessian_method_assumption` | **Yes (Hessian rules, in scope).** The adapter keeps passing ARC's `freq_hessian_method` through as the typed parameter (only `analytic`, `finite_difference_gradient`, `finite_difference_energy`, else omitted) and does not read the deck: the method is ARC's to state (ARC PR #1059). What changed is the check: the shipped models refuse a value that the shipped freq `input` deck contradicts, so `test_hessian_method_deck_agreement.py` builds payloads from records whose deck carries a directive (ORCA `NumFreq` to `finite_difference_gradient`, `NumFreq`+`NumGrad` to `finite_difference_energy`, Gaussian `Freq=Numer` to `finite_difference_gradient`) and asserts the sent value is the one `detect_hessian_method` reads; a deck with no directive accepts any token or none; ARC's silence is not filled in from the deck. `test_hessian_method_rejection.py` shows the 422 reaching the sidecar, the log and the sweep output by its code, with no retry without the parameter. See "The Hessian method and the deck" below. A deck posted later through the artifact route is read by parameter extraction only, so a contradiction there is stored, not refused (TCKDB's concern, not the adapter's). |
+| 0.143 | `UploadWarning.context` | No. The uploader copies each server warning dict whole into the sidecar (`_server_warnings`), so `context` is kept without a change. |
+| 0.142 | `minimum_imaginary_modes_below_tau`; a minimum is judged by mode size against `tau` | No. The adapter refuses to build a minimum whose record reports `freq_n_imag > 0` (`n_imag_contradicts_minimum`, before any POST), so the relaxed rule is never exercised. Follow-up (not done): a minimum with soft imaginary modes and a stated Hessian method could now be deposited. |
+| 0.141 | `Ra`/`Sa` allene axis; odd-cumulene `E`/`Z` in `stereo_label` | No. The adapter sends no `stereo_label`; TCKDB derives it. |
+| 0.140 | network channel `kind` derived; `network_channel_kind_mismatch`; `stabilization` removed | No. No network upload. |
+| 0.139 | `network_state_duplicate_participant`, `network_state_duplicate_composition`, `reaction_entry_null_reaction` | No. No network upload; a complete computed-reaction always carries its transition state (partial reactions are sidecar-only), which the null-reaction rule accepts. |
+| 0.138 | `stereo_label` is a descriptor; species identity excludes stereochemistry; `species_stereo_contradiction` (422) when SMILES stereo marks, geometry and label name different configurations | **Yes for the new refusal, no for the label.** The adapter sends no `stereo_label` (see the comment in `_build_computed_species_payload`), but it does send ARC's SMILES and geometry, so the 422 rule applies to every species it uploads. The adapter does not pre-check it. The live gate covers it: a species whose SMILES stereo mark agrees with its geometry is accepted without `species_stereo_contradiction`, and a deliberately contradicting one is refused with that code (see INTEGRATION_GATE.md). |
+| 0.137 | `ModelMember.relative_energy_convention` | No. No ensemble model declaration. |
+| 0.136 | kinetics `bath_gas`; three `kinetics_bath_gas_*` codes | No. The adapter sends no bath gas (ARC's output.yml states none it reads). |
+| 0.135 | `calculation_dependency_cycle` | No. The adapter's `depends_on` edges point from each calculation to its optimisation (or the coarse optimisation, the TS optimisation), a tree with no ring. |
+
+### The Hessian method and the deck
+
+- **Where the value comes from.** `freq.hessian_method` is `record["freq_hessian_method"]` when the calculation is the freq one
+  and the value is one of the three tokens; any other value sends nothing. The adapter never inspects the `input` artifact.
+- **What the server and the published models do.** An explicit value that disagrees with a deck directive (Gaussian
+  `Freq=Numer`/`EnOnly`, ORCA `NumFreq`, `NumFreq`+`NumGrad`, `AnFreq`) is refused 422 `hessian_method_contradicts_input_deck`.
+  The same rule (`tckdb_schemas.hessian_method_assumption.check_calculation_deck_agrees`) runs as a validator of the shipped
+  bundle models, so the conftest hook already reproduces the refusal offline for the computed-species and computed-reaction routes,
+  where the deck travels inline. The conformer and standalone transition-state routes carry no `artifacts`, so no contradiction
+  can arise there.
+- **Contradictions the adapter would forward (reported, not fixed).** If ARC states a value that differs from the directive in
+  the deck it ships (for example `analytic` with an ORCA `NumFreq` deck),
+  the adapter sends both and the server refuses the whole upload. `test_a_value_contradicting_the_deck_is_forwarded_and_the_shipped_models_refuse_it`
+  pins that behaviour; correcting the value is ARC's job (ARC PR #1059).
+- **The refusal reaches the user.** The uploader records the 422 body (`response_body`, `last_error: HTTP 422: {...code...}`) and
+  logs it, and the sweep prints it as a `failed:` line. In strict mode the client error is raised into the sweep with the prose
+  `detail` as its message, so the sweep now appends the server's `code` (`[hessian_method_contradicts_input_deck]`) to the line.
+  The upload is not repeated without the parameter: `_upload` makes one POST, and the adapter's client is built with no retry policy.
+- **A record without a stated method.** From 0.144 TCKDB judges a minimum whose `freq.hessian_method` is not recorded at the
+  program's assumed default (Gaussian and ORCA DFT: analytic, 30 cm-1) instead of 50 cm-1. Pre-1.3 records state none, so the adapter
+  omits it (never derives it), and a small imaginary mode of a minimum that was accepted at 50 can now be refused. The adapter's own
+  refusal of a minimum with `freq_n_imag > 0` makes this moot for minima today.

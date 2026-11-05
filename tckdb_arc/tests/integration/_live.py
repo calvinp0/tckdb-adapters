@@ -277,6 +277,98 @@ def synthetic_species_as_shipped():
     return doc, []
 
 
+# trans-2-butene (dihedral C-C=C-C = 180.0) and its cis counterpart (0.0), RDKit ETKDG + MMFF geometries.
+_BUTENE_TRANS_XYZ = """C 1.94530151 0.07760137 -0.11139993
+C 0.49146346 0.04375807 -0.45446639
+C -0.49146344 -0.04375657 0.45446602
+C -1.94530157 -0.07760140 0.11139995
+H 2.45878937 -0.76612915 -0.58239661
+H 2.11760294 0.02276106 0.96812703
+H 2.39391265 1.00426955 -0.48210723
+H 0.24679252 0.09477651 -1.51329148
+H -0.24679251 -0.09477411 1.51329132
+H -2.45879166 0.76612631 0.58239965
+H -2.39390959 -1.00427154 0.48210456
+H -2.11760368 -0.02276008 -0.96812688"""
+_BUTENE_CIS_XYZ = """C 1.56435786 -0.47685207 0.12094652
+C 0.71257244 0.71442196 -0.17616989
+C -0.62772423 0.78533326 -0.19597906
+C -1.60881536 -0.30896831 0.07404659
+H 2.20553193 -0.26509107 0.98237247
+H 2.20836398 -0.69202499 -0.73751579
+H 0.99100414 -1.37871662 0.34387544
+H 1.26763788 1.62477154 -0.40123437
+H -1.07677897 1.74880803 -0.43588381
+H -1.14062468 -1.26593803 0.31236910
+H -2.24917984 -0.02940503 0.91653054
+H -2.24634515 -0.45633867 -0.80335773"""
+BUTENE_SMILES = "C/C=C/C"  # trans (E)
+
+
+def _butene(label, xyz):
+    """arc_1_2's opt-only CH4 record turned into 2-butene with the given geometry (no thermo: CH4's is not its)."""
+    doc = _load_yaml(ARC_1_2)
+    record = next(s for s in doc["species"] if s["label"] == "CH4")
+    record.update(label=label, smiles=BUTENE_SMILES, xyz=xyz, thermo=None)
+    doc["species"] = [record]
+    return doc, []
+
+
+def stereo_consistent():
+    """SMILES ``C/C=C/C`` (E) with a geometry that is trans: TCKDB 0.138 accepts it with no ``species_stereo_contradiction``."""
+    return _butene("trans-2-butene", _BUTENE_TRANS_XYZ)
+
+
+def stereo_contradicting():
+    """The same SMILES with the cis geometry: TCKDB 0.138 refuses it, 422 ``species_stereo_contradiction``."""
+    return _butene("trans-2-butene-cis-geometry", _BUTENE_CIS_XYZ)
+
+
+# Gaussian freq routes: a bare ``freq`` (no directive) and ``freq=numer`` (finite difference of gradients), each paired with the method ARC states.
+HESSIAN_DECKS = {
+    "sBuOH": ("freq", "analytic"),
+    "nBuOH": ("freq=numer", "finite_difference_gradient"),
+}
+HESSIAN_DECK_PATH = "calcs/Species/{label}/freq/input.gjf"
+
+
+def hessian_deck():
+    """arc_1_3_thermo's two butanols, each shipping a REAL Gaussian freq input whose route agrees with the stated method.
+
+    TCKDB 0.144 reads the deck itself and refuses a stated ``freq.hessian_method`` that the deck contradicts. The
+    adapter forwards ARC's value and the corpus keeps it equal to the deck's reading (a bare ``freq`` states none,
+    ``freq=numer`` states ``finite_difference_gradient``). The staged logs of the fixture are other levels' logs, so
+    their routes and files are dropped as for the atom-map corpora; only the freq deck is real.
+    """
+    doc = _load_yaml(FIXTURES / "arc_1_3_thermo" / "output.yml")
+    doc["species"] = [s for s in doc["species"] if s["label"] in HESSIAN_DECKS]
+    doc["transition_states"], doc["reactions"] = [], []
+    for record in doc["species"]:
+        keyword, method = HESSIAN_DECKS[record["label"]]
+        for key in ("opt_route", "freq_route", "sp_route"):
+            record[key] = None
+        for key in ("opt_log", "opt_input", "freq_log", "sp_log", "sp_input"):
+            record[key] = None
+        record["freq_input"] = HESSIAN_DECK_PATH.format(label=record["label"])
+        record["freq_hessian_method"] = method
+    return doc, []
+
+
+def hessian_deck_files(doc):
+    """The freq decks of :func:`hessian_deck` as ``{relative path: text}`` (a Gaussian input for each species)."""
+    files = {}
+    for record in doc["species"]:
+        keyword, _ = HESSIAN_DECKS[record["label"]]
+        body = "\n".join(line for line in record["xyz"].strip().splitlines())
+        files[record["freq_input"]] = (
+            f"%mem=2GB\n%nprocshared=4\n#P wb97xd/def2tzvp {keyword}\n\n{record['label']} freq\n\n0 1\n{body}\n\n")
+    return files
+
+
+# Corpora whose projects need files on disk beside output.yml: ``{corpus: builder(doc) -> {relative path: text}}``.
+PROJECT_FILES = {"hessian_deck": hessian_deck_files}
+
+
 CORPORA = {
     "golden": golden,
     "golden_kinetics": golden_kinetics,
@@ -290,6 +382,9 @@ CORPORA = {
     "arc_1_3_isotopes": arc_1_3_isotopes,
     "current_arc_h2o": current_arc_h2o,
     "synthetic_reaction": synthetic_reaction,
+    "stereo_consistent": stereo_consistent,
+    "stereo_contradicting": stereo_contradicting,
+    "hessian_deck": hessian_deck,
 }
 
 
@@ -302,6 +397,9 @@ def materialize(root, name):
     (project / "output" / "output.yml").write_text(yaml.safe_dump(doc, sort_keys=False))
     for sidecar in sidecars:
         shutil.copyfile(sidecar, project / "output" / Path(sidecar).name)
+    for relative, text in PROJECT_FILES.get(name, lambda doc: {})(doc).items():
+        (project / relative).parent.mkdir(parents=True, exist_ok=True)
+        (project / relative).write_text(text)
     return project, copy.deepcopy(doc)
 
 

@@ -816,7 +816,12 @@ def test_the_t1_diagnostic_reaches_the_ts_sp_calculation(tmp_path):
 
 @pytest.mark.parametrize("route", ROUTES)
 def test_the_spin_diagnostic_extensions_are_sent(tmp_path, route):
-    built = build(tmp_path, route, _doc(), "sBuOH")
+    doc = _doc()
+    # The fixture's species are closed-shell, whose restricted jobs print no <S**2> (no spin block);
+    # state one here to test the key mapping.
+    _species(doc, "sBuOH")["sp_spin_diagnostic"] = dict(
+        log=None, s_squared=0.7646, s_squared_annihilated=0.7502, s_squared_expected=0.0)
+    built = build(tmp_path, route, doc, "sBuOH")
     (sp,) = built.calcs("sp")
     assert sp["spin_diagnostic"] == {
         "s_squared": pytest.approx(0.7646), "s_squared_expected": pytest.approx(0.0),
@@ -825,8 +830,7 @@ def test_the_spin_diagnostic_extensions_are_sent(tmp_path, route):
 
 def test_a_spin_diagnostic_without_the_extensions_sends_only_s_squared(tmp_path):
     doc = _doc()
-    block = _species(doc, "sBuOH")["sp_spin_diagnostic"]
-    del block["s_squared_expected"], block["s_squared_annihilated"]
+    _species(doc, "sBuOH")["sp_spin_diagnostic"] = dict(log=None, s_squared=0.7646)
     built = build(tmp_path, "computed_species", doc, "sBuOH")
     (sp,) = built.calcs("sp")
     assert sp["spin_diagnostic"] == {"s_squared": pytest.approx(0.7646)}

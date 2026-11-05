@@ -48,6 +48,22 @@ logger = get_logger()
 _UNLABELED_TS = '<unlabeled-ts>'
 
 
+def _failure_text(exc):
+    """``ExceptionType: message`` for a failure line, plus the server's refusal code when it sent one.
+
+    The client's HTTP errors carry the stable ``code`` of a TCKDB refusal (for example
+    ``hessian_method_contradicts_input_deck``) beside the prose ``detail`` that is their message.
+    In strict mode the error is raised to the sweep instead of being recorded as a failed outcome,
+    and the prose alone would hide the code a user branches on.
+    """
+    text = f'{type(exc).__name__}: {exc}'
+    code = getattr(exc, 'code', None)
+    code = getattr(code, 'value', code)
+    if isinstance(code, str) and code and code not in text:
+        text = f'{text} [{code}]'
+    return text
+
+
 def run_upload_sweep(*, adapter, project_directory, tckdb_config):
     """Top-level dispatch: load output.yml, route per upload_mode, print summary.
 
@@ -127,7 +143,7 @@ def _run_species_sweep(*, adapter, output_doc, tckdb_config):
                 )
         except Exception as exc:
             counts['failed'] += 1
-            failures.append((label, f'{type(exc).__name__}: {exc}'))
+            failures.append((label, _failure_text(exc)))
             continue
         if outcome is None:
             continue
@@ -280,7 +296,7 @@ def _run_reaction_sweep(*, adapter, output_doc, tckdb_config):
             )
         except Exception as exc:
             counts['failed'] += 1
-            failures.append((label, f'{type(exc).__name__}: {exc}'))
+            failures.append((label, _failure_text(exc)))
             continue
         if outcome is None:
             continue
@@ -394,7 +410,7 @@ def _run_ts_sweep(*, adapter, output_doc, tckdb_config):
             )
         except Exception as exc:
             counts['failed'] += 1
-            failures.append((label, f'{type(exc).__name__}: {exc}'))
+            failures.append((label, _failure_text(exc)))
             continue
         if outcome is None:
             continue
@@ -472,7 +488,7 @@ def _upload_partial_reaction_species(
             )
         except Exception as exc:
             counts['failed'] = counts.get('failed', 0) + 1
-            failures.append((key, f'{type(exc).__name__}: {exc}'))
+            failures.append((key, _failure_text(exc)))
             continue
         if outcome is None:
             continue
@@ -622,7 +638,7 @@ def _sweep_artifacts_for_species(
         except Exception as exc:
             counts['failed'] = counts.get('failed', 0) + len(artifact_items)
             for kind, _ in artifact_items:
-                failures.append((label, kind, f'{type(exc).__name__}: {exc}'))
+                failures.append((label, kind, _failure_text(exc)))
             continue
         if art_outcomes is None:
             continue

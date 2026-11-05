@@ -300,3 +300,148 @@ def test_sweep_itself_does_not_skip_irc_named_species():
     with redirect_stdout(io.StringIO()):
         _run_species_sweep(adapter=stub, output_doc=doc, tckdb_config=config)
     assert stub.species_calls == ['CH4', 'IRC_TS0_1', 'IRC_TS0_2']
+
+
+# --- the server's refusal code is shown in every failure line the sweep builds from a raised error ---
+
+import enum
+from types import SimpleNamespace
+
+import pytest
+
+from tckdb_arc import sweep as _sweep_module
+from tckdb_arc.sweep import _failure_text, _run_species_sweep, _sweep_artifacts_for_species, _upload_partial_reaction_species
+
+
+class _Code(enum.Enum):
+    """Not a ``str`` subclass: the printed code must come from ``.value``."""
+
+    CONTRADICTION = 'hessian_method_contradicts_input_deck'
+
+
+class _Refused(Exception):
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
+def test_failure_text_appends_a_string_code_once():
+    text = _failure_text(_Refused('the deck disagrees', 'some_code'))
+    assert text == '_Refused: the deck disagrees [some_code]'
+
+
+def test_failure_text_prints_an_enum_codes_value():
+    text = _failure_text(_Refused('the deck disagrees', _Code.CONTRADICTION))
+    assert text.endswith('[hessian_method_contradicts_input_deck]')
+    assert 'Code.CONTRADICTION' not in text
+
+
+def test_failure_text_does_not_duplicate_a_code_the_message_already_carries():
+    # M1: the client's prose sometimes already includes the code ("HTTP 422 code: ..."); do not print it twice.
+    for code in ('hessian_method_contradicts_input_deck', _Code.CONTRADICTION):
+        text = _failure_text(_Refused('HTTP 422 hessian_method_contradicts_input_deck: deck disagrees', code))
+        assert text.count('hessian_method_contradicts_input_deck') == 1
+        assert not text.endswith(']')
+
+
+def test_failure_text_without_a_code_is_the_plain_text():
+    assert _failure_text(ValueError('boom')) == 'ValueError: boom'
+    assert _failure_text(_Refused('boom', None)) == '_Refused: boom'
+    assert _failure_text(_Refused('boom', '')) == '_Refused: boom'
+
+
+class _RaisingAdapter:
+    """Raises a coded refusal from every submit method the sweeps call."""
+
+    def __init__(self, code):
+        self._exc = _Refused('refused by the server', code)
+        self.artifact_calls = 0
+
+    def submit_from_output(self, **kwargs):
+        raise self._exc
+
+    def submit_computed_species_from_output(self, **kwargs):
+        raise self._exc
+
+    def submit_computed_reaction_from_output(self, *, is_partial=False, **kwargs):
+        if is_partial:
+            return _Outcome(status='skipped')
+        raise self._exc
+
+    def submit_computed_ts_from_output(self, **kwargs):
+        raise self._exc
+
+    def submit_artifact_batch_for_calculation(self, **kwargs):
+        raise self._exc
+
+
+_REFUSAL_CODE = 'hessian_method_contradicts_input_deck'
+_SHOWN = f'[{_REFUSAL_CODE}]'
+
+
+def _call_species_site():
+    config = SimpleNamespace(upload_mode='conformer', artifacts=SimpleNamespace(upload=False))
+    doc = {'species': [{'label': 'sBuOH', 'converged': True}]}
+    out = io.StringIO()
+    with redirect_stdout(out):
+        _run_species_sweep(adapter=_RaisingAdapter(_Code.CONTRADICTION), output_doc=doc, tckdb_config=config)
+    return out.getvalue(), 'failed: sBuOH'
+
+
+def _call_reaction_site():
+    out = io.StringIO()
+    with redirect_stdout(out):
+        _run_reaction_sweep(
+            adapter=_RaisingAdapter(_Code.CONTRADICTION), output_doc=_doc_with(ts_converged=True),
+            tckdb_config=_StubConfig())
+    return out.getvalue(), 'failed: CHO + CH4 <=> CH2O + CH3'
+
+
+def _call_ts_site():
+    out = io.StringIO()
+    with redirect_stdout(out):
+        _run_ts_sweep(
+            adapter=_RaisingAdapter(_Code.CONTRADICTION), output_doc=_ts_doc(ts_converged=True),
+            tckdb_config=_TSStubConfig())
+    return out.getvalue(), 'failed: TS0'
+
+
+def _call_partial_reaction_site():
+    out = io.StringIO()
+    with redirect_stdout(out):
+        _run_reaction_sweep(
+            adapter=_RaisingAdapter(_Code.CONTRADICTION), output_doc=_doc_with(ts_converged=False),
+            tckdb_config=_StubConfig())
+    return out.getvalue(), 'failed species: '
+
+
+def _call_artifact_site(monkeypatch):
+    monkeypatch.setattr(_sweep_module, '_resolve_artifact_path', lambda **kwargs: '/does/not/matter.in')
+    counts, failures = {}, []
+    _sweep_artifacts_for_species(
+        adapter=_RaisingAdapter(_Code.CONTRADICTION), output_doc={}, species_record={'label': 'sBuOH'},
+        outcome=SimpleNamespace(primary_calculation={'calculation_ref': 'calc_1', 'type': 'freq'},
+                                additional_calculations=[]),
+        counts=counts, failures=failures, kinds=('input',))
+    assert counts == {'failed': 1}
+    ((label, kind, text),) = failures
+    return f'{label} {kind} {text}', 'sBuOH input'
+
+
+@pytest.mark.parametrize('site', ['species', 'reaction', 'ts', 'partial_reaction', 'artifact'])
+def test_every_sweep_failure_site_shows_the_refusal_code(site, monkeypatch):
+    """Reverting ``_failure_text`` at any one of the five ``except`` sites drops the code from that line."""
+    if site == 'artifact':
+        printed, prefix = _call_artifact_site(monkeypatch)
+    else:
+        printed, prefix = {
+            'species': _call_species_site,
+            'reaction': _call_reaction_site,
+            'ts': _call_ts_site,
+            'partial_reaction': _call_partial_reaction_site,
+        }[site]()
+    lines = [ln for ln in printed.splitlines() if prefix in ln]
+    assert lines  # the partial-reaction site salvages four species, so several lines are expected there
+    for line in lines:
+        assert 'refused by the server' in line
+        assert line.rstrip().endswith(_SHOWN)

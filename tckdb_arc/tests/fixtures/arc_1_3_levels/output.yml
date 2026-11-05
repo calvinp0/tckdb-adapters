@@ -2312,11 +2312,7 @@ species:
   sp_input: null
   sp_log: calcs/Species/sBuOH/opt/output.out
   sp_route: '#P opt=(calcfc) guess=mix uhf/3-21g IOp(2/9=2000) scf=xqc'
-  sp_spin_diagnostic:
-    log: calcs/Species/sBuOH/opt/output.out
-    s_squared: 0.7646
-    s_squared_annihilated: 0.7502
-    s_squared_expected: 0.0
+  sp_spin_diagnostic: null
   sp_t1_diagnostic: null
   statmech:
     arkane_rotors_applied: 2
