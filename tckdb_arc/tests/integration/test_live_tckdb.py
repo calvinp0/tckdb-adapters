@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from tckdb_client.errors import TCKDBValidationError
 
 from tckdb_arc.sweep import run_upload_sweep
 
@@ -333,7 +334,52 @@ def test_current_arc_parser_evidence_hessian_is_stored_verbatim(live_tckdb, tmp_
     assert stored["lower_triangle_hartree_bohr2"] == expected["lower_triangle"]
     assert stored["natoms"] == expected["atom_count"]
     assert stored["source"] == expected["source"]
-    assert stored["parser_version"] == expected["parser_version"]
+    # tckdb-schemas 0.130: the stamp is stored as a name beside a version; ARC's one-token
+    # ``arc-hessian-1`` is the name ``arc-hessian`` and the version ``1``.
+    assert f"{stored['parser_name']}-{stored['parser_version']}" == expected["parser_version"]
+    assert (stored["parser_name"], stored["parser_version"]) == ("arc-hessian", "1")
+
+
+def test_substituted_species_hessian_is_stored_with_its_isotopes(live_tckdb, tmp_path):
+    # tckdb-schemas 0.94 (#680): the Hessian's geometry is checked against the isotopes of the species
+    # entry its calculation is filed under, so an unlabelled one under a deuterated species is refused.
+    outcomes = _submit_species(live_tckdb, tmp_path, "arc_1_3_isotopes")
+    for label, isotopes in (("iC3H7", None), ("iC3H7_d", {4: 2})):
+        response = _uploaded(live_tckdb, outcomes[label])
+        stored = live_tckdb.get(f"/calculations/{_species_calcs(response)['freq']}/hessian")
+        assert stored["natoms"] == 10 and stored["parser_name"] == "arc-hessian"
+        atoms = live_tckdb.get(f"/geometries/{stored['geometry_id']}")["atoms"]
+        masses = {a["atom_index"]: a.get("isotope_mass_number") for a in atoms}
+        assert {i: m for i, m in masses.items() if m} == (isotopes or {})
+
+
+def test_substituted_species_scan_points_are_accepted_labelled_or_without_geometry(live_tckdb, tmp_path):
+    # tckdb-schemas 0.94: a scan point's geometry is checked against the isotopes of the species it is
+    # filed under. The corpus's Gaussian scan states no isotopes for its samples, so the adapter labels
+    # the two frames that keep the record's element order from the record's own list (deuterium on atom 4)
+    # and drops the geometry (not the point) of the third, whose element order differs. The server accepts
+    # the deuterated species' scan only so (an unlabelled point is ``calculation_geometry_isotope_mismatch``).
+    outcomes = _submit_species(live_tckdb, tmp_path, "arc_1_3_isotopes")
+    for label in ("iC3H7", "iC3H7_d"):
+        response = _uploaded(live_tckdb, outcomes[label])
+        assert "scan" in _species_calcs(response), label
+    assert "geometry_isotopes_not_stated" in _codes(outcomes["iC3H7_d"].warnings)
+    assert "geometry_isotopes_not_stated" not in _codes(outcomes["iC3H7"].warnings)
+    payload = json.loads(outcomes["iC3H7_d"].payload_path.read_text())
+    payload = payload.get("payload", payload)
+    scan = next(c for c in payload["conformers"][0]["additional_calculations"] if c["type"] == "scan")
+    assert [p.get("geometry", {}).get("isotopes") for p in scan["scan_result"]["points"]] == [{"4": 2}, {"4": 2}, None]
+
+
+@pytest.mark.xfail(strict=True, raises=TCKDBValidationError,
+                   reason="TCKDB 511253ad: GET /calculations/{id}/scan-points fails its own response model "
+                          "(CalculationScanPointRead.geometry is given the ORM Geometry) once a point has a geometry")
+def test_substituted_species_scan_points_are_read_back_with_their_isotopes(live_tckdb, tmp_path):
+    outcomes = _submit_species(live_tckdb, tmp_path, "arc_1_3_isotopes")
+    scan_id = _species_calcs(_uploaded(live_tckdb, outcomes["iC3H7_d"]))["scan"]
+    points = live_tckdb.get(f"/calculations/{scan_id}/scan-points")
+    atoms = live_tckdb.get(f"/geometries/{points[0]['geometry_id']}")["atoms"]
+    assert {a["atom_index"]: a["isotope_mass_number"] for a in atoms if a.get("isotope_mass_number")} == {4: 2}
 
 
 def test_applied_energy_corrections_link_species_and_sp(live_tckdb, tmp_path):
@@ -386,6 +432,15 @@ def test_reaction_kinetics_participants_and_ts(live_tckdb, tmp_path, name):
     for temperature in (300.0, 1000.0):
         assert kinetics["a"] * (temperature / kinetics.get("t0_k", 1.0)) ** kinetics["n"] == pytest.approx(
             source["A"] * (temperature / source["T0_k"]) ** source["n"], rel=1e-12)
+    # tckdb-schemas 0.99: the level the fit's energies came from is declared (every participant ran at
+    # one level here), is the level of each linked energy calculation, and so the server neither
+    # refuses it (kinetics_energy_level_contradiction) nor warns that none was declared.
+    assert kinetics["energy_level_of_theory_id"] is not None
+    assert "missing_level_of_theory_provenance" not in _codes(outcome.warnings)
+    energy_levels = {live_tckdb.get(f"/calculations/{s['calculation_id']}")["lot_id"]
+                     for s in kinetics["source_calculations"]
+                     if s["role"] in ("reactant_energy", "product_energy", "ts_energy")}
+    assert energy_levels == {kinetics["energy_level_of_theory_id"]}
     roles = Counter(s["role"] for s in kinetics["source_calculations"])
     assert roles["reactant_energy"] == len(reaction["reactant_labels"])
     assert roles["product_energy"] == len(reaction["product_labels"])
@@ -702,11 +757,13 @@ def _conformer_with_artifacts(live, tmp_path, *, uploads=1):
     adapter = make_adapter(live.url, project, "golden", "conformer", artifacts=True)
     response = _uploaded(live, adapter.submit_from_output(output_doc=doc, species_record=record))
     calc_id = response["primary_calculation"]["calculation_id"]
+    # tckdb-schemas 0.116: an artifact target is the calc_ ref; the server refuses an integer id.
+    calc_ref = response["primary_calculation"]["calculation_ref"]
     batches = []
     for _ in range(uploads):
         adapter = make_adapter(live.url, project, "golden", "conformer", artifacts=True)
         batch = adapter.submit_artifact_batch_for_calculation(
-            output_doc=doc, species_record=record, calculation_id=calc_id,
+            output_doc=doc, species_record=record, calculation_id=calc_id, calculation_ref=calc_ref,
             calculation_type="opt",
             artifacts=[("output_log", record["opt_log"]), ("input", record["opt_input"])],
         )

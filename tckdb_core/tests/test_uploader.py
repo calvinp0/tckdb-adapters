@@ -15,7 +15,6 @@ from tckdb_core.outcomes import TCKDBReadinessError
 from tckdb_core.uploader import (
     TCKDBUploaderBase,
     _artifact_batch_idempotency_prefix,
-    _calculation_ref_not_returned_warning,
     _extract_calc_refs,
     _extract_tckdb_public_refs,
 )
@@ -192,11 +191,16 @@ def test_the_artifact_skip_reason_names_the_producer(tmp_path):
     assert outcome.skip_reason == "kind 'checkpoint' is server-accepted but Demo has no upload path yet"
 
 
-def test_the_ref_not_returned_warning_carries_the_producer_tag():
-    warning = _calculation_ref_not_returned_warning(7, producer="demo")
-    assert warning["code"] == "calculation_ref_not_returned"
-    assert warning["field"] == "calculation_ref"
-    assert warning["context"] == {"source": "demo_self_check", "calculation_id": 7}
+def test_an_artifact_is_not_posted_for_a_calculation_without_a_ref(tmp_path):
+    # tckdb-schemas 0.116: the server takes the calc_ ref only and refuses an integer id
+    # (422 invalid_handle), so a response without a ref leaves nothing to address.
+    adapter = DemoAdapter(_config(tmp_path, artifacts=TCKDBArtifactConfig(upload=True, kinds=("output_log",))))
+    outcome = adapter._prepare_artifact_upload(
+        output_doc={}, species_label="CH4", calculation_id=7, calculation_ref=None,
+        kind="output_log", file_path="x", artifact_cfg=adapter._config.artifacts,
+    )
+    assert outcome.status == "skipped" and outcome.calculation_id == 7 and outcome.calculation_ref is None
+    assert outcome.skip_reason.startswith("calculation_ref_not_returned:")
 
 
 def test_the_artifact_batch_prefix_takes_the_producer_namespace():
@@ -276,9 +280,10 @@ def test_no_legacy_sidecar_does_not_skip(tmp_path):
 
 
 def test_the_legacy_sidecar_is_not_consulted_without_a_calculation_ref(tmp_path):
+    # Without a ref nothing is posted (0.116), whatever an old sidecar says.
     adapter, artifact = _legacy_case(tmp_path, sidecar={})
     prepared = adapter._prepare_artifact_upload(
         output_doc={}, species_label="H", calculation_id=7, kind="output_log", file_path=artifact,
         artifact_cfg=TCKDBArtifactConfig(upload=True),
     )
-    assert prepared.__class__.__name__ == "_PreparedArtifactUpload"
+    assert prepared.status == "skipped" and prepared.skip_reason.startswith("calculation_ref_not_returned:")

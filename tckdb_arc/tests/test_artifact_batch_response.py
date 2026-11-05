@@ -195,17 +195,20 @@ def test_a_refused_batch_is_recorded_failed_with_the_server_status(project):
     assert sidecar["request_ids"][-1]["request_id"] == "req-refused"
 
 
-def test_without_a_ref_the_integer_id_is_the_fallback_and_is_warned_about(project, caplog):
-    project_dir, log, _ = project
+def test_without_a_ref_nothing_is_posted_and_the_integer_id_is_not_a_handle(project, caplog):
+    # tckdb-schemas 0.116: an artifact target is the calc_ ref only; an integer id is
+    # refused (422 invalid_handle). A response without a ref leaves nothing to address.
+    project_dir, log, deck = project
     seen = []
     transport = httpx.MockTransport(_handler(seen, warnings={}))
     with caplog.at_level(logging.WARNING, logger="tckdb_arc"):
-        (outcome,) = _submit(_adapter(project_dir, transport), 42, [("output_log", log)], by_ref=False)
-    assert seen[0]["path"].endswith("/calculations/42/artifacts")
-    assert outcome.status == "uploaded" and outcome.calculation_ref is None and outcome.calculation_id == 42
-    assert [w["code"] for w in outcome.warnings] == ["calculation_ref_not_returned"]
-    sidecar = json.loads(outcome.sidecar_path.read_text())
-    assert sidecar["calculation_ref"] is None and sidecar["calculation_id"] == 42
+        outcomes = _submit(_adapter(project_dir, transport), 42,
+                           [("output_log", log), ("input", deck)], by_ref=False)
+    assert seen == []
+    assert [o.status for o in outcomes] == ["skipped", "skipped"]
+    assert all(o.calculation_ref is None and o.calculation_id == 42 for o in outcomes)
+    assert all(o.skip_reason.startswith("calculation_ref_not_returned:") for o in outcomes)
+    assert all(o.sidecar_path is None for o in outcomes)
     assert "calculation_ref_not_returned" in caplog.text
 
 
@@ -264,9 +267,16 @@ def _pre_0_10_upload(project_dir, log):
     """What an adapter before 0.10 left behind: an uploaded ``calc42`` sidecar."""
     seen = []
     (outcome,) = _submit(_adapter(project_dir, httpx.MockTransport(_handler(seen, warnings={}))),
-                         42, [("output_log", log)], by_ref=False)
-    assert outcome.status == "uploaded" and "calc42" in outcome.sidecar_path.name
-    return outcome.sidecar_path
+                         42, [("output_log", log)])
+    assert outcome.status == "uploaded" and "calc_42" in outcome.sidecar_path.name
+    # Re-file it as 0.9 left it: named by the integer id, with no ref. (The current adapter
+    # cannot produce this any more, since a calculation without a ref is not addressed.)
+    data = json.loads(outcome.sidecar_path.read_text())
+    data["calculation_ref"] = None
+    legacy = outcome.sidecar_path.with_name(outcome.sidecar_path.name.replace("calc_42", "calc42"))
+    outcome.sidecar_path.unlink()
+    legacy.write_text(json.dumps(data))
+    return legacy
 
 
 def test_an_artifact_a_pre_0_10_sidecar_records_as_uploaded_is_not_posted_again(project):

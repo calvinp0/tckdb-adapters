@@ -588,8 +588,9 @@ def _sweep_artifacts_for_species(
         # for this species rather than guess at IDs.
         return
     for ref in refs:
-        # Name the calculation by its ``calc_`` ref (TCKDB #599); the integer id is
-        # only a fallback for a response that carries no ref, and warned about.
+        # Name the calculation by its ``calc_`` ref (TCKDB 0.116 takes the ref only). A response
+        # that carries no ref still reaches the adapter, which skips the calculation's artifacts
+        # with ``calculation_ref_not_returned`` as the skip reason (printed below).
         calc_ref = ref.get('calculation_ref')
         calc_id = ref.get('calculation_id')
         calc_type = ref.get('type')
@@ -627,6 +628,8 @@ def _sweep_artifacts_for_species(
             continue
         for art_outcome in art_outcomes:
             counts[art_outcome.status] = counts.get(art_outcome.status, 0) + 1
+            if art_outcome.status == 'skipped' and art_outcome.skip_reason:
+                print(f'  artifact skipped: {label} {art_outcome.kind}: {art_outcome.skip_reason}')
             if art_outcome.status == 'failed':
                 failures.append((label, art_outcome.kind, art_outcome.error or 'unknown error'))
 

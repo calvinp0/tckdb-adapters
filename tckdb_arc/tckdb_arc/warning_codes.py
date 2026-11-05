@@ -81,7 +81,12 @@ class ArcWarning(CodedEnum):
     )
     GEOMETRY_ISOTOPES_NOT_STATED = (
         "geometry_isotopes_not_stated",
-        "A geometry of an isotopically substituted species was left out: no isotope list matches the species' own geometry.",
+        "A geometry of an isotopically substituted species (a conformer, Hessian, scan point or IRC point) was left out: no isotope list matches the species' own geometry.",
+    )
+
+    CALCULATION_INPUT_GEOMETRY_NOT_DECLARED = (
+        "calculation_input_geometry_not_declared",
+        "A freq or sp declared an input geometry other than its conformer's own, which TCKDB refuses, so the declaration was left out.",
     )
 
     # --- thermo: enthalpy declaration and standard state --------------------------------

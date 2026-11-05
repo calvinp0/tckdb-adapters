@@ -403,22 +403,6 @@ def _extract_calc_refs(
 _W_CALCULATION_REF_NOT_RETURNED = CoreWarning.CALCULATION_REF_NOT_RETURNED.value
 
 
-def _calculation_ref_not_returned_warning(
-    calculation_id: int | None, *, producer: str
-) -> dict[str, Any]:
-    """Self-check finding: an artifact target was named by integer id, not ``calc_`` ref."""
-    return AdapterWarning(
-        code=_W_CALCULATION_REF_NOT_RETURNED,
-        message=(
-            f"The upload response carried no calculation_ref for calculation {calculation_id}, "
-            "so its artifacts were posted to the deprecated integer-id path and the "
-            "idempotency key was built from that id."
-        ),
-        field="calculation_ref",
-        context={"calculation_id": calculation_id},
-    ).to_dict(producer)
-
-
 def _extract_submission_refs(response_data: Any) -> tuple[str | None, dict[str, str]]:
     """The response's ``submission_ref`` (``sub_...``) and ``calculation_key_refs`` map.
 
@@ -882,7 +866,14 @@ class TCKDBUploaderBase:
         artifact_cfg: Any,
         calculation_ref: str | None = None,
     ) -> _PreparedArtifactUpload | ArtifactUploadOutcome:
-        handle = calculation_ref if calculation_ref else calculation_id
+        if not calculation_ref:
+            # TCKDB 0.116: a calculation is addressed by its ``calc_`` ref only; an integer id is
+            # refused (422 ``invalid_handle``), so nothing is posted for a response without a ref.
+            return _skip(
+                calculation_id, kind,
+                f"{_W_CALCULATION_REF_NOT_RETURNED}: the upload response carried no calculation_ref; "
+                "TCKDB addresses a calculation's artifacts by its calc_ ref only (0.116)",
+                None, log=self._log)
         # Defense-in-depth: in bundle modes the bundle payload already
         # carries input/output_log artifacts inline under each calc.
         if (
@@ -944,7 +935,7 @@ class TCKDBUploaderBase:
             artifact_kind=kind,
             artifact_sha256=sha256,
         ), namespace=self.IDEMPOTENCY_NAMESPACE)
-        endpoint = ARTIFACTS_ENDPOINT_TEMPLATE.format(calculation_id=handle)
+        endpoint = ARTIFACTS_ENDPOINT_TEMPLATE.format(calculation_id=calculation_ref)
         written_artifact = self._writer.write_artifact_sidecar(
             species_label=species_label,
             calculation_id=calculation_id,
@@ -1028,8 +1019,6 @@ class TCKDBUploaderBase:
             _append_request_id(sc, "artifact_upload", result)
             sc.idempotency_replayed = bool(getattr(response, "idempotency_replayed", False))
             sc.last_error = None
-            if not item.calculation_ref:
-                sc.warnings = [*sc.warnings, _calculation_ref_not_returned_warning(item.calculation_id, producer=self.PRODUCER_TAG)]
             self._writer.update_artifact_sidecar(item.written.sidecar_path, sc)
             self._log.info(
                 "TCKDB artifact batch upload succeeded: calc=%s kind=%s key=%s",

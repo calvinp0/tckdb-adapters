@@ -745,6 +745,7 @@ class TestArtifactUpload(unittest.TestCase):
                 output_doc=_fake_output_doc(),
                 species_record=_fake_record(),
                 calculation_id=calculation_id,
+                calculation_ref=f"calc_{calculation_id}",
                 calculation_type=calculation_type,
                 file_path=log_path or self.log_path,
                 kind=kind,
@@ -812,7 +813,7 @@ class TestArtifactUpload(unittest.TestCase):
         # One POST to the calculation's artifacts route, sent through the
         # client's request_json (which returns status, headers and body).
         self.assertEqual(call["method"], "POST")
-        self.assertEqual(call["path"], "/calculations/42/artifacts")
+        self.assertEqual(call["path"], "/calculations/calc_42/artifacts")
         self.assertTrue(call["idempotency_key"].startswith("arc:proj-A:ethanol:artifact:"))
         self.assertTrue(call["idempotency_key"].endswith(":artifact-batch"))
         artifacts = call["json"]["artifacts"]
@@ -893,7 +894,7 @@ class TestArtifactUpload(unittest.TestCase):
         self.assertEqual(outcome.status, "uploaded")
         sc = json.loads(outcome.sidecar_path.read_text())
         self.assertTrue(sc["idempotency_replayed"])
-        self.assertEqual(sc["public_refs"]["calculation_refs"], ["calc_replayed"])
+        self.assertEqual(sc["public_refs"]["calculation_refs"], ["calc_42", "calc_replayed"])
         self.assertEqual(sc["public_refs"]["artifact_refs"], ["artifact_replayed"])
         self.assertEqual(sc["request_ids"][-1]["request_id"], "req-replayed")
 
@@ -925,7 +926,7 @@ class TestArtifactUpload(unittest.TestCase):
         adapter = self._adapter(client)
         outcome = self._submit(adapter, calculation_id=314)
         sc = json.loads(outcome.sidecar_path.read_text())
-        self.assertEqual(sc["endpoint"], ARTIFACTS_ENDPOINT_TEMPLATE.format(calculation_id=314))
+        self.assertEqual(sc["endpoint"], ARTIFACTS_ENDPOINT_TEMPLATE.format(calculation_id="calc_314"))
         self.assertEqual(outcome.status, "uploaded")
 
     def test_input_kind_uploads_with_correct_marshalling(self):
@@ -979,6 +980,7 @@ class TestArtifactUpload(unittest.TestCase):
                 output_doc=_fake_output_doc(),
                 species_record=_fake_record(),
                 calculation_id=42,
+                calculation_ref="calc_42",
                 calculation_type="opt",
                 artifacts=[
                     ("output_log", self.log_path),
@@ -989,7 +991,7 @@ class TestArtifactUpload(unittest.TestCase):
         calls = _upload_calls(client)
         self.assertEqual(len(calls), 1)
         call = calls[0]
-        self.assertEqual(call["path"], "/calculations/42/artifacts")
+        self.assertEqual(call["path"], "/calculations/calc_42/artifacts")
         self.assertEqual([a["kind"] for a in call["json"]["artifacts"]], ["output_log", "input"])
         sidecars = [json.loads(o.sidecar_path.read_text()) for o in outcomes]
         self.assertEqual({sc["kind"] for sc in sidecars}, {"output_log", "input"})

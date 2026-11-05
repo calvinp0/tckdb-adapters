@@ -39,8 +39,8 @@ class CoreWarning(CodedEnum):
 
     CALCULATION_REF_NOT_RETURNED = (
         "calculation_ref_not_returned",
-        "The upload response carried no `calculation_ref`, so a calculation's artifacts were "
-        "posted to the deprecated integer-id path and the idempotency key was built from that id.",
+        "The upload response carried no `calculation_ref`, so a calculation's artifacts were not "
+        "uploaded: TCKDB (0.116) addresses a calculation by its `calc_` ref only and refuses an integer id.",
     )
 
 
