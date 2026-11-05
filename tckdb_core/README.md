@@ -100,6 +100,10 @@ underscore. Underscore-prefixed names (for example `uploader._skip`, `payload_wr
 import them from `tckdb_core`, never through a producer package (`tckdb_arc` no longer re-exports
 them, and forwards the public names of its old modules with a `DeprecationWarning`).
 
+## What changed in 0.4.3
+
+Tracks tckdb-schemas 0.156 / client 0.186 (TCKDB 6a91b38); no behaviour change in this package.
+
 ## What changed in 0.4.2
 
 A `/readyz` preflight that fails without an HTTP response (connect timeout, connection refused) now says why: the exception text, its type chain, the `base_url` host and the request timeout, instead of nothing after the colon; HTTP-level messages are unchanged.

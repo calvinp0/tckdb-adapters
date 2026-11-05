@@ -4,7 +4,7 @@ Convert ARC `output/output.yml` and portable parser evidence into TCKDB
 species, reaction, and transition-state uploads. Payloads and upload metadata
 are written locally before any network request, allowing inspection and replay.
 
-Requires Python 3.11+, `tckdb-client` 0.184.x and `tckdb-schemas` 0.154.x.
+Requires Python 3.11+, `tckdb-client` 0.186.x and `tckdb-schemas` 0.156.x.
 For development with sibling checkouts:
 
 ```bash
@@ -317,6 +317,8 @@ Adapter 0.11.0 (core extraction, batch L1; no behaviour change):
   the core config) and the CLI/sweep. Install `tckdb_core` before `tckdb_arc` when working from the checkout
   (`pip install -e tckdb_core -e tckdb_arc`).
 
+Adapter 0.14.3 (tracks tckdb-schemas 0.156 / client 0.186, TCKDB 6a91b38; needs `tckdb-adapters-core` 0.4.3): no payload or behaviour change; 0.155 is packaging only and 0.156 changes the whitespace set trimmed from electronic-state labels, which the adapter never sends.
+
 Adapter 0.14.2 (readiness failure reason; needs `tckdb-adapters-core` 0.4.2 behaviour): a `/readyz` failure with no HTTP response (connect timeout, refused) now names the exception type chain, host and timeout in the sidecar `last_error`, the `strict=False` warning and the sweep summary; no payload change.
 
 Adapter 0.14.1 (Hessian method; tckdb-schemas 0.154 / client 0.184, the pin of 0.14.0; needs `tckdb-adapters-core` `>=0.4,<0.5`): the freq `hessian_method` ARC states is still
@@ -383,6 +385,7 @@ Adapter 0.12.0 (core extraction, batch L2; no behaviour change; needs `tckdb-ada
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 
 <!-- tckdb-drift:changelog -->
+- Adapter 0.14.3: tracked TCKDB 6a91b38 (schemas 0.156.0, client 0.186.0).
 - Adapter 0.14.1: Hessian method on the same pin (TCKDB c7c8df8, schemas 0.154.0, client 0.184.0); no new pin.
 - Adapter 0.14.0: batch M rules on the same pin (TCKDB c7c8df8, schemas 0.154.0, client 0.184.0); no new pin.
 - Adapter 0.13.0: tracked TCKDB c7c8df8 (schemas 0.154.0, client 0.184.0). A Hessian now carries `parser: {name, version}` (schemas 0.130) instead of `parser_version`.
