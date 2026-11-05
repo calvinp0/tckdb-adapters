@@ -2893,7 +2893,8 @@ class TestComputedSpeciesBundle(unittest.TestCase):
         self.assertIn("hessian", freq)
         hessian = freq["hessian"]
         self.assertEqual(hessian["source"], "parsed_log")
-        self.assertEqual(hessian["parser_version"], "arc-hessian-1")
+        self.assertEqual(hessian["parser"], {"name": "arc-hessian", "version": "1"})
+        self.assertNotIn("parser_version", hessian)
         triangle = hessian["lower_triangle_hartree_bohr2"]
         self.assertEqual(len(triangle), 21)  # 2 atoms -> 3N=6 -> 6*7/2
         # Native hartree/bohr²: N-H stretch diagonal ~0.39, never ~1e3 (SI J/m²).
@@ -9872,7 +9873,8 @@ class TestPhase3EvidenceParity(unittest.TestCase):
                 sidecar = {
                     "geometry": {"xyz_text": evidence_value["geometry_xyz_text"]},
                     "lower_triangle_hartree_bohr2": triangle,
-                    "source": "parsed_log", "parser_version": "arc-hessian-1",
+                    "source": "parsed_log",
+                    "parser": {"name": "arc-hessian", "version": "1"},
                 }
                 self.assertEqual(fallback, sidecar)
                 self.assertEqual(self._canonical(fallback), self._canonical(sidecar))
