@@ -277,6 +277,47 @@ class TestSweepAccountsFreqNImagContradictionAsFailed(unittest.TestCase):
         self.assertEqual(list(Path(self.tmp).rglob("*.json")), [])
 
 
+class TestSweepShowsReadinessFailureReason(unittest.TestCase):
+    """A /readyz connect timeout reaches the user-facing sweep line with its reason."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="arc-tckdb-sweep-readyz-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def test_readiness_timeout_line_names_types_host_and_timeout(self):
+        import httpx
+        from tckdb_client.errors import TCKDBConnectionError
+        from test_adapter import _SequencedReadyzClient, _fake_output_doc, _fake_record
+        from tckdb_arc.sweep import _run_species_sweep
+
+        exc = TCKDBConnectionError("")
+        exc.__cause__ = httpx.ConnectTimeout("")
+        cfg = TCKDBConfig(
+            enabled=True,
+            base_url="http://localhost:8000/api/v1",
+            payload_dir=self.tmp,
+            api_key_env="X_TCKDB_API_KEY",
+            project_label="proj-A",
+            strict=False,
+        )
+        client = _SequencedReadyzClient(
+            readyz_sequence=[exc], response=_StubResponse({"conformer_observation_id": 42}),
+        )
+        adapter = TCKDBAdapter(cfg, client_factory=lambda c, k: client)
+        doc = _fake_output_doc()
+        doc["species"] = [_fake_record()]
+        with mock.patch.dict(os.environ, {"X_TCKDB_API_KEY": "tck_x"}), \
+                mock.patch("tckdb_arc.adapter._preflight_sleep"), \
+                redirect_stdout(io.StringIO()) as out:
+            _run_species_sweep(adapter=adapter, output_doc=doc, tckdb_config=cfg)
+        self.assertIn(
+            "  failed: ethanol \u2014 TCKDB readiness check failed before upload: "
+            "TCKDBConnectionError caused by ConnectTimeout "
+            f"host=localhost:8000 timeout={cfg.timeout_seconds:g}s",
+            out.getvalue(),
+        )
+
+
 if __name__ == '__main__':
     unittest.main()
 

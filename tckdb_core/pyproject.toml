@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tckdb-adapters-core"
-version = "0.4.1"
+version = "0.4.2"
 description = "Producer-agnostic core of the TCKDB upload adapters (payload writer, upload pipeline, idempotency, level identity, shared numerics and rules, contract test kit)."
 requires-python = ">=3.11"
 readme = "README.md"
