@@ -431,25 +431,28 @@ def _stored_level_by_id(live, lot_id):
     return {k: v for k, v in record.items() if k in ("method", "basis", *_QUALIFIER_FIELDS)}
 
 
-def test_levels_with_arc_args_are_accepted_and_store_no_qualifier(live_tckdb, tmp_path):
+def test_levels_with_arc_args_are_accepted_and_store_only_the_stated_qualifiers(live_tckdb, tmp_path):
     # tckdb-schemas 0.158 removed ``level_of_theory.keywords``: a payload carrying it is a 422. The corpus's levels all
-    # carry ARC ``args`` (the shape no other corpus had). The adapter sends none of the typed qualifiers yet (ARC's
-    # ``args`` do not reliably describe the deck a job ran with), so no stored level states one and none stores
+    # carry ARC ``args`` (the shape no other corpus had). The opt and freq levels (Gaussian ``int=dkh2`` and
+    # ``scf=(maxcycle=200)``) store ``relativistic_hamiltonian`` dkh2 and nothing from the SCF option; the sp level
+    # (ORCA ``tightpno rijcosx``) stores ``pno_truncation`` tight and ``ri_approximation`` rijcosx. None stores
     # ``keywords``. Each route is exercised.
     outcomes = _submit_species(live_tckdb, tmp_path, "level_args")
     response = _uploaded(live_tckdb, outcomes["H2"])
     calcs = _species_calcs(response)
-    for kind in ("opt", "freq", "sp"):
+    for kind in ("opt", "freq"):
         level = _stored_level(live_tckdb, calcs[kind])
-        assert not {k for k in _QUALIFIER_FIELDS if level.get(k)}, (kind, level)
-    assert _stored_level(live_tckdb, calcs["opt"])["method"] == "wb97xd"
-    assert _stored_level(live_tckdb, calcs["sp"])["method"] == "dlpno-ccsd(t)"
+        assert level["relativistic_hamiltonian"] == "dkh2", (kind, level)
+        assert level["method"] == "wb97xd"
+        assert not {k for k in ("pno_truncation", "ri_approximation", "core_treatment", "keywords") if level.get(k)}
+    sp = _stored_level(live_tckdb, calcs["sp"])
+    assert (sp["method"], sp["pno_truncation"], sp["ri_approximation"]) == ("dlpno-ccsd(t)", "tight", "rijcosx")
+    assert not {k for k in ("relativistic_hamiltonian", "core_treatment", "keywords") if sp.get(k)}
     # the route that carries the same levels in a bundle, and the standalone TS
     _doc, _outcome, reaction = _submit_reaction(live_tckdb, tmp_path, "level_args")
     kinetics = live_tckdb.get(f"/kinetics/{reaction['kinetics_ids'][0]}")
     assert kinetics["energy_level_of_theory_id"] is not None
-    stored = _stored_level_by_id(live_tckdb, kinetics["energy_level_of_theory_id"])
-    assert not {k for k in _QUALIFIER_FIELDS if stored.get(k)}, stored
+    assert _stored_level_by_id(live_tckdb, kinetics["energy_level_of_theory_id"])["pno_truncation"] == "tight"
     project, doc = materialize(tmp_path / "ts", "level_args")
     adapter = make_adapter(live_tckdb.url, project, "level_args", "computed_ts")
     ts = adapter.submit_computed_ts_from_output(

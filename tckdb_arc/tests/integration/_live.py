@@ -83,7 +83,8 @@ def level_args():
 
     TCKDB 0.158 refuses ``level_of_theory.keywords``; the adapter used to flatten ``args`` into it. The opt and
     freq levels are Gaussian (``int=dkh2``, ``scf=(maxcycle=200)``), the sp level and a correction scheme's are
-    ORCA (``tightpno rijcosx``). The adapter sends no typed qualifier from them yet, so the stored levels state none.
+    ORCA (``tightpno rijcosx``): the stored level states ``dkh2``, or ``tight`` and ``rijcosx``, and nothing from
+    the SCF option.
     """
     from _level_args import level_args_corpus
 
