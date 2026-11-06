@@ -4,7 +4,7 @@ Convert ARC `output/output.yml` and portable parser evidence into TCKDB
 species, reaction, and transition-state uploads. Payloads and upload metadata
 are written locally before any network request, allowing inspection and replay.
 
-Requires Python 3.11+, `tckdb-client` 0.186.x and `tckdb-schemas` 0.156.x.
+Requires Python 3.11+, `tckdb-client` 0.187.x and `tckdb-schemas` 0.158.x.
 For development with sibling checkouts:
 
 ```bash
@@ -298,7 +298,7 @@ Adapter 0.10.0 (batch K, tckdb-schemas 0.73 / client 0.111; details in
   Cp (from statmech) are kept. Only output 1.3 records carry `ess_versions.composite`, so the guard cannot fire on an
   earlier document.
 - **Identity replica.** `tckdb_arc.level_rules` replicates TCKDB's level-of-theory hash (aliases, folded dispersion,
-  `core_treatment` only when stated). Run `test_hash_matches_the_backend` with `TCKDB_BACKEND_PATH` set to a TCKDB
+  `core_treatment` only when stated). Run `test_hash_matches_the_backend_payload_rules` (and, in the TCKDB environment, `test_hash_matches_the_real_backend_function`; see `tckdb_core/README.md`) with `TCKDB_BACKEND_PATH` set to a TCKDB
   `backend/` (CI does).
 - Not in this release: the `composite` calculation type (waits on ARC B18), transport, core extraction.
 
@@ -316,6 +316,8 @@ Adapter 0.11.0 (core extraction, batch L1; no behaviour change):
 - ARC-specific code stays here: reading `output.yml`, the payload builders, `TCKDBConfig.from_dict` (a thin subclass of
   the core config) and the CLI/sweep. Install `tckdb_core` before `tckdb_arc` when working from the checkout
   (`pip install -e tckdb_core -e tckdb_arc`).
+
+Adapter 0.15.0 (tracks tckdb-schemas 0.158 / client 0.187, TCKDB 531f823; needs `tckdb-adapters-core` `>=0.5,<0.6`): **no level of theory carries `keywords` any more.** TCKDB 0.157/0.158 (#865, ADR 0024) removed `LevelOfTheoryRef.keywords`; its upload schemas forbid unknown fields, so a level with `keywords`, even `null`, is refused 422. The adapter used to flatten ARC's `args` into that field (`_arc_args_to_keywords`, deleted); it now sends nothing for them, on every projection (per-job, scheme, correction-scheme, kinetics/thermo energy and header levels). The ESS options live in the input deck and log, which TCKDB reads as calculation parameters; the route line stays a parameter (`_route_parameters`). The hash replica in `tckdb_core` follows (core 0.5.0). The typed qualifiers TCKDB added (`relativistic_hamiltonian`, `pno_truncation`, `ri_approximation`, `core_treatment: window`) are **not sent yet**: ARC's `args` do not reliably describe the deck a job ran with (`docs/contract/CURRENT_ARC_INTEGRATION.md`, "Level-of-theory qualifiers").
 
 Adapter 0.14.3 (tracks tckdb-schemas 0.156 / client 0.186, TCKDB 6a91b38; needs `tckdb-adapters-core` 0.4.3): no payload or behaviour change; 0.155 is packaging only and 0.156 changes the whitespace set trimmed from electronic-state labels, which the adapter never sends.
 
@@ -385,6 +387,7 @@ Adapter 0.12.0 (core extraction, batch L2; no behaviour change; needs `tckdb-ada
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 
 <!-- tckdb-drift:changelog -->
+- Adapter 0.15.0: tracked TCKDB 531f823 (schemas 0.158.0, client 0.187.0).
 - Adapter 0.14.3: tracked TCKDB 6a91b38 (schemas 0.156.0, client 0.186.0).
 - Adapter 0.14.1: Hessian method on the same pin (TCKDB c7c8df8, schemas 0.154.0, client 0.184.0); no new pin.
 - Adapter 0.14.0: batch M rules on the same pin (TCKDB c7c8df8, schemas 0.154.0, client 0.184.0); no new pin.

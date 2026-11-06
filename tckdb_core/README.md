@@ -100,6 +100,27 @@ underscore. Underscore-prefixed names (for example `uploader._skip`, `payload_wr
 import them from `tckdb_core`, never through a producer package (`tckdb_arc` no longer re-exports
 them, and forwards the public names of its old modules with a `DeprecationWarning`).
 
+## What changed in 0.5.0
+
+Tracks tckdb-schemas 0.158 / client 0.187 (TCKDB 531f823, #865 typed method qualifiers). The level-identity replica (`level_rules`) follows TCKDB's hash: the `keywords` key is gone (free-text keywords left `LevelOfTheoryRef`, so every level hashes differently from before, as on the server), and `relativistic_hamiltonian`, `pno_truncation` and `ri_approximation` join the payload only when stated, as `core_treatment` does (which now also accepts `window`); an explicit `none` is a stated value. `tckdb_core.testing.backend_import.backend_level_hash` builds the same payload. A level that states no qualifier hashes as the server does (pinned to TCKDB's own literals in `tests/test_level_rules.py`).
+
+### Checking the hash against TCKDB's own function
+
+`tckdb_arc/tests/test_energy_level_declaration.py` has two backend parity tests, and they are not the same check:
+
+* `test_hash_matches_the_backend_payload_rules` runs wherever `TCKDB_BACKEND_PATH` names a TCKDB `backend/`. Without the backend's web dependencies (`arc_env` has no fastapi) it rebuilds the payload from the backend's own `app.chemistry` identity keys, so it is the replica against the replica for the final hashing step.
+* `test_hash_matches_the_real_backend_function` imports `app.services.calculation_resolution._level_of_theory_hash` and compares the replica against it over the corpus and a few thousand method x basis x dispersion x solvent x spin x core x qualifier combinations. It never falls back: it **skips**, naming the reason, when that import fails. Run it in the TCKDB environment:
+
+```bash
+TCKDB=/path/to/TCKDB_v2   # a checkout at the pinned revision (tckdb-pin.toml)
+cd tckdb_arc
+TCKDB_BACKEND_PATH=$TCKDB/backend TCKDB_REQUIRE_BACKEND=1 \
+PYTHONPATH=$TCKDB/backend:$TCKDB/schemas/python/tckdb-schemas \
+  conda run -n tckdb_env python -m pytest tests/test_energy_level_declaration.py -k hash_matches -rs
+```
+
+Both must pass (not skip) before a pin bump is trusted.
+
 ## What changed in 0.4.3
 
 Tracks tckdb-schemas 0.156 / client 0.186 (TCKDB 6a91b38); no behaviour change in this package.

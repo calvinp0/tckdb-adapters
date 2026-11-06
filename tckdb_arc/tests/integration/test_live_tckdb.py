@@ -25,9 +25,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from tckdb_client.errors import TCKDBValidationError
 
 from tckdb_arc.sweep import run_upload_sweep
+from tckdb_core.level_rules import level_hash
 
 from _live import (
     CURRENT_ARC,
@@ -373,10 +373,9 @@ def test_substituted_species_scan_points_are_accepted_labelled_or_without_geomet
     assert [p.get("geometry", {}).get("isotopes") for p in scan["scan_result"]["points"]] == [{"4": 2}, {"4": 2}, None]
 
 
-@pytest.mark.xfail(strict=True, raises=TCKDBValidationError,
-                   reason="TCKDB 511253ad and f6cfecbf: GET /calculations/{id}/scan-points fails its own response model "
-                          "(CalculationScanPointRead.geometry is given the ORM Geometry) once a point has a geometry")
 def test_substituted_species_scan_points_are_read_back_with_their_isotopes(live_tckdb, tmp_path):
+    # Was a strict xfail while GET /calculations/{id}/scan-points failed its own response model once a point
+    # had a geometry (TCKDB 511253ad to c7c8df8b); #866 fixed the read.
     outcomes = _submit_species(live_tckdb, tmp_path, "arc_1_3_isotopes")
     scan_id = _species_calcs(_uploaded(live_tckdb, outcomes["iC3H7_d"]))["scan"]
     points = live_tckdb.get(f"/calculations/{scan_id}/scan-points")
@@ -413,6 +412,49 @@ def _submit_reaction(live, tmp_path, name):
     outcome = adapter.submit_computed_reaction_from_output(
         output_doc=doc, reaction_record=doc["reactions"][0])
     return doc, outcome, _uploaded(live, outcome)
+
+
+_QUALIFIER_FIELDS = ("relativistic_hamiltonian", "pno_truncation", "ri_approximation", "core_treatment")
+
+
+def _stored_level(live, calculation_id):
+    return _stored_level_by_id(live, live.get(f"/calculations/{calculation_id}")["lot_id"])
+
+
+def _stored_level_by_id(live, lot_id):
+    record = live.get(f"/scientific/level-of-theories/{lot_id}")["record"]["level_of_theory"]
+    assert "keywords" not in record
+    # the stored hash is the one the adapter's replica computes from the stored fields (live parity)
+    fields = {k: v for k, v in record.items() if v is not None and k in (
+        "method", "basis", "aux_basis", "cabs_basis", "dispersion", "solvent", "solvent_model", *_QUALIFIER_FIELDS)}
+    assert level_hash(fields) == record["lot_hash"], fields
+    return {k: v for k, v in record.items() if k in ("method", "basis", *_QUALIFIER_FIELDS)}
+
+
+def test_levels_with_arc_args_are_accepted_and_store_no_qualifier(live_tckdb, tmp_path):
+    # tckdb-schemas 0.158 removed ``level_of_theory.keywords``: a payload carrying it is a 422. The corpus's levels all
+    # carry ARC ``args`` (the shape no other corpus had). The adapter sends none of the typed qualifiers yet (ARC's
+    # ``args`` do not reliably describe the deck a job ran with), so no stored level states one and none stores
+    # ``keywords``. Each route is exercised.
+    outcomes = _submit_species(live_tckdb, tmp_path, "level_args")
+    response = _uploaded(live_tckdb, outcomes["H2"])
+    calcs = _species_calcs(response)
+    for kind in ("opt", "freq", "sp"):
+        level = _stored_level(live_tckdb, calcs[kind])
+        assert not {k for k in _QUALIFIER_FIELDS if level.get(k)}, (kind, level)
+    assert _stored_level(live_tckdb, calcs["opt"])["method"] == "wb97xd"
+    assert _stored_level(live_tckdb, calcs["sp"])["method"] == "dlpno-ccsd(t)"
+    # the route that carries the same levels in a bundle, and the standalone TS
+    _doc, _outcome, reaction = _submit_reaction(live_tckdb, tmp_path, "level_args")
+    kinetics = live_tckdb.get(f"/kinetics/{reaction['kinetics_ids'][0]}")
+    assert kinetics["energy_level_of_theory_id"] is not None
+    stored = _stored_level_by_id(live_tckdb, kinetics["energy_level_of_theory_id"])
+    assert not {k for k in _QUALIFIER_FIELDS if stored.get(k)}, stored
+    project, doc = materialize(tmp_path / "ts", "level_args")
+    adapter = make_adapter(live_tckdb.url, project, "level_args", "computed_ts")
+    ts = adapter.submit_computed_ts_from_output(
+        output_doc=doc, ts_record=doc["transition_states"][0], reaction_record=doc["reactions"][0])
+    _uploaded(live_tckdb, ts)
 
 
 @pytest.mark.parametrize("name", ["golden_kinetics", "synthetic_reaction"])
@@ -931,6 +973,8 @@ def test_declared_energy_level_agrees_with_the_sp_it_links(live_tckdb, tmp_path,
 REPLAY_MATRIX = [
     ("golden", "computed_species"), ("golden", "conformer"),
     ("golden", "computed_reaction"), ("golden", "computed_ts"),
+    ("level_args", "computed_species"), ("level_args", "conformer"),
+    ("level_args", "computed_reaction"), ("level_args", "computed_ts"),
     ("arc_1_2", "computed_species"), ("arc_1_2", "conformer"),
     ("golden_ts_evidence", "computed_reaction"), ("golden_ts_evidence", "computed_ts"),
     ("synthetic_reaction", "computed_reaction"), ("synthetic_reaction", "computed_ts"),

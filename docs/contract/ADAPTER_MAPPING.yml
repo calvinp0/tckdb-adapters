@@ -266,8 +266,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:4970
   maps_from: 'output.yml: {opt,freq,sp,scan}_level.args'
   transform_kind: derived
-  transform: 'ARC nested args mapping flattened by _arc_args_to_keywords (adapter.py:4910) into ''category:key=<json>; ...'' sorted by category then key; None values dropped. ARC method_type/year/solvation_scheme_level/compatible_ess/software_version dropped. [route: selected conformer fine opt (adapter.py:1163); screened alt conformer bare opt (adapter.py:1370, no opt_result, parameters_json screened marker)]'
-  condition: args non-empty mapping
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted. [route: selected conformer fine opt (adapter.py:1163); screened alt conformer bare opt (adapter.py:1370, no opt_result, parameters_json screened marker)]'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:1282
@@ -895,8 +895,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:4970
   maps_from: 'output.yml: {opt,freq,sp,scan}_level.args'
   transform_kind: derived
-  transform: 'ARC nested args mapping flattened by _arc_args_to_keywords (adapter.py:4910) into ''category:key=<json>; ...'' sorted by category then key; None values dropped. ARC method_type/year/solvation_scheme_level/compatible_ess/software_version dropped. [route: opt_coarse (1150), freq (1190), sp (1213), scan per rotor (1256); screened alt conformers carry []]'
-  condition: args non-empty mapping
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted. [route: opt_coarse (1150), freq (1190), sp (1213), scan per rotor (1256); screened alt conformers carry []]'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:1283
@@ -2289,8 +2289,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:4970
   maps_from: 'output.yml: {opt,freq,sp,scan}_level.args'
   transform_kind: derived
-  transform: 'ARC nested args mapping flattened by _arc_args_to_keywords (adapter.py:4910) into ''category:key=<json>; ...'' sorted by category then key; None values dropped. ARC method_type/year/solvation_scheme_level/compatible_ess/software_version dropped. [route: reactant/product fine opt (adapter.py:2353), flattened]'
-  condition: args non-empty mapping
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted. [route: reactant/product fine opt (adapter.py:2353), flattened]'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:2496
@@ -2918,8 +2918,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:4970
   maps_from: 'output.yml: {opt,freq,sp,scan}_level.args'
   transform_kind: derived
-  transform: 'ARC nested args mapping flattened by _arc_args_to_keywords (adapter.py:4910) into ''category:key=<json>; ...'' sorted by category then key; None values dropped. ARC method_type/year/solvation_scheme_level/compatible_ess/software_version dropped. [route: opt_coarse (2341), freq (2383), sp (2412), scan (2464), flattened]'
-  condition: args non-empty mapping
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted. [route: opt_coarse (2341), freq (2383), sp (2412), scan (2464), flattened]'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:2499
@@ -4312,8 +4312,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:4970
   maps_from: 'output.yml: {opt,freq,sp,scan}_level.args'
   transform_kind: derived
-  transform: 'ARC nested args mapping flattened by _arc_args_to_keywords (adapter.py:4910) into ''category:key=<json>; ...'' sorted by category then key; None values dropped. ARC method_type/year/solvation_scheme_level/compatible_ess/software_version dropped. [route: ts_opt (adapter.py:2704), flattened]'
-  condition: args non-empty mapping
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted. [route: ts_opt (adapter.py:2704), flattened]'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:2892
@@ -4941,8 +4941,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:4970
   maps_from: 'output.yml: {opt,freq,sp,scan}_level.args'
   transform_kind: derived
-  transform: 'ARC nested args mapping flattened by _arc_args_to_keywords (adapter.py:4910) into ''category:key=<json>; ...'' sorted by category then key; None values dropped. ARC method_type/year/solvation_scheme_level/compatible_ess/software_version dropped. [route: ts_guess path_search (2662), ts_freq (2733), ts_sp (2755), ts_irc (2787), ts scans (2855), flattened]'
-  condition: args non-empty mapping
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted. [route: ts_guess path_search (2662), ts_freq (2733), ts_sp (2755), ts_irc (2787), ts scans (2855), flattened]'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:2893
@@ -6760,8 +6760,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:4970
   maps_from: 'output.yml: {opt,freq,sp,scan}_level.args'
   transform_kind: derived
-  transform: 'ARC nested args mapping flattened by _arc_args_to_keywords (adapter.py:4910) into ''category:key=<json>; ...'' sorted by category then key; None values dropped. ARC method_type/year/solvation_scheme_level/compatible_ess/software_version dropped. [route: ts_opt via _build_ts_block then _ts_calc_to_standalone strips key/depends_on/geometry_key/artifacts (adapter.py:3109)]'
-  condition: args non-empty mapping
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted. [route: ts_opt via _build_ts_block then _ts_calc_to_standalone strips key/depends_on/geometry_key/artifacts (adapter.py:3109)]'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:3096
@@ -7253,8 +7253,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:4970
   maps_from: 'output.yml: {opt,freq,sp,scan}_level.args'
   transform_kind: derived
-  transform: 'ARC nested args mapping flattened by _arc_args_to_keywords (adapter.py:4910) into ''category:key=<json>; ...'' sorted by category then key; None values dropped. ARC method_type/year/solvation_scheme_level/compatible_ess/software_version dropped. [route: ts_guess, ts_freq, ts_sp, ts_irc, stripped; TS scan calcs DROPPED with a log warning (adapter.py:3079-3085)]'
-  condition: args non-empty mapping
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted. [route: ts_guess, ts_freq, ts_sp, ts_irc, stripped; TS scan calcs DROPPED with a log warning (adapter.py:3079-3085)]'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:3099
@@ -8596,8 +8596,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:4970
   maps_from: 'output.yml: {opt,freq,sp,scan}_level.args'
   transform_kind: derived
-  transform: 'ARC nested args mapping flattened by _arc_args_to_keywords (adapter.py:4910) into ''category:key=<json>; ...'' sorted by category then key; None values dropped. ARC method_type/year/solvation_scheme_level/compatible_ess/software_version dropped. [route: plain _calculation_payload opt (adapter.py:3312); no key/geometries/artifacts/constraints/hessian/parameters_json]'
-  condition: args non-empty mapping
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted. [route: plain _calculation_payload opt (adapter.py:3312); no key/geometries/artifacts/constraints/hessian/parameters_json]'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:3290
@@ -8902,8 +8902,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:4970
   maps_from: 'output.yml: {opt,freq,sp,scan}_level.args'
   transform_kind: derived
-  transform: 'ARC nested args mapping flattened by _arc_args_to_keywords (adapter.py:4910) into ''category:key=<json>; ...'' sorted by category then key; None values dropped. ARC method_type/year/solvation_scheme_level/compatible_ess/software_version dropped. [route: freq (3328), sp (3350) via plain _calculation_payload; parameters_json only the sp reuse marker]'
-  condition: args non-empty mapping
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted. [route: freq (3328), sp (3350) via plain _calculation_payload; parameters_json only the sp reuse marker]'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:3294
@@ -10143,8 +10143,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:5047
   maps_from: 'output.yml: species[].energy_corrections[].level_of_theory.args'
   transform_kind: derived
-  transform: args flattened as for calc keywords.
-  condition: args non-empty
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted.'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:1067
@@ -10585,8 +10585,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:5047
   maps_from: 'output.yml: species[].energy_corrections[].level_of_theory.args'
   transform_kind: derived
-  transform: args flattened as for calc keywords.
-  condition: args non-empty
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted.'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:2524
@@ -11027,8 +11027,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:5047
   maps_from: 'output.yml: transition_states[].energy_corrections[].level_of_theory.args'
   transform_kind: derived
-  transform: args flattened as for calc keywords.
-  condition: args non-empty
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted.'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:2909
@@ -12697,8 +12697,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:5842
   maps_from: 'output.yml: freq_level.args | arkane_level_of_theory.args'
   transform_kind: derived
-  transform: args flattened.
-  condition: args non-empty
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted.'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:1115
@@ -13258,8 +13258,8 @@
   adapter_source: tckdb_arc/tckdb_arc/adapter.py:5842
   maps_from: 'output.yml: freq_level.args | arkane_level_of_theory.args'
   transform_kind: derived
-  transform: args flattened.
-  condition: args non-empty
+  transform: 'Not emitted since adapter 0.15.0 (TCKDB 0.158 removed the field; qualifiers not yet mapped); formerly ARC args flattened by _arc_args_to_keywords, which is deleted.'
+  condition: never (field removed from the TCKDB level of theory in 0.158)
   on_absence: field omitted (never emitted as null)
   warning_codes: null
   emission_route: tckdb_arc/tckdb_arc/adapter.py:2555

@@ -39,9 +39,34 @@ def backend_modules():
     return basis_set_names, dispersion_names, lot_component_names, method_names
 
 
+def real_backend_level_hash():
+    """The backend's real ``_level_of_theory_hash`` wrapped to take a level dict, or ``None`` with no fallback.
+
+    Returns ``(function, None)`` when ``app.services.calculation_resolution`` (needs the backend's
+    fastapi and sqlalchemy, and ``tckdb_schemas``) imports from ``TCKDB_BACKEND_PATH``; else
+    ``(None, reason)``. Unlike :func:`backend_level_hash` it never substitutes the replica of the
+    payload rules, so a test that uses it compares the adapter against the server's own function.
+    """
+    backend = os.environ.get("TCKDB_BACKEND_PATH")
+    if not backend:
+        return None, "TCKDB_BACKEND_PATH is not set"
+    sys.path.insert(0, backend)
+    try:
+        from app.services.calculation_resolution import _level_of_theory_hash
+        from tckdb_schemas.fragments.refs import LevelOfTheoryRef
+    except ImportError as exc:
+        return None, (
+            f"the real backend _level_of_theory_hash is not importable from {backend} ({exc}); "
+            "run it in an environment with the backend's dependencies (fastapi, sqlalchemy) and tckdb_schemas")
+    finally:
+        sys.path.remove(backend)
+    return (lambda level: _level_of_theory_hash(LevelOfTheoryRef(**level))), None
+
+
 def backend_level_hash(level: dict) -> str:
     """The backend's hash of ``level``: the real function when importable, else the
-    same payload built from the backend's own identity keys."""
+    same payload built from the backend's own identity keys (a replica of the payload
+    rules; use :func:`real_backend_level_hash` to require the real function)."""
     basis_set_names, dispersion_names, lot_component_names, _ = backend_modules()
     backend = os.environ["TCKDB_BACKEND_PATH"]
     sys.path.insert(0, backend)
@@ -63,11 +88,11 @@ def backend_level_hash(level: dict) -> str:
         "dispersion": dispersion_key,
         "solvent": lot_component_names.component_identity_key(level.get("solvent")),
         "solvent_model": lot_component_names.component_identity_key(level.get("solvent_model")),
-        "keywords": level.get("keywords"),
         "spin_treatment": level.get("spin_treatment") or "unknown",
     }
-    if level.get("core_treatment") is not None:
-        payload["core_treatment"] = level["core_treatment"]
+    for name in ("core_treatment", "relativistic_hamiltonian", "pno_truncation", "ri_approximation"):
+        if level.get(name) is not None:
+            payload[name] = level[name]
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()

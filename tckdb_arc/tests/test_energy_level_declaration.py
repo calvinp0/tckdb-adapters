@@ -214,20 +214,77 @@ def test_hash_ignores_basis_spelling_and_folds_spin_to_unknown():
     assert level_hash({"method": "m"}) != level_hash({"method": "m", "spin_treatment": "restricted"})
 
 
-def test_hash_matches_the_backend():
+_BACKEND_PARITY_LEVELS = (
+    {"method": "wb97xd", "basis": "Def2TZVP"},
+    {"method": "b3lyp", "basis": "def2tzvp", "spin_treatment": "restricted"},
+    {"method": "m", "basis": "cc-pVTZ", "dispersion": "gd3bj", "solvent": "water",
+     "solvent_model": "smd"},
+    # DLPNO-style level with auxiliary and CABS basis sets.
+    {"method": "dlpno-ccsd(t)", "basis": "def2-TZVP", "aux_basis": "def2-TZVP/C",
+     "cabs_basis": "cc-pVTZ-F12-CABS", "spin_treatment": "unrestricted"},
+    # 0.67-0.69 identity rules: composite aliases, folded dispersion, core treatment.
+    {"method": "cbsqb3"},
+    {"method": "g4(mp2)"},
+    {"method": "b3lyp-d3(bj)", "basis": "def2tzvp"},
+    {"method": "CCSD(T)", "basis": "cc-pCVTZ", "core_treatment": "frozen_core"},
+    {"method": "CCSD(T)", "basis": "cc-pCVTZ", "core_treatment": "window"},
+    # ADR 0024 typed method qualifiers: identity only when stated, an explicit ``none`` included.
+    {"method": "dlpno-ccsd(t)", "basis": "def2-TZVP", "pno_truncation": "tight"},
+    {"method": "dlpno-ccsd(t)", "basis": "def2-TZVP", "pno_truncation": "loose", "ri_approximation": "rijcosx"},
+    {"method": "dlpno-ccsd(t)", "basis": "def2-TZVP", "ri_approximation": "none"},
+    {"method": "ccsd(t)", "basis": "cc-pVTZ-DK", "relativistic_hamiltonian": "dkh2"},
+    {"method": "ccsd(t)", "basis": "cc-pVTZ", "relativistic_hamiltonian": "none"},
+    {"method": "ccsd(t)", "basis": "cc-pVTZ", "relativistic_hamiltonian": "x2c", "core_treatment": "all_electron"},
+)
+
+
+def _combination_levels():
+    """Method x basis x dispersion x solvent x spin x core x qualifier combinations (a few thousand levels)."""
+    import itertools
+    methods = ("wb97xd", "b3lyp-d3(bj)", "CCSD(T)", "dlpno-ccsd(t)", "cbsqb3", "g4(mp2)")
+    bases = (None, "Def2TZVP", "cc-pVTZ")
+    dispersions = (None, "gd3bj", "d3")
+    solvents = (None, ("water", "smd"))
+    spins = (None, "restricted")
+    cores = (None, "frozen_core", "window")
+    qualifiers = ({}, {"pno_truncation": "tight"}, {"ri_approximation": "none", "relativistic_hamiltonian": "dkh2"})
+    for m, b, d, sv, sp, c, q in itertools.product(methods, bases, dispersions, solvents, spins, cores, qualifiers):
+        level = {"method": m, **q}
+        for key, value in (("basis", b), ("dispersion", d), ("spin_treatment", sp), ("core_treatment", c)):
+            if value is not None:
+                level[key] = value
+        if sv is not None:
+            level["solvent"], level["solvent_model"] = sv
+        yield level
+
+
+def test_hash_matches_the_backend_payload_rules():
+    """The adapter's hash equals the payload rebuilt from the backend's own identity-key modules.
+
+    Replica against replica for the final hashing step: ``backend_level_hash`` uses the real
+    ``_level_of_theory_hash`` only when the backend's web dependencies import, which they do not in
+    ``arc_env`` (no fastapi). There it applies the backend's ``app.chemistry`` key functions to the
+    payload the real function builds, so the identity keys are the server's and the payload shape is
+    not. ``test_hash_matches_the_real_backend_function`` is the check against the real function.
+    """
     from tckdb_core.testing.backend_import import backend_level_hash
-    for level in (
-        {"method": "wb97xd", "basis": "Def2TZVP"},
-        {"method": "b3lyp", "basis": "def2tzvp", "spin_treatment": "restricted"},
-        {"method": "m", "basis": "cc-pVTZ", "dispersion": "gd3bj", "solvent": "water",
-         "solvent_model": "smd", "keywords": "k"},
-        # DLPNO-style level with auxiliary and CABS basis sets.
-        {"method": "dlpno-ccsd(t)", "basis": "def2-TZVP", "aux_basis": "def2-TZVP/C",
-         "cabs_basis": "cc-pVTZ-F12-CABS", "spin_treatment": "unrestricted"},
-        # 0.67-0.69 identity rules: composite aliases, folded dispersion, core treatment.
-        {"method": "cbsqb3"},
-        {"method": "g4(mp2)"},
-        {"method": "b3lyp-d3(bj)", "basis": "def2tzvp"},
-        {"method": "CCSD(T)", "basis": "cc-pCVTZ", "core_treatment": "frozen_core"},
-    ):
+    for level in _BACKEND_PARITY_LEVELS:
         assert level_hash(level) == backend_level_hash(level), level
+
+
+def test_hash_matches_the_real_backend_function():
+    """The adapter's hash equals TCKDB's own ``_level_of_theory_hash``, never a replica.
+
+    Skips (with the reason) unless ``TCKDB_BACKEND_PATH`` names a backend whose
+    ``app.services.calculation_resolution`` imports, i.e. an environment with fastapi, sqlalchemy and
+    ``tckdb_schemas`` (the TCKDB environment, not ``arc_env``). See ``tckdb_core/README.md``.
+    """
+    from tckdb_core.testing.backend_import import real_backend_level_hash
+    backend_hash, reason = real_backend_level_hash()
+    if backend_hash is None:
+        pytest.skip(reason)
+    checked = 0
+    for level in (*_BACKEND_PARITY_LEVELS, *_combination_levels()):
+        assert level_hash(level) == backend_hash(level), level
+        checked += 1
+    assert checked > 1000

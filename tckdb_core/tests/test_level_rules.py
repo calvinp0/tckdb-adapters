@@ -1,8 +1,9 @@
 """``tckdb_core.level_rules``: the replica of TCKDB's level-of-theory identity (0.67-0.69).
 
 The pinned hashes are TCKDB's own (``backend/tests/services/
-test_level_of_theory_core_treatment_hash.py::_PRE_P4_HASHES``, produced by the
-application before ``core_treatment`` existed): a change to any is a re-key of
+test_level_of_theory_core_treatment_hash.py::_NO_QUALIFIER_HASHES``, as the application
+computes them for a level stating no method qualifier, after Stage 2 removed the
+free-text ``keywords`` key from the payload, ADR 0024): a change to any is a re-key of
 every level spelled that way on the server.
 """
 
@@ -12,20 +13,21 @@ from tckdb_core.level_rules import (
     dispersion_identity_key,
     level_hash,
     level_identity_keys,
+    level_payload,
     method_identity_key,
     same_level,
 )
 
-_PRE_P4_HASHES = [
-    ({"method": "wb97xd", "basis": "def2tzvp"}, "9a489fb119cbc3cadc54fbdaae38959f622c6c9a5010476b70842df832c26b9e"),
-    ({"method": "CCSD(T)", "basis": "cc-pCVTZ"}, "ad379e6d398f9c67417f8a7a12857ddc0bf12914b09792d8db4d768d6eca9d95"),
+_NO_QUALIFIER_HASHES = [
+    ({"method": "wb97xd", "basis": "def2tzvp"}, "1ba2d643d5757c406f5c28afe2e5f6314ca850a02833b6fbeda4f3347c7baa0d"),
+    ({"method": "CCSD(T)", "basis": "cc-pCVTZ"}, "6fa4d7f048b76844d934505442b982faed2dde442ff347ae1013a94d83e3691b"),
     (
         {"method": "CCSD(T)-F12", "basis": "cc-pVTZ-F12", "cabs_basis": "cc-pVTZ-F12-CABS"},
-        "7d3f2bb0389dfad852f6d604044bb017f7b142d6cfd16d56e44634be744d3134",
+        "70e98893e288a3ee2e4a204435db2c0641a9e2258a612ae6b1af9d54390f5b6f",
     ),
     (
         {"method": "MRCI+Davidson", "basis": "aug-cc-pV(T+d)Z"},
-        "b8a63b669e65e17271a260c56e0eedcc5c629869477dd18d7e9696cf7941c0d6",
+        "4955157382ef4be0539748ea19418864fc2ec006023520a04715cf60b5e74c44",
     ),
     (
         {
@@ -34,19 +36,70 @@ _PRE_P4_HASHES = [
             "dispersion": "d3bj",
             "solvent": "water",
             "solvent_model": "smd",
-            "keywords": "int=ultrafine",
             "spin_treatment": "unrestricted",
         },
-        "5466204b5cc42eb2f1e39aab136030ca0cba0b77bc5657d22acf542487d71793",
+        "0ca9b853d518fedc3b32b703138f69772913522db035f17adf03af723cde5666",
     ),
-    ({"method": "CBS-QB3"}, "838e773298da11c3728cecd4da5c5aefb00c1b2ebe3a6d58964098c424abb43d"),
-    ({"method": "cbsqb3"}, "838e773298da11c3728cecd4da5c5aefb00c1b2ebe3a6d58964098c424abb43d"),
+    ({"method": "CBS-QB3"}, "112ef295e50169ffd82d88aee89e30359e4462c5131a7270f45698d0b6c76495"),
+    ({"method": "cbsqb3"}, "112ef295e50169ffd82d88aee89e30359e4462c5131a7270f45698d0b6c76495"),
 ]
 
 
-@pytest.mark.parametrize("level, expected", _PRE_P4_HASHES)
-def test_pinned_pre_p4_hashes(level, expected):
+@pytest.mark.parametrize("level, expected", _NO_QUALIFIER_HASHES)
+def test_pinned_no_qualifier_hashes(level, expected):
     assert level_hash(level) == expected
+
+
+_QUALIFIER_VALUES = {
+    "relativistic_hamiltonian": ["none", "dkh0", "dkh2", "dkhso", "resc", "x2c", "zora", "iora"],
+    "pno_truncation": ["loose", "normal", "tight"],
+    "ri_approximation": ["none", "rij", "rijcosx", "rijk", "rijonx"],
+    "core_treatment": ["frozen_core", "all_electron", "window"],
+}
+_DLPNO = {"method": "DLPNO-CCSD(T)", "basis": "cc-pVTZ"}
+
+
+def test_there_is_no_keywords_key_in_the_payload():
+    assert "keywords" not in level_payload({**_DLPNO, "keywords": "ignored"})
+    assert level_hash({**_DLPNO, "keywords": "int=ultrafine"}) == level_hash(_DLPNO)
+
+
+@pytest.mark.parametrize("field", sorted(_QUALIFIER_VALUES))
+def test_an_unstated_qualifier_adds_no_key_and_does_not_change_the_hash(field):
+    assert field not in level_payload(_DLPNO)
+    assert level_hash({**_DLPNO, field: None}) == level_hash(_DLPNO)
+    assert field not in level_payload({**_DLPNO, field: None})
+
+
+@pytest.mark.parametrize(
+    "field, value", [(f, v) for f, values in sorted(_QUALIFIER_VALUES.items()) for v in values],
+)
+def test_each_stated_qualifier_is_identity_and_the_stated_values_are_distinct(field, value):
+    stated = {**_DLPNO, field: value}
+    assert level_payload(stated)[field] == value
+    assert level_hash(stated) != level_hash(_DLPNO)
+    others = [level_hash({**_DLPNO, field: v}) for v in _QUALIFIER_VALUES[field] if v != value]
+    assert level_hash(stated) not in others
+
+
+@pytest.mark.parametrize("field", ["relativistic_hamiltonian", "ri_approximation"])
+def test_an_explicit_none_is_a_stated_value_not_the_absent_one(field):
+    assert level_hash({**_DLPNO, field: "none"}) != level_hash(_DLPNO)
+    assert level_payload({**_DLPNO, field: "none"})[field] == "none"
+
+
+def test_qualifiers_are_independent_of_each_other():
+    both = {**_DLPNO, "pno_truncation": "tight", "ri_approximation": "rijcosx"}
+    assert level_hash(both) not in {
+        level_hash({**_DLPNO, "pno_truncation": "tight"}),
+        level_hash({**_DLPNO, "ri_approximation": "rijcosx"}),
+        level_hash(_DLPNO),
+    }
+    assert level_hash(both) == level_hash({"ri_approximation": "rijcosx", "pno_truncation": "tight", **_DLPNO})
+
+
+def test_core_window_is_a_third_core_treatment():
+    assert len({level_hash({**_DLPNO, "core_treatment": v}) for v in ("frozen_core", "all_electron", "window")}) == 3
 
 
 def test_core_treatment_joins_only_when_stated():
