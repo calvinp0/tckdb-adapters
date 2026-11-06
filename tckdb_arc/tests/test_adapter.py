@@ -8121,94 +8121,6 @@ class TestCalculationConstraintsSerializer(unittest.TestCase):
         self.assertEqual(len(result), 1)
 
 
-class TestArcArgsToKeywords(unittest.TestCase):
-    """Determinism guarantees for ``_arc_args_to_keywords``.
-
-    The output participates in TCKDB's ``lot_hash``, so two args dicts
-    that differ only in insertion order must serialize identically — a
-    regression here would fragment the LoT row across runs.
-    """
-
-    def setUp(self):
-        from tckdb_arc.adapter import _arc_args_to_keywords
-        self.flatten = _arc_args_to_keywords
-
-    def test_none_returns_none(self):
-        self.assertIsNone(self.flatten(None))
-
-    def test_empty_dict_returns_none(self):
-        self.assertIsNone(self.flatten({}))
-
-    def test_dict_with_only_empty_category_returns_none(self):
-        self.assertIsNone(self.flatten({"keyword": {}}))
-
-    def test_non_dict_returns_none(self):
-        self.assertIsNone(self.flatten("dlpno=tight"))
-        self.assertIsNone(self.flatten(42))
-        self.assertIsNone(self.flatten(["dlpno"]))
-
-    def test_non_mapping_category_value_skipped(self):
-        # Defensive: a list under a category shouldn't crash; it just
-        # doesn't contribute entries.
-        self.assertIsNone(self.flatten({"keyword": ["TightPNO"]}))
-
-    def test_includes_keyword_entries(self):
-        out = self.flatten({"keyword": {"rijcosx": "RIJCOSX",
-                                        "grid": "DEFGRID3"}})
-        self.assertEqual(
-            out,
-            'keyword:grid="DEFGRID3"; keyword:rijcosx="RIJCOSX"',
-        )
-
-    def test_includes_block_entries(self):
-        out = self.flatten({"block": {"scf": "MaxIter 500\nDIIS true"}})
-        self.assertEqual(out, 'block:scf="MaxIter 500\\nDIIS true"')
-
-    def test_includes_both_keyword_and_block_categories_sorted(self):
-        out = self.flatten({
-            "keyword": {"dlpno_threshold": "TightPNO", "rijcosx": "RIJCOSX",
-                        "grid": "DEFGRID3", "uno": "UNO"},
-            "block": {"scf": "MaxIter 500\nDIIS true"},
-        })
-        self.assertEqual(
-            out,
-            'block:scf="MaxIter 500\\nDIIS true"; '
-            'keyword:dlpno_threshold="TightPNO"; '
-            'keyword:grid="DEFGRID3"; '
-            'keyword:rijcosx="RIJCOSX"; '
-            'keyword:uno="UNO"',
-        )
-
-    def test_skips_none_values(self):
-        out = self.flatten({"keyword": {"a": "x", "b": None, "c": "y"}})
-        self.assertEqual(out, 'keyword:a="x"; keyword:c="y"')
-
-    def test_deterministic_independent_of_input_order(self):
-        a = {"keyword": {"a": 1, "b": 2, "c": 3},
-             "block": {"x": "X", "y": "Y"}}
-        b = {"block": {"y": "Y", "x": "X"},
-             "keyword": {"c": 3, "a": 1, "b": 2}}
-        self.assertEqual(self.flatten(a), self.flatten(b))
-
-    def test_serializes_nested_list_and_bool_deterministically(self):
-        # Dict-valued args are JSON-dumped with sort_keys=True so that
-        # nested structure also dedups across insertion orders.
-        a = self.flatten({"keyword": {
-            "iters": [1, 2, 3],
-            "use_uno": True,
-            "thresholds": {"e": 1e-9, "d": 1e-6},
-        }})
-        b = self.flatten({"keyword": {
-            "thresholds": {"d": 1e-6, "e": 1e-9},
-            "use_uno": True,
-            "iters": [1, 2, 3],
-        }})
-        self.assertEqual(a, b)
-        self.assertIn("keyword:iters=[1,2,3]", a)
-        self.assertIn("keyword:use_uno=true", a)
-        self.assertIn('keyword:thresholds={"d":1e-06,"e":1e-09}', a)
-
-
 class TestArcLevelToTckdbLot(unittest.TestCase):
     """Field-name translation from ARC's Level dict to TCKDB's
     ``LevelOfTheoryRef``. ARC writes ``auxiliary_basis``/``cabs``/
@@ -8248,22 +8160,21 @@ class TestArcLevelToTckdbLot(unittest.TestCase):
             "dispersion": "gd3bj",
         })
 
-    def test_includes_keywords_when_args_present(self):
+    def test_args_are_never_projected_onto_the_level(self):
+        # tckdb-schemas 0.158 removed ``keywords``: ESS options are calculation parameters,
+        # read by TCKDB from the deck and log, and a level carrying the key is refused 422.
         out = self.project({
             "method": "dlpno-ccsd(t)-f12",
             "basis": "cc-pvtz-f12",
-            "args": {"keyword": {"dlpno_threshold": "TightPNO"}},
+            "args": {"keyword": {"dlpno_threshold": "TightPNO"}, "block": {"scf": "maxiter 200"}},
         })
-        self.assertEqual(out["keywords"],
-                         'keyword:dlpno_threshold="TightPNO"')
-
-    def test_omits_keywords_when_args_empty(self):
-        out = self.project({
-            "method": "wb97xd",
-            "basis": "def2tzvp",
-            "args": {},
-        })
+        self.assertEqual(out, {"method": "dlpno-ccsd(t)-f12", "basis": "cc-pvtz-f12"})
         self.assertNotIn("keywords", out)
+
+    def test_no_keywords_key_even_when_args_are_empty_or_a_string(self):
+        for args in ({}, None, "tightpno", {"keyword": {}, "block": {}}):
+            out = self.project({"method": "wb97xd", "basis": "def2tzvp", "args": args})
+            self.assertNotIn("keywords", out, args)
 
 
 class TestComputedReactionDependencyEdges(unittest.TestCase):

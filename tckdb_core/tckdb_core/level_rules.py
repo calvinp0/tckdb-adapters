@@ -7,14 +7,19 @@ server (the energy-level declaration rules compare hashes) without a round trip.
 It sends nothing of its own: payloads keep every name verbatim.
 
 Replicated from TCKDB ``main`` (checked against the backend by
-``tests/test_energy_level_declaration.py::test_hash_matches_the_backend`` when
+``tests/test_energy_level_declaration.py::test_hash_matches_the_backend_payload_rules`` and ``test_hash_matches_the_real_backend_function`` when
 ``TCKDB_BACKEND_PATH`` points at its ``backend/``):
 
 * ``app/services/calculation_resolution.py::_level_of_theory_hash`` (and
   ``_level_of_theory_payload``): method, basis, aux_basis, cabs_basis,
-  dispersion, solvent, solvent_model, keywords and ``spin_treatment``
-  (NULL folds to ``"unknown"``, DR-0034), plus ``core_treatment`` **only when
-  stated** (ADR 0021; never a null placeholder, which would re-key every row).
+  dispersion, solvent, solvent_model and ``spin_treatment`` (NULL folds to
+  ``"unknown"``, DR-0034), plus ``core_treatment`` (``frozen_core``,
+  ``all_electron``, ``window``) and the typed method qualifiers
+  ``relativistic_hamiltonian``, ``pno_truncation`` and ``ri_approximation``,
+  each **only when stated** (ADR 0021 and 0024; never a null placeholder, which
+  would re-key every row; an explicit ``none`` is a stated value). There is no
+  ``keywords`` key: free-text keywords left the level of theory in tckdb-schemas
+  0.158 (ADR 0024) and are calculation parameters.
 * ``app/chemistry/basis_set_names.py::basis_identity_key``.
 * ``app/chemistry/lot_component_names.py::component_identity_key``.
 * ``app/chemistry/method_names.py::method_identity_key``: strip and lower-case,
@@ -206,14 +211,22 @@ def level_payload(ref: Mapping[str, Any]) -> dict[str, object]:
         "dispersion": dispersion_key,
         "solvent": component_identity_key(ref.get("solvent")),
         "solvent_model": component_identity_key(ref.get("solvent_model")),
-        "keywords": ref.get("keywords"),
         "spin_treatment": _enum_value(ref.get("spin_treatment")) or "unknown",
     }
     # Identity only when stated: a missing key is not a null placeholder.
     core_treatment = _enum_value(ref.get("core_treatment"))
     if core_treatment is not None:
         payload["core_treatment"] = core_treatment
+    for name in METHOD_QUALIFIERS:
+        value = _enum_value(ref.get(name))
+        if value is not None:
+            payload[name] = value
     return payload
+
+
+#: Typed method qualifiers that join the hash only when stated (``core_treatment`` is handled beside them);
+#: TCKDB's ``_METHOD_QUALIFIERS``.
+METHOD_QUALIFIERS = ("relativistic_hamiltonian", "pno_truncation", "ri_approximation")
 
 
 def level_hash(ref: Mapping[str, Any]) -> str:

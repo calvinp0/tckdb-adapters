@@ -593,6 +593,66 @@ def test_conformer_single_point_level_gets_its_own_sp_calculation(tmp_path):
     assert sp["depends_on"] == [{"parent_calculation_key": "alt0_opt", "role": "single_point_on"}]
 
 
+def test_conformer_sp_differing_from_the_opt_only_by_args_is_a_single_point_not_the_opt_energy(tmp_path):
+    # TCKDB 0.158 has no level ``keywords``, so two levels with the same method and basis but different ARC ``args``
+    # have the same projection. The sp (``int=ultrafine scf=tight``) must still be filed as the conformer single point,
+    # not read as the optimization's own energy (``opt_result.final_energy_hartree``), as it was while ``keywords`` told
+    # the levels apart.
+    doc = _project(tmp_path)
+    record = _record(doc, "nC3H7")
+    args = {"keyword": {"general": "int=ultrafine scf=tight"}}
+    sp_level = {"method": "wb97xd", "basis": "def2svp", "args": args}
+    record["conformer_energy_level"] = sp_level
+    doc["conformer_sp_level"] = {**sp_level, "software": "gaussian"}
+    alt = next(c for c in _species_payload(_adapter(tmp_path), doc, "nC3H7")["conformers"]
+               if c["key"].startswith("alt"))
+    assert "opt_result" not in alt["primary_calculation"]
+    (sp,) = alt["additional_calculations"]
+    assert sp["type"] == "sp" and sp["level_of_theory"] == {"method": "wb97xd", "basis": "def2svp"}
+    assert "keywords" not in sp["level_of_theory"]
+    assert sp["sp_result"] == {"electronic_energy_hartree": pytest.approx(-307143.0 / E_H_KJ_MOL, rel=1e-7)}
+    assert sp["depends_on"] == [{"parent_calculation_key": "alt0_opt", "role": "single_point_on"}]
+
+
+def test_conformer_energy_at_the_opt_level_with_the_same_args_stays_the_opt_energy(tmp_path):
+    doc = _project(tmp_path)
+    record = _record(doc, "nC3H7")
+    args = {"keyword": {"general": "int=ultrafine"}}
+    record["conformer_levels"] = [{**lv, "args": args} if isinstance(lv, dict) else lv for lv in record["conformer_levels"]]
+    doc["conformer_opt_level"] = {**doc["conformer_opt_level"], "args": json.loads(json.dumps(args))}
+    record["conformer_energy_level"] = {"method": "wb97xd", "basis": "def2svp", "args": {"keyword": {"general": "int=ultrafine"}}}
+    alt = next(c for c in _species_payload(_adapter(tmp_path), doc, "nC3H7")["conformers"]
+               if c["key"].startswith("alt"))
+    assert alt["primary_calculation"]["opt_result"] == {
+        "final_energy_hartree": pytest.approx(-307143.0 / E_H_KJ_MOL, rel=1e-7)}
+    assert alt["additional_calculations"] == []
+
+
+def test_conformer_rerun_at_a_level_differing_only_by_args_is_not_filed_as_the_header_level(tmp_path):
+    doc = _project(tmp_path)
+    record = _record(doc, "nC3H7")
+    record["conformer_levels"] = [
+        {**lv, "args": {"keyword": {"general": "scf=xqc"}}} if isinstance(lv, dict) else lv
+        for lv in record["conformer_levels"]]
+    warnings = []
+    payload = _species_payload(_adapter(tmp_path), doc, "nC3H7", warnings)
+    assert [c["key"] for c in payload["conformers"]] == ["c0"]
+    assert "conformer_program_not_stated" in _codes(warnings)
+
+
+def test_same_arc_job_level_compares_projection_and_args_but_not_their_key_order():
+    from tckdb_arc.adapter import _same_arc_job_level
+    base = {"method": "wb97xd", "basis": "def2svp"}
+    assert _same_arc_job_level(base, {**base, "software": "gaussian"})        # software is not part of a level
+    assert _same_arc_job_level(base, {**base, "args": {}}) and _same_arc_job_level(base, {**base, "args": None})
+    a = {**base, "args": {"keyword": {"general": "x", "opt": "y"}, "block": {"b": "c"}}}
+    b = {**base, "args": {"block": {"b": "c"}, "keyword": {"opt": "y", "general": "x"}}}
+    assert _same_arc_job_level(a, b)
+    assert not _same_arc_job_level(base, a)
+    assert not _same_arc_job_level(a, {**base, "args": {"keyword": {"general": "x"}}})
+    assert not _same_arc_job_level(base, {**base, "basis": "def2tzvp"})
+
+
 def test_pre_1_3_conformers_keep_the_restart_yml_path(tmp_path):
     doc = _doc13()
     record = doc["species"][0]

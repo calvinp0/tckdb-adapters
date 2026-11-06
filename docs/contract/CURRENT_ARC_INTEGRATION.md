@@ -59,6 +59,9 @@ and schema versions; their percentages are not current coverage measurements.
 - **Adapter 0.14.1, Hessian method (tckdb-schemas 0.144 to 0.154, client 0.184, TCKDB `c7c8df8b`):** the Hessian method ARC states is passed through and
   checked against the shipped input deck, and the new 422 `hessian_method_contradicts_input_deck` reaches the user by its code; releases 0.145 to 0.154 are read and recorded. See
   [tckdb-schemas 0.135 to 0.154 (adapter 0.14.1, Hessian method)](#tckdb-schemas-0135-to-0154-adapter-0141-hessian-method).
+- **Adapter 0.15.0, level-of-theory qualifiers (tckdb-schemas 0.157 and 0.158, client 0.187, TCKDB `531f8232`; `tckdb_core` 0.5.0):** no level carries `keywords` any more,
+  the hash replica follows TCKDB's, and the four typed method qualifiers are not sent yet. See
+  [Level-of-theory qualifiers (adapter 0.15.0)](#level-of-theory-qualifiers-adapter-0150).
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
@@ -971,7 +974,7 @@ pre-check identity at build time; `tests/_backend_level_rules.py` re-exports it)
 - `core_treatment` joins the payload **only when stated**, never as a null placeholder.
 
 The pinned pre-`core_treatment` hashes of TCKDB's `test_level_of_theory_core_treatment_hash.py` are reproduced in
-`tests/test_level_rules.py`, and `test_hash_matches_the_backend` plus a method-by-dispersion corpus compare the replica with
+`tests/test_level_rules.py`, and `test_hash_matches_the_backend_payload_rules` plus a method-by-dispersion corpus compare the replica with
 the backend's own pure `app.chemistry` modules (and the real `_level_of_theory_hash` where the backend's dependencies are
 installed). CI clones `backend/app/chemistry` at the pinned sha and sets `TCKDB_BACKEND_PATH` and `TCKDB_REQUIRE_BACKEND=1`
 (a missing backend then fails instead of skipping); locally, point `TCKDB_BACKEND_PATH` at a TCKDB checkout's `backend/`.
@@ -1101,6 +1104,8 @@ Base: the batch M branch (adapter 0.14.0).
 
 | Release | Item | Affects the adapter? Reason |
 |---|---|---|
+| **0.158** | **`keywords` removed from `LevelOfTheoryRef`** (and `CompositeSchemeInputLevel`): a level that carries it, even `null`, is refused 422 like any unknown field. Four optional typed fields join the level's identity only when stated: `relativistic_hamiltonian` (`none`, `dkh0`, `dkh2`, `dkhso`, `resc`, `x2c`, `zora`, `iora`), `pno_truncation` (`loose`, `normal`, `tight`), `ri_approximation` (`none`, `rij`, `rijcosx`, `rijk`, `rijonx`), and `core_treatment` gains `window`; lowercase tokens only. The `"keywords"` key left the hash payload, so every `lot_hash` changes (the server is reseeded, not re-keyed). `level_of_theory_disagrees_with_artifact` now also fires per qualifier (`context.component`), only when level and deck or log both state a value and differ | **Yes: the adapter sent `keywords` on every level whose ARC `args` were non-empty (all projections went through `_arc_level_to_tckdb_lot`), so every such upload would have been refused.** No fixture carried `args` on a level, so the suite passed on 0.158 unchanged (measured before the fix: 26 `keywords` keys in the payloads of the new `_level_args` corpus (conformer 5, computed-species 6, computed-reaction 11, transition-state 4); the 0.158 model refused them as `extra_forbidden`, e.g. 5 validation errors on the first species). Fixed: `_arc_args_to_keywords` is deleted and no level carries the key; the args string is not rerouted (the deck and log carry it; `_route_parameters` stays). The hash replica (`tckdb_core.level_rules`, `testing/backend_import.py`) drops `keywords`, adds the three qualifiers only when stated and `window`; it equals the backend's payload rules (`test_hash_matches_the_backend_payload_rules`, run with `TCKDB_BACKEND_PATH` at `531f8232`; the real function is checked by `test_hash_matches_the_real_backend_function`, see `tckdb_core/README.md`) and TCKDB's pinned no-qualifier literals. The typed qualifiers are not sent (below), so `level_of_theory_disagrees_with_artifact` per qualifier cannot fire from the adapter. |
+| 0.157 | The imaginary-mode tolerance follows what an inline output log reports or echoes of the Hessian method, ahead of the recorded `freq.hessian_method` and the deck; a recorded value contradicting the deck or an echoed input is refused with `hessian_method_contradicts_input_deck`; `hessian_method_disagrees_with_stored_tau_basis` can carry `reported_method`. No field or code added or removed | **Applies to the adapter's bundles.** The computed-species and computed-reaction bundles inline the calculation's `output_log` (default artifact kind, `tckdb_core/config.py` `DEFAULT_ARTIFACT_KINDS`; inline modes in `tckdb_core/uploader.py` `_BUNDLE_MODES_WITH_INLINE_ARTIFACTS`), so tau follows what that inline log reports (ORCA only) or echoes, ahead of the recorded value, and a `freq.hessian_method` ARC records that contradicts the input the log echoes is refused with `hessian_method_contradicts_input_deck`. Expected outcome for ARC output: no such refusal, because ARC reads the method from the same deck the log echoes (and returns None on the ORCA numerical header, where nothing is sent). The adapter still sends ARC's `freq_hessian_method` only when it states one and pre-checks it against the shipped deck. Conformer and standalone computed-TS modes send logs as separate artifacts, which are not inline. |
 | **0.156** | The characters trimmed from an electronic-state label or term symbol before matching are one explicit set (`TRIM_CHARS`, shipped as `trim` in `electronic_state_examples.json`), the 29 characters `str.strip()` removes; what a deposit accepts does not change | No. The adapter sends no electronic states (no `electronic_state_label` or `term_symbol`), so no trimmed string is ever sent. No field or code added or removed. |
 | 0.155 | Packaging only (project URLs, MIT `LICENSE` in the sdist and wheel, `setuptools>=77`) | No. No field, code or rule changes; every 0.154 payload validates unchanged. |
 | **0.154** | New warning `output_log_job_not_bound`; a short Gaussian route (under 60 characters) is now closed correctly, so about 197 junk raw rows per ARC payload log are no longer stored | No (server side only). The adapter sends an `output_log` artifact for the calculations that have one, and the route echo it ships is unchanged; the fix removes junk rows TCKDB stored from it and the new warning appears in `response_body.warnings`, which the uploader copies whole into the sidecar. No field, refusal or adapter payload changes. The `--Link1--` multi-job case that earns the warning is not one ARC's per-job logs produce. |
@@ -1146,3 +1151,20 @@ Base: the batch M branch (adapter 0.14.0).
   program's assumed default (Gaussian and ORCA DFT: analytic, 30 cm-1) instead of 50 cm-1. Pre-1.3 records state none, so the adapter
   omits it (never derives it), and a small imaginary mode of a minimum that was accepted at 50 can now be refused. The adapter's own
   refusal of a minimum with `freq_n_imag > 0` makes this moot for minima today.
+
+
+## Level-of-theory qualifiers (adapter 0.15.0)
+
+Read first: `python -m tckdb_schemas.contract --since 0.156.0` and TCKDB ADR 0024 (`docs/adr/0024-a-level-of-theory-has-typed-method-qualifiers-not-free-text-keywords.md`).
+Pin: TCKDB `531f82326a588412836d194ae2e255dea56ecaef` (#865 `a76c6146` typed method qualifiers, plus #866 scan-point reads), schemas 0.158.0, client 0.187.0;
+`tckdb_core` 0.5.0, `tckdb_arc` 0.15.0 (needs core `>=0.5,<0.6`).
+
+**Before.** `_arc_args_to_keywords` flattened ARC's `args` (`keyword:`/`block:`) into `level_of_theory.keywords` on every level, which tckdb-schemas 0.158 refuses.
+
+**Change (always on).** No level dict carries `keywords`; the args string is not sent anywhere new (the input deck and log carry it). The hash replica follows TCKDB's payload: no `keywords`; `core_treatment`, `relativistic_hamiltonian`, `pno_truncation` and `ri_approximation` only when stated; an explicit `none` is a stated value.
+
+**The typed qualifiers are NOT sent yet.** The adapter sends none of `relativistic_hamiltonian`, `pno_truncation`, `ri_approximation` or `core_treatment: window`. A value stated from a level's ARC `args` can contradict the deck the job actually ran with, while TCKDB stays silent (it fires `level_of_theory_disagrees_with_artifact` only when level and deck both state a value). Known cases: ARC appends `normalpno` after a user's `TightPNO` through `dlpno_threshold` (`arc/job/adapters/orca.py`, `setdefault('dlpno_threshold', 'normalpno')`), so `keyword.general` holds both; ARC drops the level's `args` when a troubleshooting job carries its own options (`set_job_args`) while `output.yml` still records the level with them; and a Gaussian freq job carries ARC's own `integral=(grid=ultrafine, Acc2E=12)` beside a user's `int=dkh2`, so a second `Integral` keyword sits in the route. Meanwhile TCKDB stores these settings as calculation parameters read from the deck and log. The adapter will state them once ARC exports the effective ESS keyword line per job (see the ARC export brief, A9).
+
+Tests: `test_level_keywords_removed.py` (no `keywords` key anywhere in any route's payload over the `_level_args` corpus), `tckdb_core/tests/test_level_rules.py`.
+
+Inventories: `ADAPTER_MAPPING.yml` states the `level_of_theory.keywords` rows as not emitted since 0.15.0. The generated inventories (`TCKDB_DEMAND.yml`, `SCHEMA_DRIFT.yml`, `gap_matrix.yml`, `GAP_MATRIX.md`) were not regenerated and still describe the 0.51 to 0.154 contract; they await an inventory refresh.

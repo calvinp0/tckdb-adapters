@@ -5,7 +5,7 @@ the route handlers' rules run only server-side. The energy-level rules are the
 ones a declaration can trip, so the tests replay them here.
 
 Replicated from TCKDB (checked against the backend when it is importable, see
-``test_energy_level_declaration.py::test_hash_matches_the_backend``):
+``test_energy_level_declaration.py::test_hash_matches_the_backend_payload_rules`` and ``test_hash_matches_the_real_backend_function``):
 
 * ``backend/app/services/calculation_resolution.py::_level_of_theory_hash`` and
   its identity keys: now ``tckdb_core/level_rules.py`` (see its docstring).

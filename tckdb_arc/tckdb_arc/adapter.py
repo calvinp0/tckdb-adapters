@@ -4688,7 +4688,7 @@ class TCKDBAdapter(TCKDBUploaderBase):
         # The observed ESS keyword line (schema 1.3 ``*_route``): the one execution
         # control ARC states whole. TCKDB's ``CalculationParameterObservation`` is its
         # home (``raw_key`` is software-specific, ``section`` the job); it is sent as
-        # stated, never split into keywords or rebuilt from the level.
+        # stated, never split into options or rebuilt from the level.
         parameters.extend(_route_parameters(record, calc_type, ess_job_key))
         if parameters:
             calc["parameters"] = parameters
@@ -4720,8 +4720,8 @@ class TCKDBAdapter(TCKDBUploaderBase):
         # qualifier metadata. Two writers feed it: ``tckdb_origin``
         # (provenance qualifier — reused-result / screened-conformer)
         # and ``final_settings`` (the calc's effective scientific
-        # settings, e.g. ``{"fine": True}``, distinct from LoT-identity
-        # keywords). The merge helper drops the field entirely when
+        # settings, e.g. ``{"fine": True}``, distinct from the level of
+        # theory's identity fields). The merge helper drops the field entirely when
         # both sources are empty.
         parameters_json = _merge_parameters_json(
             tckdb_origin=tckdb_origin,
@@ -4961,8 +4961,9 @@ def _final_settings_for_calc(
     """Return the calc's ``final_settings`` dict from the species record.
 
     ``final_settings`` carries the final effective scientific/numerical
-    knobs that defined this calculation — distinct from
-    ``level_of_theory.keywords`` (which carries LoT-identity settings)
+    knobs that defined this calculation — distinct from the
+    level of theory (whose identity is its method, basis and typed
+    qualifiers; ESS keywords are calculation parameters, not identity)
     and from operational/scheduler metadata (server, queue, runtime,
     job ids — explicitly out of scope).
 
@@ -5000,8 +5001,8 @@ def _merge_parameters_json(
       so consumers don't mistake them for independently executed jobs.
     * ``final_settings`` — the final effective scientific/numerical
       settings of the calculation (e.g. ``{"fine": True}``). Distinct
-      from ``level_of_theory.keywords``, which carries LoT-identity
-      settings that participate in dedup hashing.
+      from the level of theory, which since tckdb-schemas 0.158 has no
+      free-text keywords: ESS options are calculation parameters.
 
     ``existing`` lets callers fold both writers on top of a caller-
     provided base. Keys collide explicitly: the merge intentionally
@@ -5855,45 +5856,37 @@ _ARC_TO_TCKDB_LOT_FIELDS = {
 }
 
 
-def _arc_args_to_keywords(args: Any) -> str | None:
-    """Flatten ARC's nested ``args`` dict to TCKDB's flat ``keywords`` string.
+def _canonical_level_args(level: Mapping[str, Any]) -> str | None:
+    """ARC ``args`` of a level as a canonical string (``None`` when it states none).
 
-    ARC stores ESS/runtime options as a nested mapping, commonly with
-    categories such as ``keyword`` and ``block``. TCKDB stores the projected
-    level-of-theory options in a single deterministic string that participates
-    in ``lot_hash`` deduplication.
-
-    The serialization is intentionally category-prefixed and sorted so that
-    equivalent dictionaries produce identical strings regardless of insertion
-    order.
+    Order-independent (``sort_keys``); a missing, ``None`` or empty ``args`` all read
+    as ``None``. Not sent to TCKDB (``LevelOfTheoryRef`` has no ``keywords``): it is
+    only used to tell two jobs apart.
     """
-    if not isinstance(args, Mapping):
+    args = level.get("args")
+    if not args:
         return None
+    try:
+        return json.dumps(args, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return repr(args)
 
-    parts: list[str] = []
 
-    for category in sorted(args):
-        entries = args.get(category)
-        if not isinstance(entries, Mapping) or not entries:
-            continue
+def _same_arc_job_level(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
+    """Whether two ARC levels describe the same JOB level: the TCKDB projection AND the ARC ``args``.
 
-        for key in sorted(entries):
-            value = entries[key]
-            if value is None:
-                continue
-
-            value_text = json.dumps(
-                value,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            )
-            parts.append(f"{category}:{key}={value_text}")
-
-    if not parts:
-        return None
-
-    return "; ".join(parts)
+    ARC's ``Level.__eq__`` compares ``str()``, which includes ``args``. The TCKDB
+    projection no longer carries ``args`` (as ``keywords``) since tckdb-schemas 0.158, so
+    comparing projections alone calls a ``wb97xd/def2-svp`` optimization and a
+    ``wb97xd/def2-svp`` single point with ``int=ultrafine scf=tight`` the same level.
+    Use this for "is this the same job?" questions (a conformer's energy being its
+    optimization's, a re-run at another level); use the projection alone for "is this
+    the same TCKDB level of theory?" questions (frequency-scale-factor matching).
+    """
+    return (
+        _arc_level_to_tckdb_lot(a) == _arc_level_to_tckdb_lot(b)
+        and _canonical_level_args(a) == _canonical_level_args(b)
+    )
 
 
 _W_LEVEL_METHOD_IS_COMPOUND = ArcWarning.LEVEL_METHOD_IS_COMPOUND.value
@@ -5904,8 +5897,9 @@ def _arc_level_to_tckdb_lot(
     level: Mapping[str, Any] | None, *, split_table: bool = True,
 ) -> dict[str, Any] | None:
     """Project ARC's per-job level dict (output.yml shape) onto TCKDB's
-    ``LevelOfTheoryRef`` shape, applying field-name translation and
-    flattening ``args`` into ``keywords``.
+    ``LevelOfTheoryRef`` shape, applying field-name translation. ARC's ``args``
+    are not sent: ``LevelOfTheoryRef`` has no free-text ``keywords`` since
+    tckdb-schemas 0.158 (the input deck and log carry the options).
 
     A method that names a correction table (``cbs-qb3-paraskevas``, which ARC accepts as a
     composite method and runs as CBS-QB3) is sent as its stem (``cbs-qb3``): tckdb-schemas
@@ -5936,9 +5930,6 @@ def _arc_level_to_tckdb_lot(
         v = level.get(src)
         if v:
             out[dst] = str(v)
-    keywords = _arc_args_to_keywords(level.get("args"))
-    if keywords:
-        out["keywords"] = keywords
     if split_table:
         stem = correction_table_method_stem(out["method"])
         if stem is not None:
@@ -7505,6 +7496,7 @@ def _build_freq_scale_factor_ref(
     # frequencies are from another level is still sent with the header level, and
     # reported.
     recorded = arc13.recorded_level(record, "freq") if record is not None else None
+    # Level identity (the TCKDB projection), not job identity: the factor belongs to a level of theory.
     other_level = (
         recorded is not None and recorded.level is not None
         and isinstance(output_doc.get("freq_level"), Mapping)
@@ -9204,7 +9196,7 @@ def _stated_conformer_level(
     software = header.get("software")
     if not software:
         return None
-    if _arc_level_to_tckdb_lot(level) != _arc_level_to_tckdb_lot(header):
+    if not _same_arc_job_level(level, header):
         return None
     return {**level, "software": software}
 
@@ -9228,7 +9220,7 @@ def _stated_conformer_opt_result(
     energy_level = species_record.get("conformer_energy_level")
     if not isinstance(energy_level, Mapping):
         return None
-    if _arc_level_to_tckdb_lot(energy_level) != _arc_level_to_tckdb_lot(level):
+    if not _same_arc_job_level(energy_level, level):
         return None
     energies = species_record.get("conformer_energies")
     if not isinstance(energies, (list, tuple)) or index >= len(energies):
@@ -9257,10 +9249,10 @@ def _stated_conformer_sp(
     header = output_doc.get("conformer_sp_level")
     if not isinstance(energy_level, Mapping) or not isinstance(header, Mapping):
         return None
-    if _arc_level_to_tckdb_lot(energy_level) == _arc_level_to_tckdb_lot(conf_level):
+    if _same_arc_job_level(energy_level, conf_level):
         return None  # the optimization's own energy, see _stated_conformer_opt_result
     software = header.get("software")
-    if not software or _arc_level_to_tckdb_lot(energy_level) != _arc_level_to_tckdb_lot(header):
+    if not software or not _same_arc_job_level(energy_level, header):
         return None
     energies = species_record.get("conformer_energies")
     if not isinstance(energies, (list, tuple)) or index >= len(energies):

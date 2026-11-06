@@ -78,6 +78,18 @@ def golden_kinetics():
     return doc, sidecars
 
 
+def level_args():
+    """golden + kinetics with ARC-shaped ``args`` on every level (see ``tests/_level_args.py``).
+
+    TCKDB 0.158 refuses ``level_of_theory.keywords``; the adapter used to flatten ``args`` into it. The opt and
+    freq levels are Gaussian (``int=dkh2``, ``scf=(maxcycle=200)``), the sp level and a correction scheme's are
+    ORCA (``tightpno rijcosx``). The adapter sends no typed qualifier from them yet, so the stored levels state none.
+    """
+    from _level_args import level_args_corpus
+
+    return level_args_corpus()
+
+
 def _golden_with_irc_verdict(verdict):
     """golden + kinetics with ARC's ``ts_checks`` recording an IRC verdict.
 
@@ -372,6 +384,7 @@ PROJECT_FILES = {"hessian_deck": hessian_deck_files}
 CORPORA = {
     "golden": golden,
     "golden_kinetics": golden_kinetics,
+    "level_args": level_args,
     "golden_ts_evidence": golden_ts_evidence,
     "golden_irc_passed": golden_irc_passed,
     "golden_irc_failed": golden_irc_failed,
