@@ -523,6 +523,33 @@ def test_reaction_kinetics_participants_and_ts(live_tckdb, tmp_path, name):
         assert "ts_guess_level_not_stated" in _codes(outcome.warnings)
 
 
+def test_mixed_spin_reaction_declares_the_open_shell_reference(live_tckdb, tmp_path):
+    # tckdb-schemas 0.161: spin treatment is judged per participant. The corpus is the r3_04 shape: the radicals
+    # (CHO, CH3, the doublet TS; stated <S**2> 0.76) ran unrestricted, the closed-shell CH4 and CH2O restricted, so the
+    # linked energies sit at two resolved levels. 0.158 refused every declaration for it (the adapter declared none and
+    # drew ``missing_level_of_theory_provenance``); now ``unrestricted`` is accepted and stored, and the restricted
+    # singlets do not constrain it.
+    doc, outcome, response = _submit_reaction(live_tckdb, tmp_path, "mixed_spin_reaction")
+    codes = _codes(outcome.warnings)
+    assert "missing_level_of_theory_provenance" not in codes
+    assert "energy_level_stored_without_source_calculations" not in codes
+    assert "kinetics_energy_level_spin_mixed" not in codes
+    kinetics = live_tckdb.get(f"/kinetics/{response['kinetics_ids'][0]}")
+    level_id = kinetics["energy_level_of_theory_id"]
+    assert level_id is not None
+    stored = live_tckdb.get(f"/scientific/level-of-theories/{level_id}")["record"]["level_of_theory"]
+    assert (stored["method"], stored["basis"], stored["spin_treatment"]) == ("b3lyp", "def2-tzvp", "unrestricted")
+    assert level_hash({"method": stored["method"], "basis": stored["basis"],
+                       "spin_treatment": stored["spin_treatment"]}) == stored["lot_hash"]
+    energies = [s for s in kinetics["source_calculations"]
+                if s["role"] in ("reactant_energy", "product_energy", "ts_energy")]
+    assert len(energies) == 5
+    spins = Counter(live_tckdb.get(f"/scientific/level-of-theories/"
+                                   f"{live_tckdb.get('/calculations/' + str(s['calculation_id']))['lot_id']}"
+                                   )["record"]["level_of_theory"]["spin_treatment"] for s in energies)
+    assert spins == {"unrestricted": 3, "restricted": 2}
+
+
 def test_standalone_ts_upload_carries_its_calculations(live_tckdb, tmp_path):
     project, doc = materialize(tmp_path, "golden_kinetics")
     adapter = make_adapter(live_tckdb.url, project, "golden_kinetics", "computed_ts")
@@ -978,6 +1005,7 @@ REPLAY_MATRIX = [
     ("arc_1_2", "computed_species"), ("arc_1_2", "conformer"),
     ("golden_ts_evidence", "computed_reaction"), ("golden_ts_evidence", "computed_ts"),
     ("synthetic_reaction", "computed_reaction"), ("synthetic_reaction", "computed_ts"),
+    ("mixed_spin_reaction", "computed_reaction"),
     ("ts_atom_map_sample", "computed_reaction"), ("ts_atom_map_sample", "computed_ts"),
     ("ts_atom_map_derived", "computed_reaction"), ("ts_atom_map_derived", "computed_ts"),
     ("stereo_consistent", "computed_species"), ("hessian_deck", "computed_species"),

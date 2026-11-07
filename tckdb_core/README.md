@@ -31,7 +31,7 @@ TCKDB contract, and **nothing that reads a producer's output format**.
 | `isotopes` | The isotope rule for geometries (`species_geometry_isotope_mismatch`): substitutions, SMILES multisets, reconciliation error, the geometry block. |
 | `route_level` | Route line vs level comparison (`route_method_basis`, `route_contradicts_level`). |
 | `software_release` | `split_version_banner`: an ESS banner split into version, revision and build as TCKDB would. |
-| `rules` | TCKDB rule pre-checks with the producer's facts as arguments: `energy_level_declaration` (`assert_role_consistency`), `designate_reaction_coordinate_index` (the window rule), `designate_by_tau` (the tau rule), `describe_level`. |
+| `rules` | TCKDB rule pre-checks with the producer's facts as arguments: `energy_level_declaration` (`assert_role_consistency`), `kinetics_energy_level_assessment` (per-participant kinetics spin), `designate_reaction_coordinate_index` (the window rule), `designate_by_tau` (the tau rule), `describe_level`. |
 | `ts_evidence` | Transition-state `validation_evidence` record shapes (`irc_record`, `energy_ordering_record`, `imaginary_mode_record`) and the numeric rule that a pass its own energies contradict is not sent. |
 | `ts_evidence_rules` | `offline_evidence_errors`: an offline replica of the server's evidence rules, to run on any built request. |
 | `testing` | The test kit (below). Needs `pytest` and `jsonschema`; never imported by the runtime package. |
@@ -99,6 +99,10 @@ underscore. Underscore-prefixed names (for example `uploader._skip`, `payload_wr
 `config._read_tckdb_api_key_from_env_file`) are shared internals of the producers in this repository;
 import them from `tckdb_core`, never through a producer package (`tckdb_arc` no longer re-exports
 them, and forwards the public names of its old modules with a `DeprecationWarning`).
+
+## What changed in 0.5.1
+
+Tracks tckdb-schemas 0.161 / client 0.189 (TCKDB cd84fb6, #870). `rules.kinetics_energy_level_assessment` (and `kinetics_energy_level_declaration`, which returns its `level`) now mirrors TCKDB's per-participant spin rule instead of requiring every linked energy at one identical level: the links must agree on every identity field except `spin_treatment`; closed-shell links never constrain spin; the open-shell links name the declared `spin_treatment`, and open-shell links with different references declare nothing and are reported in `mixed_spin_calculations`. It needs two more facts per call, `multiplicities` (calculation key to the owning participant's multiplicity) and each calculation's own `spin_diagnostic.s_squared`. Breaking for direct callers: `multiplicities` is a required argument.
 
 ## What changed in 0.5.0
 

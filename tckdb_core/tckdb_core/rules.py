@@ -10,6 +10,7 @@ out of the producer's own output is the producer's job.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from tckdb_schemas.stationary_point import TAU_PROTOCOL_NOT_RECORDED_CM1
@@ -176,45 +177,146 @@ def designate_by_tau(
 
 _KINETICS_ENERGY_ROLES = frozenset({"reactant_energy", "product_energy", "ts_energy"})
 
+#: TCKDB's closed-shell convention for an unrestricted singlet (``kinetics_closed_shell_exempt``:
+#: ``<S**2>`` at or below 0.1 is a wavefunction collapsed to the restricted solution).
+KINETICS_S_SQUARED_CLOSED_SHELL_MAX = 0.1
+
+_SPIN_UNKNOWN = (None, "unknown")
+
+
+@dataclass(frozen=True)
+class KineticsLevelAssessment:
+    """What :func:`kinetics_energy_level_assessment` decided.
+
+    ``level`` is the ``energy_level_of_theory`` to declare, or ``None``. ``mixed_spin_calculations``
+    is non-empty only when every other condition for a declaration held and the open-shell links
+    were computed with different spin treatments (TCKDB's ``open_shell_reference_mixed``): the
+    keys of those calculations, so the caller can say why nothing was declared.
+    """
+
+    level: dict[str, Any] | None
+    mixed_spin_calculations: tuple[str, ...] = ()
+
+
+def _spin_of(level: Mapping[str, Any]) -> str | None:
+    spin = level.get("spin_treatment")
+    spin = getattr(spin, "value", spin)
+    return None if spin in _SPIN_UNKNOWN else str(spin)
+
+
+def _s_squared_of(calc: Mapping[str, Any]) -> float | None:
+    block = calc.get("spin_diagnostic")
+    value = block.get("s_squared") if isinstance(block, Mapping) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def kinetics_energy_level_assessment(
+    source_calculations: Sequence[Mapping[str, Any]],
+    *,
+    calculations: Mapping[str, Mapping[str, Any]],
+    stated_levels: Sequence[Mapping[str, Any] | None],
+    multiplicities: Mapping[str, int | None],
+) -> KineticsLevelAssessment:
+    """The kinetics ``energy_level_of_theory`` to declare, mirroring TCKDB's per-participant spin rule.
+
+    TCKDB (tckdb-schemas 0.161, ``kinetics_energy_level_violation``) holds a declared kinetics
+    energy level against every ``reactant_energy`` / ``product_energy`` / ``ts_energy``
+    calculation the record links. A record that declares none draws the
+    ``missing_level_of_theory_provenance`` warning. The rule, mirrored here:
+
+    1. Every link matches the others on every identity field except ``spin_treatment``.
+    2. A closed-shell link never constrains spin: multiplicity 1 with a restricted or
+       restricted-open level, or an unrestricted level whose stored ``<S**2>`` is at most 0.1.
+    3. Every other link is open-shell (multiplicity above 1, or an unrestricted singlet whose
+       ``<S**2>`` is above 0.1 or not stated). Those with a known spin must share one; otherwise
+       TCKDB refuses ``open_shell_reference_mixed``, so nothing is declared and the disagreement
+       is reported in ``mixed_spin_calculations``.
+    4. The declaration names the shared open-shell reference when one exists. With no open-shell link
+       it names the spin the closed-shell links share, and none when they differ or when any link states
+       none. When the open-shell links have no stated spin there is nothing to name, so it states none.
+
+    A level is declared only when, besides, the producer states the energy level of every
+    participant behind the links (``stated_levels``, each already in the ``LevelOfTheoryRef``
+    shape, one per participant the links name) and that level is the linked calculations' apart
+    from ``spin_treatment``. ``multiplicities`` maps a calculation key to its participant's
+    multiplicity; a link with none stated cannot be classified, so nothing is declared. The
+    spin treatment is never taken from a default, and ``<S**2>`` only from the calculation's own
+    ``spin_diagnostic``: an unrestricted singlet without one counts as open-shell, as it does in TCKDB.
+    """
+    entries: list[tuple[str, Mapping[str, Any], Mapping[str, Any]]] = []
+    for link in source_calculations:
+        if link.get("role") not in _KINETICS_ENERGY_ROLES:
+            continue
+        key = link.get("calculation_key")
+        calc = calculations.get(key)
+        level = calc.get("level_of_theory") if isinstance(calc, Mapping) else None
+        if not isinstance(level, Mapping):
+            return KineticsLevelAssessment(None)
+        entries.append((key, calc, level))
+    if not entries:
+        return KineticsLevelAssessment(None)
+    bare = {k: v for k, v in entries[0][2].items() if k != "spin_treatment"}
+    for _, _, level in entries:
+        if {k: v for k, v in level.items() if k != "spin_treatment"} != bare:
+            return KineticsLevelAssessment(None)
+        # A user-declared composite scheme hashes by its definition on the server, which keeps the
+        # row comparison there: spin cannot differ.
+        if level.get("composite_scheme") is not None and level != entries[0][2]:
+            return KineticsLevelAssessment(None)
+    if not stated_levels or any(
+        not isinstance(stated, Mapping)
+        or {k: v for k, v in stated.items() if k != "spin_treatment"} != bare
+        for stated in stated_levels
+    ):
+        return KineticsLevelAssessment(None)
+
+    open_shell: dict[str, list[str]] = {}
+    all_known: set[str] = set()
+    unknown_spin = False
+    for key, calc, level in entries:
+        multiplicity = multiplicities.get(key)
+        if isinstance(multiplicity, bool) or not isinstance(multiplicity, int):
+            return KineticsLevelAssessment(None)
+        spin = _spin_of(level)
+        if spin is None:
+            unknown_spin = True
+            continue
+        all_known.add(spin)
+        if multiplicity == 1:
+            s_squared = _s_squared_of(calc)
+            if spin in ("restricted", "restricted_open") or (
+                spin == "unrestricted" and s_squared is not None
+                and s_squared <= KINETICS_S_SQUARED_CLOSED_SHELL_MAX
+            ):
+                continue
+        open_shell.setdefault(spin, []).append(key)
+    if len(open_shell) > 1:
+        mixed = sorted({k for keys in open_shell.values() for k in keys})
+        return KineticsLevelAssessment(None, tuple(mixed))
+    declared = dict(bare)
+    if open_shell:
+        declared["spin_treatment"] = next(iter(open_shell))
+    elif len(all_known) == 1 and not unknown_spin:
+        declared["spin_treatment"] = next(iter(all_known))
+    return KineticsLevelAssessment(declared)
+
 
 def kinetics_energy_level_declaration(
     source_calculations: Sequence[Mapping[str, Any]],
     *,
     calculations: Mapping[str, Mapping[str, Any]],
     stated_levels: Sequence[Mapping[str, Any] | None],
+    multiplicities: Mapping[str, int | None],
 ) -> dict[str, Any] | None:
-    """Return the level to declare as a kinetics block's ``energy_level_of_theory``, or ``None``.
+    """The level to declare as a kinetics block's ``energy_level_of_theory``, or ``None``.
 
-    TCKDB (tckdb-schemas 0.99, ``assert_kinetics_energy_level_consistency``) holds a
-    declared kinetics energy level against every ``reactant_energy`` / ``product_energy`` /
-    ``ts_energy`` calculation the record links, as resolved level rows: one linked energy
-    at another level, ``spin_treatment`` included, is ``kinetics_energy_level_contradiction``.
-    A record that declares none draws the ``missing_level_of_theory_provenance`` warning.
-
-    One declaration has to hold for every linked energy at once, so a level is declared only
-    when (a) the record links at least one energy calculation and each has a level, (b) they
-    all carry the same level exactly as sent, and (c) the producer states the energy level of
-    every participant behind them (``stated_levels``, each already in the ``LevelOfTheoryRef``
-    shape, one per participant the links name) and that level is the linked calculation's
-    apart from ``spin_treatment``. Otherwise nothing is declared: a level is never taken from a
-    run-wide default, and a reaction whose participants ran at different levels (or at one level
-    with different spin treatments) has no single level to state.
+    See :func:`kinetics_energy_level_assessment`, which also reports a mixed open-shell reference.
     """
-    levels: list[Mapping[str, Any]] = []
-    for link in source_calculations:
-        if link.get("role") not in _KINETICS_ENERGY_ROLES:
-            continue
-        calc = calculations.get(link.get("calculation_key"))
-        level = calc.get("level_of_theory") if isinstance(calc, Mapping) else None
-        if not isinstance(level, Mapping):
-            return None
-        levels.append(level)
-    if not levels or any(level != levels[0] for level in levels):
-        return None
-    bare = {k: v for k, v in levels[0].items() if k != "spin_treatment"}
-    if not stated_levels or any(stated != bare for stated in stated_levels):
-        return None
-    return dict(levels[0])
+    return kinetics_energy_level_assessment(
+        source_calculations, calculations=calculations, stated_levels=stated_levels,
+        multiplicities=multiplicities).level
 
 
 # ---------------------------------------------------------------------------

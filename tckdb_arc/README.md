@@ -4,7 +4,7 @@ Convert ARC `output/output.yml` and portable parser evidence into TCKDB
 species, reaction, and transition-state uploads. Payloads and upload metadata
 are written locally before any network request, allowing inspection and replay.
 
-Requires Python 3.11+, `tckdb-client` 0.187.x and `tckdb-schemas` 0.158.x.
+Requires Python 3.11+, `tckdb-client` 0.189.x and `tckdb-schemas` 0.161.x.
 For development with sibling checkouts:
 
 ```bash
@@ -317,6 +317,8 @@ Adapter 0.11.0 (core extraction, batch L1; no behaviour change):
   the core config) and the CLI/sweep. Install `tckdb_core` before `tckdb_arc` when working from the checkout
   (`pip install -e tckdb_core -e tckdb_arc`).
 
+Adapter 0.15.1 (tracks tckdb-schemas 0.161 / client 0.189, TCKDB cd84fb6; needs `tckdb-adapters-core` `>=0.5,<0.6`, core 0.5.1): **a kinetics block declares its energy level when the participants' spin treatments differ.** TCKDB 0.161 (#870) judges spin per participant: closed-shell links (multiplicity 1, restricted or restricted-open, or unrestricted with a stored `<S**2>` of at most 0.1) never constrain it, and the open-shell links must share one reference, which a stated spin treatment names. The adapter mirrors the rule (`tckdb_core.rules.kinetics_energy_level_assessment`): a reaction that mixes radicals computed unrestricted with restricted singlets (the `r3_04_h_abstraction` shape) now declares `{method, basis, spin_treatment: "unrestricted"}` and no longer draws `missing_level_of_theory_provenance`. When the open-shell links disagree (unrestricted against restricted-open) nothing is declared and the new `kinetics_energy_level_spin_mixed` warning says so. The adapter never invents a spin treatment or an `<S**2>`: an unrestricted singlet is exempt only if ARC states `sp_spin_diagnostic` for it. Releases 0.159 and 0.160 add server refusal codes only (`anonymous_body_too_large` 413, `server_response_invalid` 500). Literature on correction schemes: TCKDB kept `missing_literature_provenance`; the adapter keeps sending none (`docs/contract/CURRENT_ARC_INTEGRATION.md`).
+
 Adapter 0.15.0 (tracks tckdb-schemas 0.158 / client 0.187, TCKDB 531f823; needs `tckdb-adapters-core` `>=0.5,<0.6`): **no level of theory carries `keywords` any more.** TCKDB 0.157/0.158 (#865, ADR 0024) removed `LevelOfTheoryRef.keywords`; its upload schemas forbid unknown fields, so a level with `keywords`, even `null`, is refused 422. The adapter used to flatten ARC's `args` into that field (`_arc_args_to_keywords`, deleted); it now sends nothing for them, on every projection (per-job, scheme, correction-scheme, kinetics/thermo energy and header levels). The ESS options live in the input deck and log, which TCKDB reads as calculation parameters; the route line stays a parameter (`_route_parameters`). The hash replica in `tckdb_core` follows (core 0.5.0). The typed qualifiers TCKDB added (`relativistic_hamiltonian`, `pno_truncation`, `ri_approximation`, `core_treatment: window`) are **not sent yet**: ARC's `args` do not reliably describe the deck a job ran with (`docs/contract/CURRENT_ARC_INTEGRATION.md`, "Level-of-theory qualifiers").
 
 Adapter 0.14.3 (tracks tckdb-schemas 0.156 / client 0.186, TCKDB 6a91b38; needs `tckdb-adapters-core` 0.4.3): no payload or behaviour change; 0.155 is packaging only and 0.156 changes the whitespace set trimmed from electronic-state labels, which the adapter never sends.
@@ -387,6 +389,7 @@ Adapter 0.12.0 (core extraction, batch L2; no behaviour change; needs `tckdb-ada
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 
 <!-- tckdb-drift:changelog -->
+- Adapter 0.15.1: tracked TCKDB cd84fb6 (schemas 0.161.0, client 0.189.0).
 - Adapter 0.15.0: tracked TCKDB 531f823 (schemas 0.158.0, client 0.187.0).
 - Adapter 0.14.3: tracked TCKDB 6a91b38 (schemas 0.156.0, client 0.186.0).
 - Adapter 0.14.1: Hessian method on the same pin (TCKDB c7c8df8, schemas 0.154.0, client 0.184.0); no new pin.
