@@ -100,14 +100,17 @@ def _calcs(**levels):
     return {k: {"key": k, "level_of_theory": v} for k, v in levels.items()}
 
 
+SINGLETS = {"r": 1, "p": 1, "t": 1, "tf": 1}
+
+
 def test_a_level_all_linked_energies_share_and_the_producer_states_is_declared_as_sent():
     declared = rules.kinetics_energy_level_declaration(
-        LINKS, calculations=_calcs(r=LEVEL, p=LEVEL, t=LEVEL, tf=BARE), stated_levels=[BARE, BARE, BARE])
+        LINKS, calculations=_calcs(r=LEVEL, p=LEVEL, t=LEVEL, tf=BARE), stated_levels=[BARE, BARE, BARE],
+        multiplicities=SINGLETS)
     assert declared == LEVEL and declared is not LEVEL
 
 
 @pytest.mark.parametrize("calcs,stated", [
-    (dict(r=LEVEL, p=LEVEL, t={**LEVEL, "spin_treatment": "unrestricted"}), [BARE] * 3),   # spin differs
     (dict(r=LEVEL, p=LEVEL, t={"method": "b3lyp", "basis": "6-31g"}), [BARE] * 3),          # level differs
     (dict(r=LEVEL, p=LEVEL), [BARE] * 3),                                                    # a link has no calculation
     (dict(r=LEVEL, p=LEVEL, t=LEVEL), []),                                                   # nothing stated
@@ -115,12 +118,14 @@ def test_a_level_all_linked_energies_share_and_the_producer_states_is_declared_a
     (dict(r=LEVEL, p=LEVEL, t=LEVEL), [BARE, {"method": "b3lyp", "basis": "6-31g"}, BARE]),  # stated another level
 ])
 def test_no_single_level_means_no_declaration(calcs, stated):
-    assert rules.kinetics_energy_level_declaration(LINKS, calculations=_calcs(**calcs), stated_levels=stated) is None
+    assert rules.kinetics_energy_level_declaration(
+        LINKS, calculations=_calcs(**calcs), stated_levels=stated, multiplicities=SINGLETS) is None
 
 
 def test_without_an_energy_link_nothing_is_declared():
     assert rules.kinetics_energy_level_declaration(
-        [{"calculation_key": "tf", "role": "freq"}], calculations=_calcs(tf=LEVEL), stated_levels=[BARE]) is None
+        [{"calculation_key": "tf", "role": "freq"}], calculations=_calcs(tf=LEVEL), stated_levels=[BARE],
+        multiplicities={"tf": 1}) is None
 
 
 def test_a_crash_in_a_shipped_rule_is_not_reported_as_a_refusal():

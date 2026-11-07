@@ -123,6 +123,12 @@ class ArcWarning(CodedEnum):
         "The standard-state pressure of the entropies is not recorded or unusable, so reference_pressure_bar is omitted, never defaulted.",
     )
 
+    # --- kinetics energy level ----------------------------------------------------------
+    KINETICS_ENERGY_LEVEL_SPIN_MIXED = (
+        "kinetics_energy_level_spin_mixed",
+        "The open-shell participants' energies were computed with different spin treatments (unrestricted and restricted-open), which TCKDB refuses for a declared kinetics level, so none is declared.",
+    )
+
     # --- energy corrections -------------------------------------------------------------
     CORRECTION_TABLE_METHOD_SPLIT = (
         "correction_table_method_split",

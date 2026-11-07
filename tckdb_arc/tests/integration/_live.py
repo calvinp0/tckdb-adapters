@@ -281,6 +281,28 @@ def synthetic_reaction():
     return doc, []
 
 
+def mixed_spin_reaction():
+    """The r3_04 shape: radicals computed unrestricted, closed-shell species computed restricted (tckdb-schemas 0.161).
+
+    ``CHO + CH4 <=> CH2O + CH3`` over ``synthetic_reaction``'s compositions, at B3LYP/def2-TZVP: CHO, CH3 and the
+    doublet transition state ran unrestricted (their stated ``<S**2>`` 0.76), CH4 and CH2O restricted. The linked
+    energies are therefore at two resolved levels, which TCKDB 0.158 refused any single declaration for; from 0.161
+    the open-shell reference (``unrestricted``) is the declaration and the restricted singlets do not constrain it.
+    """
+    doc, sidecars = synthetic_reaction()
+    level = {"method": "b3lyp", "basis": "def2-tzvp", "software": "gaussian"}
+    for name in ("opt_level", "freq_level", "sp_level", "scan_level"):
+        doc[name] = dict(level)
+    for record in [*doc["species"], *doc["transition_states"]]:
+        open_shell = record["multiplicity"] > 1
+        record["scf_reference"] = {
+            "freq_reference": "unrestricted" if open_shell else "restricted",
+            "sp_reference": "unrestricted" if open_shell else "restricted",
+        }
+        record["sp_spin_diagnostic"] = {"s_squared": 0.76, "s_squared_expected": 0.75} if open_shell else None
+    return doc, sidecars
+
+
 def synthetic_species_as_shipped():
     from test_adapter import _fake_output_doc, _full_record
 
@@ -395,6 +417,7 @@ CORPORA = {
     "arc_1_3_isotopes": arc_1_3_isotopes,
     "current_arc_h2o": current_arc_h2o,
     "synthetic_reaction": synthetic_reaction,
+    "mixed_spin_reaction": mixed_spin_reaction,
     "stereo_consistent": stereo_consistent,
     "stereo_contradicting": stereo_contradicting,
     "hessian_deck": hessian_deck,

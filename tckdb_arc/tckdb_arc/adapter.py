@@ -3040,6 +3040,8 @@ class TCKDBAdapter(TCKDBUploaderBase):
                         *(c for b in species_blocks
                           for c in [b["conformers"][0]["calculation"], *b.get("calculations", ())]),
                         (ts_block or {}).get("calculations") or ()),
+                    multiplicities=_calculation_multiplicities(species_blocks, ts_block),
+                    warnings=warnings,
                 )
                 if declared is not None:
                     kinetics_block["energy_level_of_theory"] = declared
@@ -9017,6 +9019,25 @@ def _build_kinetics_block(
     return block
 
 
+def _calculation_multiplicities(
+    species_blocks: Sequence[Mapping[str, Any]], ts_block: Mapping[str, Any] | None,
+) -> dict[str, int]:
+    """``{calculation key: multiplicity of the participant that owns it}`` for a reaction bundle."""
+    out: dict[str, int] = {}
+    for block in species_blocks:
+        multiplicity = (block.get("species_entry") or {}).get("multiplicity")
+        if multiplicity is None:
+            continue
+        for calc in [block["conformers"][0]["calculation"], *block.get("calculations", ())]:
+            if calc.get("key"):
+                out[calc["key"]] = multiplicity
+    if ts_block is not None and ts_block.get("multiplicity") is not None:
+        for calc in ts_block.get("calculations") or ():
+            if calc.get("key"):
+                out[calc["key"]] = ts_block["multiplicity"]
+    return out
+
+
 def _kinetics_energy_level(
     *,
     output_doc: Mapping[str, Any],
@@ -9027,15 +9048,23 @@ def _kinetics_energy_level(
     species_index: Mapping[str, Mapping[str, Any]],
     ts_record: Mapping[str, Any] | None,
     calculations: Mapping[str, Mapping[str, Any]],
+    multiplicities: Mapping[str, int],
+    warnings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """The ``energy_level_of_theory`` to declare on a kinetics block, or ``None``.
 
-    The rule is TCKDB's (``assert_kinetics_energy_level_consistency``) and lives in
-    :func:`tckdb_core.rules.kinetics_energy_level_declaration`. The ARC part is stating the
-    level each linked energy came from: for the reactants and products the level their record
-    states (``_thermo_energy_level``: the sp level, or the composite method), and for the
-    transition state its own. One participant ARC cannot attribute a level to (adaptive runs)
-    means nothing is declared.
+    The rule is TCKDB's (``kinetics_energy_level_violation``, tckdb-schemas 0.161) and lives in
+    :func:`tckdb_core.rules.kinetics_energy_level_assessment`: spin treatment is judged per
+    participant (closed-shell links never constrain it, the open-shell links must share one
+    reference, which the declaration names). The ARC part is stating the level each linked energy
+    came from: for the reactants and products the level their record states
+    (``_thermo_energy_level``: the sp level, or the composite method), and for the transition
+    state its own. One participant ARC cannot attribute a level to (adaptive runs) means nothing
+    is declared. ``multiplicities`` (calculation key to the owning participant's multiplicity)
+    and each sp calculation's own ``spin_diagnostic.s_squared`` are the facts the spin judgement
+    needs; an unrestricted singlet for which ARC states no ``<S**2>`` counts as open-shell, as it
+    does in TCKDB. Open-shell links computed with different references declare nothing and say so
+    (``kinetics_energy_level_spin_mixed``).
     """
     links = kinetics_block.get("source_calculations") or ()
     roles = {link.get("role") for link in links}
@@ -9050,7 +9079,20 @@ def _kinetics_energy_level(
     if "ts_energy" in roles:
         level = _thermo_energy_level(output_doc, ts_record) if ts_record is not None else None
         stated.append(_arc_level_to_tckdb_lot(level) if isinstance(level, Mapping) else None)
-    return _rules.kinetics_energy_level_declaration(links, calculations=calculations, stated_levels=stated)
+    assessment = _rules.kinetics_energy_level_assessment(
+        links, calculations=calculations, stated_levels=stated, multiplicities=multiplicities)
+    if assessment.mixed_spin_calculations and warnings is not None:
+        warnings.append(_self_check(
+            ArcWarning.KINETICS_ENERGY_LEVEL_SPIN_MIXED.value,
+            "No energy level of theory was declared on the kinetics block: its open-shell "
+            "participants' energies were computed with different spin treatments "
+            f"(calculations {', '.join(assessment.mixed_spin_calculations)}), and unrestricted and "
+            "restricted-open references are different levels for an open-shell species, which TCKDB "
+            "refuses (kinetics_energy_level_contradiction, open_shell_reference_mixed).",
+            "kinetics[0].energy_level_of_theory",
+            {"action": "energy_level_not_declared",
+             "calculation_keys": list(assessment.mixed_spin_calculations)}))
+    return assessment.level
 
 
 def _build_kinetics_source_calculations(
