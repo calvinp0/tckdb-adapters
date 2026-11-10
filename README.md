@@ -65,15 +65,15 @@ Pytest uses the nearest ini above the given paths, so a path under one package u
 
 ## The shared layer (pinned)
 
-The tested contract is `tckdb-client` 0.189.x with `tckdb-schemas` 0.161.x
+The tested contract is `tckdb-client` 0.199.x with `tckdb-schemas` 0.170.x
 (the producer contract ships from 0.52,
 `python -m tckdb_schemas.contract`). CI pins both to the same tested TCKDB
 source revision (`tckdb-pin.toml`):
 
 ```bash
 pip install \
-  "tckdb-client @ git+https://github.com/calvinp0/tckdbv2.git@cd84fb6a4215220a6644d8e7b2bd6a9146b4fbfd#subdirectory=clients/python" \
-  "tckdb-schemas @ git+https://github.com/calvinp0/tckdbv2.git@cd84fb6a4215220a6644d8e7b2bd6a9146b4fbfd#subdirectory=schemas/python/tckdb-schemas"
+  "tckdb-client @ git+https://github.com/calvinp0/tckdbv2.git@41a5121b02289289ad4757d6a5cbd8648ba36be3#subdirectory=clients/python" \
+  "tckdb-schemas @ git+https://github.com/calvinp0/tckdbv2.git@41a5121b02289289ad4757d6a5cbd8648ba36be3#subdirectory=schemas/python/tckdb-schemas"
 ```
 
 For local development against a `TCKDB_v2` checkout, install from the local path
