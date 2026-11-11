@@ -10,8 +10,8 @@ requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "MIT" }
 dependencies = [
-    "tckdb-client>=0.201,<0.202",   # tested transport + replay contract
-    "tckdb-schemas>=0.170,<0.171", # the producer contract module ships from 0.52
+    "tckdb-client>=0.205,<0.206",   # tested transport + replay contract
+    "tckdb-schemas>=0.173,<0.174", # the producer contract module ships from 0.52
     "PyYAML>=6",                  # element data loader (tckdb_core.xyz)
     "numpy>=1.23",               # xyz_from_data / xyz_to_str
 ]

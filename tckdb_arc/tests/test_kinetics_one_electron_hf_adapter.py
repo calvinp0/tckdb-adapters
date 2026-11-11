@@ -11,10 +11,9 @@ Built from the ``arc_1_3_levels`` reaction document with ORCA DLPNO-CCSD(T)-F12 
 (``test_orca_route_aux_basis._orca_doc``): the reaction's second species stands in for the H atom
 (relabelled ``H``), its first and last for the radicals.
 
-NOTE: the installed tckdb-schemas 0.170 model does not know the server rule, but the payload shape is
-unchanged, so the published model and JSON Schema validate it. A live TCKDB at the 0.170 pin WOULD
-refuse this payload (``kinetics_energy_level_contradiction``: the H link's method differs); the rule lands
-server-side in a later TCKDB revision, and the live gate corpus follows when the pin moves.
+NOTE: the payload shape is unchanged by the server rule (TCKDB #915, tckdb-schemas 0.173), so the published
+model and JSON Schema validate it. The pin (f79e7f94) carries the server rule; the live gate corpus
+``one_electron_hf_reaction`` (``tckdb_arc/tests/integration``) shows TCKDB accepting this payload.
 """
 
 import copy

@@ -66,8 +66,8 @@ and schema versions; their percentages are not current coverage measurements.
   energy level with the open-shell reference when the participants' spin treatments differ, and withholds it (with `kinetics_energy_level_spin_mixed`) when they disagree. See
   [Kinetics energy level and spin (adapter 0.15.1)](#kinetics-energy-level-and-spin-adapter-0151).
 - **Adapter 0.15.3, tracked TCKDB `5557ed9a` (tckdb-schemas 0.170.0, client 0.201.0, the mirror calvinp0/tckdbv2's head, which lags TCKDB main by one commit; `tckdb_core` 0.5.3):** ten releases (0.162 to 0.171, 0.171 read ahead of the pin) read, all additive; no mapping change. 0.165 refines the assumed Hessian method and accepts a recorded `finite_difference_gradient` against a `NumFreq` deck of a method with no analytic gradient (stored as `finite_difference_energy`, `hessian_method_refined`); 0.162 adds `reaction_family_conflict`, which a re-deposit of ARC's `family` can hit; the coded artifact refusals (0.163) reach the standalone artifact sidecar's `response_body` but not its `last_error`. See
-  [Release by release](#release-by-release-does-it-affect-the-adapter) (rows 0.162 to 0.171).
-- **Adapter 0.15.4, one-electron Hartree-Fock links (`tckdb_core` 0.5.4; gated on a TCKDB revision with the server rule, not the current pin):** a free H atom run at HF in the same basis no longer blocks the kinetics `energy_level_of_theory`; the correlated level is declared and `one_electron_hf_substitution` says so. See
+  [Release by release](#release-by-release-does-it-affect-the-adapter) (rows 0.162 to 0.173).
+- **Adapter 0.15.4, one-electron Hartree-Fock links (`tckdb_core` 0.5.4; tracked TCKDB `f79e7f94`, tckdb-schemas 0.173.0, client 0.205.0, which carries the server rule):** a free H atom run at HF in the same basis no longer blocks the kinetics `energy_level_of_theory`; the correlated level is declared and `one_electron_hf_substitution` says so. See
   [One-electron Hartree-Fock links (adapter 0.15.4)](#one-electron-hartree-fock-links-adapter-0154).
 - **Adapter 0.15.2, ORCA routes are not compared with the level (same pin, `tckdb_core` 0.5.2):** the route-versus-level check runs only for jobs the record states ran in
   Gaussian, so an ORCA auxiliary-basis token (`aug-cc-pvtz/c`) is no longer read as a method/basis pair. See "Placeholders and contradictions" above.
@@ -1126,7 +1126,9 @@ Base: the batch M branch (adapter 0.14.0).
 
 | Release | Item | Affects the adapter? Reason |
 |---|---|---|
-| 0.171 | **Read ahead; not in this pin (mirror).** New refusal code `species_name_query_invalid` (422) on `GET /api/v1/scientific/species/name-search` (query not 2 to 64 characters of letters, digits, space and `- , ' ( ) [ ] + . :`). No model or payload change | No. The adapter never calls the species name search; it uploads by structure. |
+| **0.173** | **In this pin; the server half of adapter 0.15.4.** New warning code `one_electron_hf_substitution` (scientific check register entry 83), returned when a kinetics record's declared correlated energy level is accepted for a one-electron participant whose linked energy was computed at Hartree-Fock; context `declared_level_of_theory_ref`, `energy_calculation_refs`, `cabs_singles_absent` (true when the declared method is an F12 method). No model or payload shape change | **Yes, this is the rule the branch mirrors.** `kinetics_energy_level_assessment` (core 0.5.4) declares the correlated level for a free H atom (or other one-electron participant) run at HF in the same basis, and the adapter reports its own `one_electron_hf_substitution` (self-check, `cabs_singles_correction: absent` for F12). Live: the `one_electron_hf_reaction` corpus is accepted, the stored kinetics level reads back as the correlated level, the server returns the warning naming the H calculation, and no `missing_level_of_theory_provenance` or `kinetics_energy_level_contradiction` appears; an H- atom declares nothing and draws `missing_level_of_theory_provenance`, not a 422. |
+| 0.172 | New refusal `applied_energy_correction_value_conflict` (422) on every route carrying applied energy corrections when a correction with the same target, sources, scheme or scale factor, role and temperature is already stored with a different total or component breakdown (context: `record_kind`, `application_role`, target and scheme refs, `field`, stored and supplied totals, `differs`); a matching correction is now reused rather than refused. New warnings `applied_energy_correction_note_not_stored` and `applied_energy_correction_reused_hidden` (context `review_status`: `rejected` or `deprecated`). 0.172.1 rewords comments only. No model or payload change | No change to the adapter. It sends applied corrections (`bac_total`, `aec_total` with components and sources) on the species routes; a re-deposit with the same values is reused (the replay legs of the gate re-send identical corrections and still pass), and only a changed total or component breakdown for an already stored correction would draw the new 422, which reaches the sidecar by its code like any refusal. The two warnings are kept in the sidecar's `warnings` like any server warning; none fires on any gate corpus. |
+| 0.171 | **In this pin.** New refusal code `species_name_query_invalid` (422) on `GET /api/v1/scientific/species/name-search` (query not 2 to 64 characters of letters, digits, space and `- , ' ( ) [ ] + . :`). No model or payload change | No. The adapter never calls the species name search; it uploads by structure. (Was read ahead of the pin in adapter 0.15.3; it is in this pin now.) |
 | 0.170 | New refusal code `request_body_too_large` (413): the frontend proxy answers a body over its cap (100 MiB on the upload, job and calculation-artifact routes, 10 MiB on other `/api/` routes) with this code and `context.max_bytes`, where it sent a bare HTML page. A request-validation 422 no longer echoes the request body under each error's `input`. No model or payload change | Only on failure. A 413 is not in the client's default retry set, so it fails at once; the sidecar of a main upload records `response_status_code: 413` and the code in `last_error` (`_record_failure`). The adapter does not size-check bodies itself and sends the input deck and output log inline as artifacts, so a very large log can reach the cap; nothing to change. |
 | 0.169 | The deposit-warning item on scientific reads gains optional `retired_at` / `retired_reason` (curators and admins only; `artifact_attached`, `single_point_deposited`, `hessian_stored`, `superseded_by_recheck`). No field removed | No. The adapter reads upload responses, not scientific reads, and keeps server warnings as dicts without a closed key set. |
 | 0.168 | No refusal, warning or payload change. The generated contract now names the scientific check register entry for every refusal and warning code (80 entries, up from 52); register entry 18 states the tolerance order in force since #864: the method the log reports, then the echoed input, then the recorded `freq.hessian_method` or the deck, then the program's assumed default, then 50 cm-1 | No. Documentation of the order the adapter already relies on (see 0.157); the adapter still passes ARC's `freq_hessian_method` through and never derives it. |
@@ -1233,12 +1235,15 @@ Tests: `tckdb_core/tests/test_kinetics_spin_rule.py` (the rule, including r3_04,
 
 ### One-electron Hartree-Fock links (adapter 0.15.4, core 0.5.4)
 
-**Gated on a TCKDB revision that carries the server rule, which is not the current pin.** The server brief
-(`paper/notes/one_electron_hf_level_2026-11-11/CODING_BRIEF.md`) changes `kinetics_energy_level_violation`; this mirror
-accepts and refuses the same cases. Until the pin (`tckdb-pin.toml`, now TCKDB `5557ed9a`, schemas 0.170) moves to a
-revision with that rule, a live TCKDB refuses the payload this adapter builds (`kinetics_energy_level_contradiction`:
-the H link's method differs), so this release is not to be pinned or merged ahead of the server change. The installed
-0.170 model and JSON Schema validate the payload, whose shape is unchanged.
+**The pin now carries the server rule.** TCKDB #915 (`f79e7f94`, tckdb-schemas 0.173.0, client 0.205.0) is the pin
+(`tckdb-pin.toml`); the rule is `is_one_electron_hf_substitute` in `backend/app/services/calculation_levels.py`, and this
+mirror accepts and refuses the same cases (identity key `hf` only; declared family `wavefunction` or `multireference`;
+every other identity field equal; composite schemes never exempt; electron count from the stored SMILES minus
+`species.charge`, unknown means none; all-HF means none; spin unchanged). The server answers with the warning
+`one_electron_hf_substitution` (0.173). The mirror calvinp0/tckdbv2 must carry f79e7f94 too, or CI (which installs
+the pinned revision from it) cannot resolve the pin. A TCKDB without the rule refuses the payload this adapter builds
+(`kinetics_energy_level_contradiction`: the H link's method differs). The payload shape is unchanged, so the 0.173
+model and JSON Schema validate it; the live gate corpus `one_electron_hf_reaction` shows TCKDB accepting it.
 
 **Why.** ORCA cannot run a correlated method on one electron (`rotor_scan_rxn_210`, `CC + [H] <=> C[CH2] + [H][H]`, and
 `rotor_scan_rxn_682`), so ARC runs the free H atom at HF in the same basis, auxiliary basis and CABS basis as the
@@ -1286,7 +1291,8 @@ CABS singles correction (about 0.05 to 0.1 mEh for H, so the barrier is low by 0
 PNO noise but not zero).
 
 Tests: `tckdb_core/tests/test_kinetics_one_electron_hf.py` (rule), `tckdb_arc/tests/test_kinetics_one_electron_hf_adapter.py`
-(rxn_210-shaped computed-reaction payload; its docstring states the 0.170 live-server caveat). Mutation-checked: dropping
+(rxn_210-shaped computed-reaction payload), and the live gate (`one_electron_hf_reaction`, `hydride_one_electron_reaction`
+in `tckdb_arc/tests/integration`; see `INTEGRATION_GATE.md`). Mutation-checked: dropping
 the electron-count condition fails the H- and two-electron tests, dropping the other-fields condition fails the basis tests,
 dropping the family condition fails the B3LYP, B2PLYP, G4, CBS-QB3 and unclassified tests.
 
