@@ -40,6 +40,7 @@ and the sidecar carries the server's own warnings beside these.
 | `enthalpy_adaptive_levels_unverifiable` | Under adaptive levels the energy level behind the enthalpies cannot be verified, so they are stripped. |
 | `thermo_reference_pressure_not_stated` | The standard-state pressure of the entropies is not recorded or unusable, so reference_pressure_bar is omitted, never defaulted. |
 | `kinetics_energy_level_spin_mixed` | The open-shell participants' energies were computed with different spin treatments (unrestricted and restricted-open), which TCKDB refuses for a declared kinetics level, so none is declared. |
+| `one_electron_hf_substitution` | A one-electron participant's energy was computed at Hartree-Fock in the same basis and is accepted under the correlated kinetics level, because every correlation term vanishes for one electron; for an F12 level the HF energy omits the CABS singles correction (about 0.05 to 0.1 mEh for H). |
 | `correction_table_method_split` | An Arkane level string names a correction table, not a method; the scheme is sent with the table's stem as method. |
 | `bac_frequency_level_conflict` | A bond-additivity table's key and the stated frequency job disagree on the frequency level, so none is sent. |
 | `energy_correction_scheme_software_conflict` | A correction table's Arkane key and the correction level name different software, so the scheme is omitted. |

@@ -67,6 +67,8 @@ and schema versions; their percentages are not current coverage measurements.
   [Kinetics energy level and spin (adapter 0.15.1)](#kinetics-energy-level-and-spin-adapter-0151).
 - **Adapter 0.15.3, tracked TCKDB `5557ed9a` (tckdb-schemas 0.170.0, client 0.201.0, the mirror calvinp0/tckdbv2's head, which lags TCKDB main by one commit; `tckdb_core` 0.5.3):** ten releases (0.162 to 0.171, 0.171 read ahead of the pin) read, all additive; no mapping change. 0.165 refines the assumed Hessian method and accepts a recorded `finite_difference_gradient` against a `NumFreq` deck of a method with no analytic gradient (stored as `finite_difference_energy`, `hessian_method_refined`); 0.162 adds `reaction_family_conflict`, which a re-deposit of ARC's `family` can hit; the coded artifact refusals (0.163) reach the standalone artifact sidecar's `response_body` but not its `last_error`. See
   [Release by release](#release-by-release-does-it-affect-the-adapter) (rows 0.162 to 0.171).
+- **Adapter 0.15.4, one-electron Hartree-Fock links (`tckdb_core` 0.5.4; gated on a TCKDB revision with the server rule, not the current pin):** a free H atom run at HF in the same basis no longer blocks the kinetics `energy_level_of_theory`; the correlated level is declared and `one_electron_hf_substitution` says so. See
+  [One-electron Hartree-Fock links (adapter 0.15.4)](#one-electron-hartree-fock-links-adapter-0154).
 - **Adapter 0.15.2, ORCA routes are not compared with the level (same pin, `tckdb_core` 0.5.2):** the route-versus-level check runs only for jobs the record states ran in
   Gaussian, so an ORCA auxiliary-basis token (`aug-cc-pvtz/c`) is no longer read as a method/basis pair. See "Placeholders and contradictions" above.
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
@@ -1228,6 +1230,53 @@ Not the brief's "compare modulo spin entirely": TCKDB rejected it after a chemis
 **What the adapter supplies.** The participant multiplicity comes from the species or transition-state record (`species_entry.multiplicity`, `ts_block["multiplicity"]`; `_calculation_multiplicities`), keyed by each calculation's bundle key, and `<S**2>` from the calculation's `spin_diagnostic`, which `_spin_diagnostic_payload` builds from ARC's `sp_spin_diagnostic` for any sp calculation whose record states a finite value, whatever the multiplicity. So an unrestricted singlet whose ARC record states `sp_spin_diagnostic` has its `s_squared` on the linked sp (exempt at <= 0.1 when it collapsed to the restricted solution, open-shell above). **When ARC states none, none is sent**: TCKDB counts that singlet open-shell, and so does the adapter; that is harmless while every open-shell link is unrestricted and a refusal's cause (`s_squared_missing_for`) against a restricted-open radical, where the adapter now withholds the declaration instead (`kinetics_energy_level_spin_mixed`). Absent `scf_reference` (a spin treatment ARC does not record) the link has unknown spin and is skipped, never defaulted.
 
 Tests: `tckdb_core/tests/test_kinetics_spin_rule.py` (the rule, including r3_04, the `<S**2>` bound and every withholding case), `tckdb_arc/tests/test_kinetics_energy_level_spin.py` (builds the computed-reaction payload from the `arc_1_3_reactions` document with ARC's recorded references, asserts the declaration and `contract_validate`), the live corpus `mixed_spin_reaction` (`tckdb_arc/tests/integration/_live.py`, `test_mixed_spin_reaction_declares_the_open_shell_reference`). Mutation: with the closed-shell classification removed the r3_04 unit and adapter tests fail.
+
+### One-electron Hartree-Fock links (adapter 0.15.4, core 0.5.4)
+
+**Gated on a TCKDB revision that carries the server rule, which is not the current pin.** The server brief
+(`paper/notes/one_electron_hf_level_2026-11-11/CODING_BRIEF.md`) changes `kinetics_energy_level_violation`; this mirror
+accepts and refuses the same cases. Until the pin (`tckdb-pin.toml`, now TCKDB `5557ed9a`, schemas 0.170) moves to a
+revision with that rule, a live TCKDB refuses the payload this adapter builds (`kinetics_energy_level_contradiction`:
+the H link's method differs), so this release is not to be pinned or merged ahead of the server change. The installed
+0.170 model and JSON Schema validate the payload, whose shape is unchanged.
+
+**Why.** ORCA cannot run a correlated method on one electron (`rotor_scan_rxn_210`, `CC + [H] <=> C[CH2] + [H][H]`, and
+`rotor_scan_rxn_682`), so ARC runs the free H atom at HF in the same basis, auxiliary basis and CABS basis as the
+DLPNO-CCSD(T)-F12 rest and states that truthfully (`levels.sp.method: hf`). For one electron every correlation term
+vanishes, so the HF energy is the correlated one; before this release the H link's different `method` left the block
+with no `energy_level_of_theory` (`missing_level_of_theory_provenance`).
+
+**The exemption (`tckdb_core.rules.kinetics_energy_level_assessment`).** A linked energy, and its participant's stated
+level in `stated_levels`, may differ from the others in `method` alone, and only when all hold:
+
+- the participant has exactly one electron (sum of atomic numbers minus net charge is 1: H, D, T, He+);
+- its method is Hartree-Fock, meaning what `level_rules.method_identity_key` folds to `hf` (`hf` in any case). `uhf`,
+  `rhf`, `rohf` and `hartree-fock` are other identity keys and are not exempt; ARC states the spin form in
+  `spin_treatment`, not in the method name;
+- every other identity field except `spin_treatment` (basis, aux_basis, cabs_basis, dispersion, solvent, solvent_model,
+  core_treatment, qualifiers) equals the declared level's.
+
+The declared level is the correlated level the other links share, never HF. When every link is a one-electron HF link
+there is nothing to exempt and the rule runs as before. Spin is still judged per participant (a one-electron
+participant is a doublet, so open-shell). Narrow by construction: H- (two electrons), H at HF in another basis and any
+two-electron participant at HF declare nothing. `energy_level_declaration` (thermo and statmech) is unchanged.
+
+**Electron count.** Computed by the ARC part (`_participant_electron_count`, `_calculation_electron_counts`) from the
+participant's own record, never a producer flag: the atoms `_species_element_symbols` reads (xyz, else formula), atomic
+numbers from the vendored `data/elements.yml` (`tckdb_core.composition.electron_count`), minus the stated `charge`. A
+participant whose composition or charge is not stated (or a symbol outside the table) has no count and gets no
+exemption. The count reaches the rule as `electron_counts` (calculation key to count, like `multiplicities`) and
+`stated_electron_counts` (parallel to `stated_levels`).
+
+**The warning.** `one_electron_hf_substitution` (self-check, field `kinetics[0].energy_level_of_theory`, context
+`action: one_electron_hf_energy_accepted` and `calculation_keys`) is emitted whenever the exemption is used. For an F12
+declared level the context adds `cabs_singles_correction: "absent"` and the message says the HF energy omits the F12
+CABS singles correction (about 0.05 to 0.1 mEh for H, so the barrier is low by 0.1 to 0.2 kJ/mol; below DLPNO's own
+PNO noise but not zero).
+
+Tests: `tckdb_core/tests/test_kinetics_one_electron_hf.py` (rule), `tckdb_arc/tests/test_kinetics_one_electron_hf_adapter.py`
+(rxn_210-shaped computed-reaction payload; its docstring states the 0.170 live-server caveat). Mutation-checked: dropping
+the electron-count condition fails the H- and two-electron tests, dropping the other-fields condition fails the basis tests.
 
 ### Item 4: literature on correction schemes (not adopted by TCKDB)
 

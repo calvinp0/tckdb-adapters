@@ -3041,6 +3041,10 @@ class TCKDBAdapter(TCKDBUploaderBase):
                           for c in [b["conformers"][0]["calculation"], *b.get("calculations", ())]),
                         (ts_block or {}).get("calculations") or ()),
                     multiplicities=_calculation_multiplicities(species_blocks, ts_block),
+                    electron_counts=_calculation_electron_counts(
+                        species_blocks, ts_block, key_by_label=key_by_label,
+                        species_index=species_index,
+                        ts_record=ts_index.get(ts_label) if ts_label else None),
                     warnings=warnings,
                 )
                 if declared is not None:
@@ -9074,6 +9078,42 @@ def _calculation_multiplicities(
     return out
 
 
+def _participant_electron_count(record: Mapping[str, Any] | None) -> int | None:
+    """A participant's electrons from its own record: its composition and its stated ``charge``.
+
+    Atomic numbers (the vendored element table) of the atoms ``_species_element_symbols`` reads
+    from the xyz, else the formula, minus the stated net charge. ``None`` when the composition or
+    the charge is not stated; no producer flag is trusted.
+    """
+    if not isinstance(record, Mapping):
+        return None
+    return _composition.electron_count(_species_element_symbols(record), record.get("charge"))
+
+
+def _calculation_electron_counts(
+    species_blocks: Sequence[Mapping[str, Any]],
+    ts_block: Mapping[str, Any] | None,
+    *,
+    key_by_label: Mapping[str, str],
+    species_index: Mapping[str, Mapping[str, Any]],
+    ts_record: Mapping[str, Any] | None,
+) -> dict[str, int | None]:
+    """``{calculation key: electrons of the participant that owns it}``; a participant with none known maps to ``None``."""
+    labels_by_key = {key: label for label, key in key_by_label.items()}
+    out: dict[str, int | None] = {}
+    for block in species_blocks:
+        count = _participant_electron_count(species_index.get(labels_by_key.get(block.get("key"))))
+        for calc in [block["conformers"][0]["calculation"], *block.get("calculations", ())]:
+            if calc.get("key"):
+                out[calc["key"]] = count
+    if ts_block is not None:
+        count = _participant_electron_count(ts_record)
+        for calc in ts_block.get("calculations") or ():
+            if calc.get("key"):
+                out[calc["key"]] = count
+    return out
+
+
 def _kinetics_energy_level(
     *,
     output_doc: Mapping[str, Any],
@@ -9085,6 +9125,7 @@ def _kinetics_energy_level(
     ts_record: Mapping[str, Any] | None,
     calculations: Mapping[str, Mapping[str, Any]],
     multiplicities: Mapping[str, int],
+    electron_counts: Mapping[str, int | None] | None = None,
     warnings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """The ``energy_level_of_theory`` to declare on a kinetics block, or ``None``.
@@ -9101,10 +9142,17 @@ def _kinetics_energy_level(
     needs; an unrestricted singlet for which ARC states no ``<S**2>`` counts as open-shell, as it
     does in TCKDB. Open-shell links computed with different references declare nothing and say so
     (``kinetics_energy_level_spin_mixed``).
+
+    A one-electron participant computed at Hartree-Fock in the same basis (ORCA cannot run a
+    correlated method on one electron, and every correlation term vanishes) may differ from the
+    declared correlated level in ``method`` alone; ``electron_counts`` (calculation key to the
+    owner's electrons) and the stated levels' own counts gate it, and using it is reported
+    (``one_electron_hf_substitution``).
     """
     links = kinetics_block.get("source_calculations") or ()
     roles = {link.get("role") for link in links}
     stated: list[Mapping[str, Any] | None] = []
+    stated_counts: list[int | None] = []
     labels_by_key = {key: label for label, key in key_by_label.items()}
     for key in {*reactant_keys, *product_keys}:
         if not any(r in roles for r in ("reactant_energy", "product_energy")):
@@ -9112,11 +9160,31 @@ def _kinetics_energy_level(
         record = species_index.get(labels_by_key.get(key))
         level = _thermo_energy_level(output_doc, record) if record is not None else None
         stated.append(_arc_level_to_tckdb_lot(level) if isinstance(level, Mapping) else None)
+        stated_counts.append(_participant_electron_count(record))
     if "ts_energy" in roles:
         level = _thermo_energy_level(output_doc, ts_record) if ts_record is not None else None
         stated.append(_arc_level_to_tckdb_lot(level) if isinstance(level, Mapping) else None)
+        stated_counts.append(_participant_electron_count(ts_record))
     assessment = _rules.kinetics_energy_level_assessment(
-        links, calculations=calculations, stated_levels=stated, multiplicities=multiplicities)
+        links, calculations=calculations, stated_levels=stated, multiplicities=multiplicities,
+        electron_counts=electron_counts, stated_electron_counts=stated_counts)
+    if assessment.one_electron_hf_calculations and assessment.level is not None and warnings is not None:
+        context: dict[str, Any] = {
+            "action": "one_electron_hf_energy_accepted",
+            "calculation_keys": list(assessment.one_electron_hf_calculations)}
+        message = (
+            "The kinetics energy level is declared as the correlated level the other participants "
+            "share; the energies of the one-electron participants (calculations "
+            f"{', '.join(assessment.one_electron_hf_calculations)}) were computed at Hartree-Fock in "
+            "the same basis, which equals the correlated energy for one electron because every "
+            "correlation term vanishes.")
+        if "f12" in method_identity_key(str(assessment.level.get("method") or "")):
+            context["cabs_singles_correction"] = "absent"
+            message += (" The HF energy omits the F12 CABS singles correction "
+                        "(about 0.05 to 0.1 mEh for H).")
+        warnings.append(_self_check(
+            ArcWarning.ONE_ELECTRON_HF_SUBSTITUTION.value, message,
+            "kinetics[0].energy_level_of_theory", context))
     if assessment.mixed_spin_calculations and warnings is not None:
         warnings.append(_self_check(
             ArcWarning.KINETICS_ENERGY_LEVEL_SPIN_MIXED.value,

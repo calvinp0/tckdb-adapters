@@ -50,6 +50,27 @@ def formula_element_symbols(formula: Any) -> tuple[str, ...] | None:
     return tuple(symbols)
 
 
+def electron_count(symbols: Any, charge: Any) -> int | None:
+    """Electrons of a species: the sum of its atoms' atomic numbers minus its net charge.
+
+    ``None`` when the composition or the charge is not stated (``symbols`` ``None`` or empty,
+    a non-integer ``charge``) or a symbol is not in the vendored element table
+    (``data/elements.yml``, via ``tckdb_core.xyz``): the count is never guessed.
+    """
+    from tckdb_core.xyz import NUMBER_BY_SYMBOL
+
+    if not symbols or isinstance(charge, bool) or not isinstance(charge, (int, float)) \
+            or not float(charge).is_integer():
+        return None
+    total = 0
+    for symbol in symbols:
+        number = NUMBER_BY_SYMBOL.get(symbol)
+        if number is None:
+            return None
+        total += number
+    return total - int(charge)
+
+
 def is_single_atom_geometry(xyz_text: Any) -> bool:
     """Whether a conformer's own XYZ has exactly one atom.
 

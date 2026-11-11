@@ -16,6 +16,7 @@ from typing import Any
 from tckdb_schemas.stationary_point import TAU_PROTOCOL_NOT_RECORDED_CM1
 
 from tckdb_core._logging import resolve_log
+from tckdb_core.level_rules import method_identity_key
 
 # ---------------------------------------------------------------------------
 # Energy-level declaration (assert_role_consistency)
@@ -192,10 +193,14 @@ class KineticsLevelAssessment:
     is non-empty only when every other condition for a declaration held and the open-shell links
     were computed with different spin treatments (TCKDB's ``open_shell_reference_mixed``): the
     keys of those calculations, so the caller can say why nothing was declared.
+    ``one_electron_hf_calculations`` is non-empty only when a level was declared and the
+    one-electron Hartree-Fock exemption was used: the keys of the links that differ from the declared
+    level in ``method`` alone (see :func:`kinetics_energy_level_assessment`).
     """
 
     level: dict[str, Any] | None
     mixed_spin_calculations: tuple[str, ...] = ()
+    one_electron_hf_calculations: tuple[str, ...] = ()
 
 
 def _spin_of(level: Mapping[str, Any]) -> str | None:
@@ -212,12 +217,25 @@ def _s_squared_of(calc: Mapping[str, Any]) -> float | None:
     return float(value)
 
 
+def _is_hartree_fock(level: Mapping[str, Any]) -> bool:
+    """Whether the level's method identifies as Hartree-Fock (``method_identity_key`` is ``hf``).
+
+    Exactly what the level identity folds to ``hf`` (``HF`` in any case); ``uhf``, ``rhf``,
+    ``rohf`` and ``hartree-fock`` are other identity keys and are not accepted. The spin form of
+    ARC's HF is carried by ``spin_treatment``, not by the method name.
+    """
+    method = level.get("method")
+    return isinstance(method, str) and method_identity_key(method) == "hf"
+
+
 def kinetics_energy_level_assessment(
     source_calculations: Sequence[Mapping[str, Any]],
     *,
     calculations: Mapping[str, Mapping[str, Any]],
     stated_levels: Sequence[Mapping[str, Any] | None],
     multiplicities: Mapping[str, int | None],
+    electron_counts: Mapping[str, int | None] | None = None,
+    stated_electron_counts: Sequence[int | None] | None = None,
 ) -> KineticsLevelAssessment:
     """The kinetics ``energy_level_of_theory`` to declare, mirroring TCKDB's per-participant spin rule.
 
@@ -244,7 +262,19 @@ def kinetics_energy_level_assessment(
     multiplicity; a link with none stated cannot be classified, so nothing is declared. The
     spin treatment is never taken from a default, and ``<S**2>`` only from the calculation's own
     ``spin_diagnostic``: an unrestricted singlet without one counts as open-shell, as it does in TCKDB.
+
+    One exemption to rule 1 (one-electron Hartree-Fock, mirroring TCKDB): a link, and its
+    participant's stated level, may differ from the others in ``method`` alone when the
+    participant has exactly one electron (``electron_counts`` maps a calculation key, and
+    ``stated_electron_counts`` is parallel to ``stated_levels``: atomic numbers minus net charge,
+    ``None`` when not known, which grants no exemption), its method identifies as Hartree-Fock
+    (:func:`_is_hartree_fock`) and every other identity field except ``spin_treatment`` equals the
+    declared level's. Every correlation term vanishes for one electron, so the HF energy is the
+    correlated one in the same basis (an F12 level's CABS singles term aside). The declared level
+    is the correlated one the other links share, never HF; when every link is a one-electron HF
+    link there is nothing to exempt and the rule runs as before.
     """
+    electron_counts = electron_counts or {}
     entries: list[tuple[str, Mapping[str, Any], Mapping[str, Any]]] = []
     for link in source_calculations:
         if link.get("role") not in _KINETICS_ENERGY_ROLES:
@@ -257,20 +287,44 @@ def kinetics_energy_level_assessment(
         entries.append((key, calc, level))
     if not entries:
         return KineticsLevelAssessment(None)
-    bare = {k: v for k, v in entries[0][2].items() if k != "spin_treatment"}
-    for _, _, level in entries:
-        if {k: v for k, v in level.items() if k != "spin_treatment"} != bare:
-            return KineticsLevelAssessment(None)
+    def _is_one_electron_hf(count: int | None, level: Mapping[str, Any]) -> bool:
+        return count == 1 and _is_hartree_fock(level)
+
+    def _bare(level: Mapping[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in level.items() if k != "spin_treatment"}
+
+    # The declared level is the first link's that is not a one-electron HF link (the correlated
+    # level the others share); with only one-electron HF links there is nothing to exempt.
+    reference = next(
+        (level for key, _, level in entries if not _is_one_electron_hf(electron_counts.get(key), level)),
+        entries[0][2])
+    bare = _bare(reference)
+    substituted: list[str] = []
+    for key, _, level in entries:
+        if _bare(level) != bare:
+            # The exemption: method is the only identity field that differs.
+            if not (_is_one_electron_hf(electron_counts.get(key), level)
+                    and {k: v for k, v in _bare(level).items() if k != "method"}
+                    == {k: v for k, v in bare.items() if k != "method"}):
+                return KineticsLevelAssessment(None)
+            substituted.append(key)
         # A user-declared composite scheme hashes by its definition on the server, which keeps the
         # row comparison there: spin cannot differ.
-        if level.get("composite_scheme") is not None and level != entries[0][2]:
+        if level.get("composite_scheme") is not None and level != reference:
             return KineticsLevelAssessment(None)
-    if not stated_levels or any(
-        not isinstance(stated, Mapping)
-        or {k: v for k, v in stated.items() if k != "spin_treatment"} != bare
-        for stated in stated_levels
-    ):
+    if not stated_levels:
         return KineticsLevelAssessment(None)
+    stated_counts = list(stated_electron_counts) if stated_electron_counts is not None else []
+    for index, stated in enumerate(stated_levels):
+        if not isinstance(stated, Mapping):
+            return KineticsLevelAssessment(None)
+        if _bare(stated) == bare:
+            continue
+        count = stated_counts[index] if index < len(stated_counts) else None
+        if not (_is_one_electron_hf(count, stated)
+                and {k: v for k, v in _bare(stated).items() if k != "method"}
+                == {k: v for k, v in bare.items() if k != "method"}):
+            return KineticsLevelAssessment(None)
 
     open_shell: dict[str, list[str]] = {}
     all_known: set[str] = set()
@@ -300,7 +354,7 @@ def kinetics_energy_level_assessment(
         declared["spin_treatment"] = next(iter(open_shell))
     elif len(all_known) == 1 and not unknown_spin:
         declared["spin_treatment"] = next(iter(all_known))
-    return KineticsLevelAssessment(declared)
+    return KineticsLevelAssessment(declared, one_electron_hf_calculations=tuple(substituted))
 
 
 def kinetics_energy_level_declaration(
@@ -309,6 +363,8 @@ def kinetics_energy_level_declaration(
     calculations: Mapping[str, Mapping[str, Any]],
     stated_levels: Sequence[Mapping[str, Any] | None],
     multiplicities: Mapping[str, int | None],
+    electron_counts: Mapping[str, int | None] | None = None,
+    stated_electron_counts: Sequence[int | None] | None = None,
 ) -> dict[str, Any] | None:
     """The level to declare as a kinetics block's ``energy_level_of_theory``, or ``None``.
 
@@ -316,7 +372,8 @@ def kinetics_energy_level_declaration(
     """
     return kinetics_energy_level_assessment(
         source_calculations, calculations=calculations, stated_levels=stated_levels,
-        multiplicities=multiplicities).level
+        multiplicities=multiplicities, electron_counts=electron_counts,
+        stated_electron_counts=stated_electron_counts).level
 
 
 # ---------------------------------------------------------------------------
