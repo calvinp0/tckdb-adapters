@@ -4,7 +4,7 @@ Convert ARC `output/output.yml` and portable parser evidence into TCKDB
 species, reaction, and transition-state uploads. Payloads and upload metadata
 are written locally before any network request, allowing inspection and replay.
 
-Requires Python 3.11+, `tckdb-client` 0.203.x and `tckdb-schemas` 0.171.x.
+Requires Python 3.11+, `tckdb-client` 0.201.x and `tckdb-schemas` 0.170.x.
 For development with sibling checkouts:
 
 ```bash
@@ -317,7 +317,7 @@ Adapter 0.11.0 (core extraction, batch L1; no behaviour change):
   the core config) and the CLI/sweep. Install `tckdb_core` before `tckdb_arc` when working from the checkout
   (`pip install -e tckdb_core -e tckdb_arc`).
 
-Adapter 0.15.3 (tracks tckdb-schemas 0.171 / client 0.203, TCKDB 45dc08e; ships with core 0.5.3; needs `tckdb-adapters-core` `>=0.5,<0.6`): **no mapping change.** Ten releases (0.162 to 0.171) are read and each is judged in `docs/contract/CURRENT_ARC_INTEGRATION.md`. Two matter to an ARC upload: 0.165 now accepts a recorded `finite_difference_gradient` against a `NumFreq` deck of a method with no analytic gradient (stored as `finite_difference_energy`, with the server warning `hessian_method_refined`; `analytic` against `NumFreq` is still refused), and 0.162 refuses a re-deposit of a reaction under a different `reaction_family` (from ARC's reaction `family`) with the code `reaction_family_conflict`.
+Adapter 0.15.3 (tracks tckdb-schemas 0.170 / client 0.201, TCKDB 5557ed9, the mirror's head; ships with core 0.5.3; needs `tckdb-adapters-core` `>=0.5,<0.6`): **no mapping change.** Ten releases (0.162 to 0.171) are read (0.171 is read ahead, not in this pin) and each is judged in `docs/contract/CURRENT_ARC_INTEGRATION.md`. Two matter to an ARC upload: 0.165 now accepts a recorded `finite_difference_gradient` against a `NumFreq` deck of a method with no analytic gradient (stored as `finite_difference_energy`, with the server warning `hessian_method_refined`; `analytic` against `NumFreq` is still refused), and 0.162 refuses a re-deposit of a reaction under a different `reaction_family` (from ARC's reaction `family`) with the code `reaction_family_conflict`.
 
 Adapter 0.15.2 (same pin; ships with core 0.5.2): **an ORCA route is never compared with the level.** `level_contradicted_by_route` read the auxiliary basis of an ORCA DLPNO-CCSD(T)-F12 single point (`aug-cc-pvtz/c`) as a Gaussian `method/basis` pair, so the sp calculation was dropped and, when it was an atom's primary sp, the whole computed-reaction upload failed (`rotor_scan_rmg_rxn_1142`). The check now runs only for jobs the record states ran in Gaussian (`ess_software`). A participant's primary calculation that cannot be built still refuses the reaction, and the error now names the participant; its freq, sp and scan calculations are skipped with a warning. See `docs/contract/CURRENT_ARC_INTEGRATION.md`.
 
@@ -393,7 +393,7 @@ Adapter 0.12.0 (core extraction, batch L2; no behaviour change; needs `tckdb-ada
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 
 <!-- tckdb-drift:changelog -->
-- Adapter 0.15.3: tracked TCKDB 45dc08e (schemas 0.171.0, client 0.203.0).
+- Adapter 0.15.3: tracked TCKDB 5557ed9 (schemas 0.170.0, client 0.201.0).
 - Adapter 0.15.2: ORCA routes are not compared with the level; same pin as 0.15.1 (TCKDB cd84fb6).
 - Adapter 0.15.1: tracked TCKDB cd84fb6 (schemas 0.161.0, client 0.189.0).
 - Adapter 0.15.0: tracked TCKDB 531f823 (schemas 0.158.0, client 0.187.0).

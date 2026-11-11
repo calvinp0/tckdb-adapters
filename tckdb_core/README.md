@@ -102,7 +102,7 @@ them, and forwards the public names of its old modules with a `DeprecationWarnin
 
 ## What changed in 0.5.3
 
-Tracks tckdb-schemas 0.171 / client 0.203 (TCKDB 45dc08e). No behaviour change: the ten releases since 0.161 add refusal and warning codes, a Hessian-method refinement and read-side fields, none of which this package builds. `TARGET_SCHEMAS_LINE` moves to `(0, 171)`. The per-release verdicts are in `docs/contract/CURRENT_ARC_INTEGRATION.md`.
+Tracks tckdb-schemas 0.170 / client 0.201 (TCKDB 5557ed9, the mirror's head). No behaviour change: the nine releases 0.162 to 0.170 in this pin (0.171 is read ahead) add refusal and warning codes, a Hessian-method refinement and read-side fields, none of which this package builds. `TARGET_SCHEMAS_LINE` moves to `(0, 170)`. The per-release verdicts are in `docs/contract/CURRENT_ARC_INTEGRATION.md`.
 
 ## What changed in 0.5.2
 

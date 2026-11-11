@@ -65,15 +65,15 @@ Pytest uses the nearest ini above the given paths, so a path under one package u
 
 ## The shared layer (pinned)
 
-The tested contract is `tckdb-client` 0.203.x with `tckdb-schemas` 0.171.x
+The tested contract is `tckdb-client` 0.201.x with `tckdb-schemas` 0.170.x
 (the producer contract ships from 0.52,
 `python -m tckdb_schemas.contract`). CI pins both to the same tested TCKDB
 source revision (`tckdb-pin.toml`):
 
 ```bash
 pip install \
-  "tckdb-client @ git+https://github.com/calvinp0/tckdbv2.git@45dc08e687e1ecb2b469f46510762c0a0269aea8#subdirectory=clients/python" \
-  "tckdb-schemas @ git+https://github.com/calvinp0/tckdbv2.git@45dc08e687e1ecb2b469f46510762c0a0269aea8#subdirectory=schemas/python/tckdb-schemas"
+  "tckdb-client @ git+https://github.com/calvinp0/tckdbv2.git@5557ed9afb71a1fe41ba2503b945a8fde8d85736#subdirectory=clients/python" \
+  "tckdb-schemas @ git+https://github.com/calvinp0/tckdbv2.git@5557ed9afb71a1fe41ba2503b945a8fde8d85736#subdirectory=schemas/python/tckdb-schemas"
 ```
 
 For local development against a `TCKDB_v2` checkout, install from the local path
@@ -88,6 +88,8 @@ pip install /path/to/TCKDB_v2/clients/python /path/to/TCKDB_v2/schemas/python/tc
 The TCKDB commit CI installs from lives in `tckdb-pin.toml` (repo, `sha`, package
 subdirectories), which `ci.yml` reads at runtime. No workflow file holds a SHA, so an
 automated bump never edits `.github/workflows/` and `GITHUB_TOKEN` can push it.
+
+The pin must be a commit on the mirror `calvinp0/tckdbv2`, which may lag TCKDB/TCKDB main, so `--bump` takes the mirror's head, never a SHA that exists only on TCKDB main.
 
 `.github/workflows/tckdb-drift.yml` runs daily (and on demand). Its `test` job has a
 read-only token: it compares the adapter's pinned `tckdb-schemas` / `tckdb-client`
