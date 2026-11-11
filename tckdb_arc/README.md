@@ -4,7 +4,7 @@ Convert ARC `output/output.yml` and portable parser evidence into TCKDB
 species, reaction, and transition-state uploads. Payloads and upload metadata
 are written locally before any network request, allowing inspection and replay.
 
-Requires Python 3.11+, `tckdb-client` 0.189.x and `tckdb-schemas` 0.161.x.
+Requires Python 3.11+, `tckdb-client` 0.203.x and `tckdb-schemas` 0.171.x.
 For development with sibling checkouts:
 
 ```bash
@@ -317,6 +317,8 @@ Adapter 0.11.0 (core extraction, batch L1; no behaviour change):
   the core config) and the CLI/sweep. Install `tckdb_core` before `tckdb_arc` when working from the checkout
   (`pip install -e tckdb_core -e tckdb_arc`).
 
+Adapter 0.15.3 (tracks tckdb-schemas 0.171 / client 0.203, TCKDB 45dc08e; ships with core 0.5.3; needs `tckdb-adapters-core` `>=0.5,<0.6`): **no mapping change.** Ten releases (0.162 to 0.171) are read and each is judged in `docs/contract/CURRENT_ARC_INTEGRATION.md`. Two matter to an ARC upload: 0.165 now accepts a recorded `finite_difference_gradient` against a `NumFreq` deck of a method with no analytic gradient (stored as `finite_difference_energy`, with the server warning `hessian_method_refined`; `analytic` against `NumFreq` is still refused), and 0.162 refuses a re-deposit of a reaction under a different `reaction_family` (from ARC's reaction `family`) with the code `reaction_family_conflict`.
+
 Adapter 0.15.2 (same pin; ships with core 0.5.2): **an ORCA route is never compared with the level.** `level_contradicted_by_route` read the auxiliary basis of an ORCA DLPNO-CCSD(T)-F12 single point (`aug-cc-pvtz/c`) as a Gaussian `method/basis` pair, so the sp calculation was dropped and, when it was an atom's primary sp, the whole computed-reaction upload failed (`rotor_scan_rmg_rxn_1142`). The check now runs only for jobs the record states ran in Gaussian (`ess_software`). A participant's primary calculation that cannot be built still refuses the reaction, and the error now names the participant; its freq, sp and scan calculations are skipped with a warning. See `docs/contract/CURRENT_ARC_INTEGRATION.md`.
 
 Adapter 0.15.1 (tracks tckdb-schemas 0.161 / client 0.189, TCKDB cd84fb6; needs `tckdb-adapters-core` `>=0.5,<0.6`, core 0.5.1): **a kinetics block declares its energy level when the participants' spin treatments differ.** TCKDB 0.161 (#870) judges spin per participant: closed-shell links (multiplicity 1, restricted or restricted-open, or unrestricted with a stored `<S**2>` of at most 0.1) never constrain it, and the open-shell links must share one reference, which a stated spin treatment names. The adapter mirrors the rule (`tckdb_core.rules.kinetics_energy_level_assessment`): a reaction that mixes radicals computed unrestricted with restricted singlets (the `r3_04_h_abstraction` shape) now declares `{method, basis, spin_treatment: "unrestricted"}` and no longer draws `missing_level_of_theory_provenance`. When the open-shell links disagree (unrestricted against restricted-open) nothing is declared and the new `kinetics_energy_level_spin_mixed` warning says so. The adapter never invents a spin treatment or an `<S**2>`: an unrestricted singlet is exempt only if ARC states `sp_spin_diagnostic` for it. Releases 0.159 and 0.160 add server refusal codes only (`anonymous_body_too_large` 413, `server_response_invalid` 500). Literature on correction schemes: TCKDB kept `missing_literature_provenance`; the adapter keeps sending none (`docs/contract/CURRENT_ARC_INTEGRATION.md`).
@@ -391,6 +393,7 @@ Adapter 0.12.0 (core extraction, batch L2; no behaviour change; needs `tckdb-ada
 Tracked TCKDB releases (added by `tools/tckdb_drift.py --bump`):
 
 <!-- tckdb-drift:changelog -->
+- Adapter 0.15.3: tracked TCKDB 45dc08e (schemas 0.171.0, client 0.203.0).
 - Adapter 0.15.2: ORCA routes are not compared with the level; same pin as 0.15.1 (TCKDB cd84fb6).
 - Adapter 0.15.1: tracked TCKDB cd84fb6 (schemas 0.161.0, client 0.189.0).
 - Adapter 0.15.0: tracked TCKDB 531f823 (schemas 0.158.0, client 0.187.0).

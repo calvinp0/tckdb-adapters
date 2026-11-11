@@ -100,6 +100,10 @@ underscore. Underscore-prefixed names (for example `uploader._skip`, `payload_wr
 import them from `tckdb_core`, never through a producer package (`tckdb_arc` no longer re-exports
 them, and forwards the public names of its old modules with a `DeprecationWarning`).
 
+## What changed in 0.5.3
+
+Tracks tckdb-schemas 0.171 / client 0.203 (TCKDB 45dc08e). No behaviour change: the ten releases since 0.161 add refusal and warning codes, a Hessian-method refinement and read-side fields, none of which this package builds. `TARGET_SCHEMAS_LINE` moves to `(0, 171)`. The per-release verdicts are in `docs/contract/CURRENT_ARC_INTEGRATION.md`.
+
 ## What changed in 0.5.2
 
 No contract change (same pin). `route_level` documents that its parser is Gaussian-only: callers compare a route with a level only when the record states the job ran in Gaussian, because an ORCA keyword line carries auxiliary-basis tokens with a slash (`aug-cc-pvtz/c`, `def2/J`) that are not a `method/basis` pair. The functions are unchanged.
