@@ -1,8 +1,10 @@
-"""The method-family replica agrees with TCKDB's ``classify_method`` (stop-gap until tckdb_schemas ships it)."""
+"""The adapter surface agrees with TCKDB's shipped ``classify_method`` and the backend's dispatching one."""
 
 import pytest
 
-from tckdb_core.method_families import CLASSIFICATION, Family, method_family
+from tckdb_schemas.method_families import CLASSIFICATION, classify_method
+
+from tckdb_core.method_families import Family, method_family
 from tckdb_core.testing.backend_import import backend_method_families
 
 NAMED = ["b3lyp", "b2plyp", "g4", "cbs-qb3", "ccsd(t)-f12/ri", "dlpno-ccsd(t)-f12", "ccsd(t)-f12a",
@@ -33,13 +35,13 @@ def test_the_families_the_exemption_turns_on(name, family):
     assert method_family(name) is family
 
 
+def test_families_match_the_shipped_classifier_over_a_corpus():
+    for name in CORPUS:
+        assert method_family(name) is classify_method(name).family, name
+
+
 def test_families_match_the_backend_over_a_corpus():
+    # The backend's classify_method still dispatches through its version registry over the shipped table.
     backend = backend_method_families()
     for name in CORPUS:
         assert method_family(name).value == backend.classify_method(name).family.value, name
-
-
-def test_the_backend_table_is_replicated_row_for_row():
-    backend = backend_method_families()
-    assert {k: v.family.value for k, v in backend.CLASSIFICATION.items()} == {
-        k: v.value for k, v in CLASSIFICATION.items()}
