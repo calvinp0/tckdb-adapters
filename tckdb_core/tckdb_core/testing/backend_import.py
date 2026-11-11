@@ -39,6 +39,25 @@ def backend_modules():
     return basis_set_names, dispersion_names, lot_component_names, method_names
 
 
+def backend_method_families():
+    """The backend's ``app.chemistry.method_families`` module (skip/fail when absent).
+
+    Pure ``app.chemistry`` module, but it imports ``tckdb_schemas.fragments.version`` and
+    ``app.versioning``; both must be importable from ``TCKDB_BACKEND_PATH`` / the environment.
+    """
+    backend = os.environ.get("TCKDB_BACKEND_PATH")
+    if not backend:
+        _unavailable("set TCKDB_BACKEND_PATH to TCKDB's backend/ to compare against its method families")
+    sys.path.insert(0, backend)
+    try:
+        from app.chemistry import method_families
+    except ImportError as exc:
+        _unavailable(f"backend method_families not importable from {backend}: {exc}")
+    finally:
+        sys.path.remove(backend)
+    return method_families
+
+
 def real_backend_level_hash():
     """The backend's real ``_level_of_theory_hash`` wrapped to take a level dict, or ``None`` with no fallback.
 

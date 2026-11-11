@@ -550,6 +550,69 @@ def test_mixed_spin_reaction_declares_the_open_shell_reference(live_tckdb, tmp_p
     assert spins == {"unrestricted": 3, "restricted": 2}
 
 
+def _server_warnings(response):
+    return list(response.get("warnings") or [])
+
+
+def test_one_electron_hf_substitution_is_accepted_and_declares_the_correlated_level(live_tckdb, tmp_path):
+    # tckdb-schemas 0.173 (TCKDB #915): a free H atom run at HF under a DLPNO-CCSD(T)-F12 reaction (rxn_210's
+    # shape; ORCA cannot run a correlated method on one electron). TCKDB accepts the declared correlated level for
+    # the one-electron participant and says so; before 0.173 the H link's method contradicted it
+    # (kinetics_energy_level_contradiction) and the adapter declared nothing (missing_level_of_theory_provenance).
+    doc, outcome, response = _submit_reaction(live_tckdb, tmp_path, "one_electron_hf_reaction")
+    assert outcome.status == "uploaded"
+    codes = _codes(outcome.warnings)
+    assert "missing_level_of_theory_provenance" not in codes
+    assert "kinetics_energy_level_contradiction" not in codes
+    assert "kinetics_energy_level_spin_mixed" not in codes
+    # the server's own warning names the H calculation and the declared level
+    (server,) = [w for w in _server_warnings(response) if w.get("code") == "one_electron_hf_substitution"]
+    kinetics = live_tckdb.get(f"/kinetics/{response['kinetics_ids'][0]}")
+    sources = {s["role"]: s for s in kinetics["source_calculations"]}
+    h_calcs = [s for s in kinetics["source_calculations"]
+               if s["role"] == "reactant_energy"
+               and live_tckdb.get(f"/scientific/level-of-theories/"
+                                  f"{live_tckdb.get('/calculations/' + str(s['calculation_id']))['lot_id']}"
+                                  )["record"]["level_of_theory"]["method"] == "hf"]
+    assert len(h_calcs) == 1, sources
+    assert server["context"]["cabs_singles_absent"] is True
+    h_refs = server["context"]["energy_calculation_refs"]
+    assert len(h_refs) == 1
+    # the cited calculation is a single point on the H atom's species entry, and it is the stored hf calculation
+    ref, kind, owner = _calculation(live_tckdb, h_refs[0])
+    assert (ref, kind, owner) == (h_refs[0], "sp", "species_entry")
+    # the stored kinetics energy level is the correlated one, unrestricted, with the replica's hash
+    level_id = kinetics["energy_level_of_theory_id"]
+    assert level_id is not None
+    stored = live_tckdb.get(f"/scientific/level-of-theories/{level_id}")["record"]["level_of_theory"]
+    assert (stored["method"], stored["basis"], stored["aux_basis"], stored["cabs_basis"], stored["spin_treatment"]) == (
+        "dlpno-ccsd(t)-f12", "cc-pvtz-f12", "aug-cc-pvtz/c", "cc-pvtz-f12-cabs", "unrestricted")
+    assert level_hash({k: stored[k] for k in ("method", "basis", "aux_basis", "cabs_basis", "spin_treatment")}
+                      ) == stored["lot_hash"]
+    # the adapter's own sidecar warning says the same, with the CABS caveat
+    sidecars = read_sidecars(tmp_path / "one_electron_hf_reaction")
+    own = [w for sc in sidecars.values() for w in sc["warnings"]
+           if w.get("code") == "one_electron_hf_substitution"
+           and (w.get("context") or {}).get("source") == "tckdb_arc_self_check"]
+    assert len(own) == 1 and own[0]["context"]["cabs_singles_correction"] == "absent"
+    assert own[0]["context"]["action"] == "one_electron_hf_energy_accepted"
+
+
+def test_a_hydride_at_hf_declares_nothing_and_the_server_says_so_without_refusing(live_tckdb, tmp_path):
+    # H- has two electrons: the HF energy is not the correlated one. The adapter declares no energy level and TCKDB
+    # accepts the upload (never a 422) with missing_level_of_theory_provenance, and no substitution on either side.
+    doc, outcome, response = _submit_reaction(live_tckdb, tmp_path, "hydride_one_electron_reaction")
+    assert outcome.status == "uploaded"
+    codes = _codes(outcome.warnings)
+    assert "missing_level_of_theory_provenance" in codes
+    assert "one_electron_hf_substitution" not in codes
+    assert "kinetics_energy_level_contradiction" not in codes
+    kinetics = live_tckdb.get(f"/kinetics/{response['kinetics_ids'][0]}")
+    assert kinetics["energy_level_of_theory_id"] is None
+    own = [w for sc in read_sidecars(tmp_path / "hydride_one_electron_reaction").values() for w in sc["warnings"]]
+    assert "one_electron_hf_substitution" not in {w.get("code") for w in own}
+
+
 def test_standalone_ts_upload_carries_its_calculations(live_tckdb, tmp_path):
     project, doc = materialize(tmp_path, "golden_kinetics")
     adapter = make_adapter(live_tckdb.url, project, "golden_kinetics", "computed_ts")
@@ -1006,6 +1069,8 @@ REPLAY_MATRIX = [
     ("golden_ts_evidence", "computed_reaction"), ("golden_ts_evidence", "computed_ts"),
     ("synthetic_reaction", "computed_reaction"), ("synthetic_reaction", "computed_ts"),
     ("mixed_spin_reaction", "computed_reaction"),
+    ("one_electron_hf_reaction", "computed_reaction"),
+    ("hydride_one_electron_reaction", "computed_reaction"),
     ("ts_atom_map_sample", "computed_reaction"), ("ts_atom_map_sample", "computed_ts"),
     ("ts_atom_map_derived", "computed_reaction"), ("ts_atom_map_derived", "computed_ts"),
     ("stereo_consistent", "computed_species"), ("hessian_deck", "computed_species"),

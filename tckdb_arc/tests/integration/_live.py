@@ -303,6 +303,78 @@ def mixed_spin_reaction():
     return doc, sidecars
 
 
+_ONE_ELECTRON_XYZ = {
+    "H": "H 0.0 0.0 0.0",
+    "CH3NH2": ("C 0.000 0.000 0.000\nN 1.465 0.000 0.000\nH -0.370 1.020 0.000\nH -0.370 -0.510 0.885\n"
+               "H -0.370 -0.510 -0.885\nH 1.830 0.470 0.810\nH 1.830 0.470 -0.810"),
+    "H2": "H 0.0 0.0 0.37\nH 0.0 0.0 -0.37",
+    "CH3NH": ("C 0.000 0.000 0.000\nN 1.400 0.000 0.000\nH -0.370 1.020 0.000\nH -0.370 -0.510 0.885\n"
+              "H -0.370 -0.510 -0.885\nH 1.800 0.900 0.000"),
+    "TS0": ("C 0.000 0.000 0.000\nN 1.465 0.000 0.000\nH -0.370 1.020 0.000\nH -0.370 -0.510 0.885\n"
+            "H -0.370 -0.510 -0.885\nH 1.830 0.470 0.810\nH 1.830 0.470 -0.810\nH 2.350 -0.900 0.000"),
+}
+
+
+def one_electron_hf_reaction(hydride=False):
+    """The rxn_210 shape: a free H atom run at HF under a DLPNO-CCSD(T)-F12 reaction (tckdb-schemas 0.173).
+
+    ``[H] + CN <=> [H][H] + C[NH]``: every participant and the transition state at ORCA
+    DLPNO-CCSD(T)-F12/cc-pVTZ-F12 (aux ``aug-cc-pvtz/c``, CABS ``cc-pvtz-f12-cabs``), unrestricted for the radicals and
+    the doublet TS, restricted for the singlets; ORCA cannot run a correlated method on one electron, so the H atom
+    (a one-atom species, no opt or freq) is ``method: hf`` with the same basis, aux and CABS and ``sp_route:
+    uhf hf cc-pvtz-f12 aug-cc-pvtz/c cc-pvtz-f12-cabs tightpno``. With ``hydride`` the atom is H- (charge -1, a
+    singlet, two electrons), so the HF energy is not the correlated one: ``[H-] + CN <=> [H][H] + C[NH-]``.
+    """
+    from test_orca_route_aux_basis import ORCA_SP, _orca_doc  # noqa: PLC0415
+
+    doc = _orca_doc()
+    radical, closed = copy.deepcopy(doc["species"][3]), copy.deepcopy(doc["species"][1])
+    ts = doc["transition_states"][0]
+    charge = -1 if hydride else 0
+    spec = [
+        ("H", "[H-]" if hydride else "[H]", charge, 1 if hydride else 2, closed if hydride else radical),
+        ("CH3NH2", "CN", 0, 1, closed),
+        ("H2", "[H][H]", 0, 1, closed),
+        ("CH3NH", "C[NH-]" if hydride else "C[NH]", charge, 1 if hydride else 2, closed if hydride else radical),
+    ]
+    energies = {"H": -0.5, "CH3NH2": -95.8, "H2": -1.17, "CH3NH": -95.1}
+    species = []
+    for label, smiles, chg, mult, template in spec:
+        record = copy.deepcopy(template)
+        record.update(label=label, smiles=smiles, charge=chg, multiplicity=mult, xyz=_ONE_ELECTRON_XYZ[label],
+                      sp_energy_hartree=energies[label], opt_log=f"calcs/{label}/opt.log",
+                      freq_log=f"calcs/{label}/freq.log", sp_log=f"calcs/{label}/sp.log")
+        species.append(record)
+    atom = species[0]
+    atom["levels"].update(opt=None, freq=None)
+    atom.update(opt_log=atom["sp_log"], freq_log=None, opt_route=None, freq_route=None, xyz_isotopes=[1],
+                opt_final_energy_hartree=-0.5, zpe_hartree=None)
+    atom["ess_software"].update(opt=None, freq=None)
+    atom["ess_versions"] = {"sp": "ORCA 6.0.0"}
+    atom["levels"]["sp"] = {**ORCA_SP, "method": "hf"}
+    atom["sp_route"] = "uhf hf cc-pvtz-f12 aug-cc-pvtz/c cc-pvtz-f12-cabs tightpno"
+    ts.update(label="TS0", charge=charge, multiplicity=1 if hydride else 2, xyz=_ONE_ELECTRON_XYZ["TS0"],
+              sp_energy_hartree=-96.3, opt_final_energy_hartree=-96.3)
+    doc["species"] = species
+    for record in (*doc["species"], *doc["transition_states"]):
+        record["converged"] = True
+        open_shell = record["multiplicity"] > 1
+        record["scf_reference"] = {"freq_reference": "unrestricted" if open_shell else "restricted",
+                                   "sp_reference": "unrestricted" if open_shell else "restricted"}
+        record["sp_spin_diagnostic"] = ({"s_squared": 0.76, "s_squared_expected": 0.75} if open_shell else None)
+    atom["sp_spin_diagnostic"] = {"s_squared": 0.75, "s_squared_expected": 0.75} if not hydride else None
+    reaction = doc["reactions"][0]
+    reaction.update(label=f"{species[0]['label']} + CH3NH2 <=> H2 + CH3NH", multiplicity=1 if hydride else 2,
+                    reactant_labels=["H", "CH3NH2"], product_labels=["H2", "CH3NH"],
+                    atom_map_reactant_labels=["H", "CH3NH2"], atom_map_product_labels=["H2", "CH3NH"])
+    reaction["kinetics"]["T0_k"] = 300.0
+    return doc, []
+
+
+def hydride_one_electron_reaction():
+    return one_electron_hf_reaction(hydride=True)
+
+
 def synthetic_species_as_shipped():
     from test_adapter import _fake_output_doc, _full_record
 
@@ -418,6 +490,8 @@ CORPORA = {
     "current_arc_h2o": current_arc_h2o,
     "synthetic_reaction": synthetic_reaction,
     "mixed_spin_reaction": mixed_spin_reaction,
+    "one_electron_hf_reaction": one_electron_hf_reaction,
+    "hydride_one_electron_reaction": hydride_one_electron_reaction,
     "stereo_consistent": stereo_consistent,
     "stereo_contradicting": stereo_contradicting,
     "hessian_deck": hessian_deck,

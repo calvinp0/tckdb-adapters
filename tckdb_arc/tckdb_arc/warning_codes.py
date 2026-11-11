@@ -129,6 +129,11 @@ class ArcWarning(CodedEnum):
         "The open-shell participants' energies were computed with different spin treatments (unrestricted and restricted-open), which TCKDB refuses for a declared kinetics level, so none is declared.",
     )
 
+    ONE_ELECTRON_HF_SUBSTITUTION = (
+        "one_electron_hf_substitution",
+        "A one-electron participant's energy was computed at Hartree-Fock in the same basis and is accepted under the correlated kinetics level, because every correlation term vanishes for one electron; for an F12 level the HF energy omits the CABS singles correction (about 0.05 to 0.1 mEh for H).",
+    )
+
     # --- energy corrections -------------------------------------------------------------
     CORRECTION_TABLE_METHOD_SPLIT = (
         "correction_table_method_split",
