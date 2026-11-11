@@ -123,6 +123,23 @@ def test_a_hydride_at_hf_declares_nothing(tmp_path):
     contract_validate(ComputedReactionUploadRequest, payload)
 
 
+def test_a_dft_declared_method_grants_no_exemption(tmp_path):
+    """B3LYP everywhere but H at HF: the exemption is for wave-function declared methods only."""
+    doc = _doc()
+    for record in (*doc["species"], *doc["transition_states"]):
+        sp = (record.get("levels") or {}).get("sp")
+        if sp and sp.get("method") == "dlpno-ccsd(t)-f12":
+            sp["method"] = "b3lyp"
+            if record.get("sp_route"):
+                record["sp_route"] = record["sp_route"].replace("dlpno-ccsd(t)-f12", "b3lyp")
+    payload, warnings = _build(doc, tmp_path)
+    assert "energy_level_of_theory" not in _kinetics(payload)
+    assert not _substitutions(warnings)
+    assert any(c["level_of_theory"]["method"] == "b3lyp" for s in payload["species"]
+               for c in [s["conformers"][0]["calculation"], *s.get("calculations", ())] if c["type"] == "sp")
+    contract_validate(ComputedReactionUploadRequest, payload)
+
+
 def test_the_h_atom_at_hf_in_another_basis_declares_nothing(tmp_path):
     doc = _doc()
     atom = next(r for r in doc["species"] if r["label"] == "H")

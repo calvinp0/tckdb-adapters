@@ -6,6 +6,7 @@ or its evidence files. The README may; it explains the rule.
 """
 
 import ast
+import os
 import re
 import subprocess
 import sys
@@ -138,5 +139,7 @@ def test_importing_every_core_module_loads_no_arc_module():
         "print(repr(bad))\n"
         "sys.exit(1 if bad else 0)\n"
     )
-    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    # The child does not inherit pytest's path insertion: give it the package this test reads.
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(PACKAGE_DIR.parent), *sys.path])}
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False, env=env)
     assert proc.returncode == 0, proc.stdout + proc.stderr

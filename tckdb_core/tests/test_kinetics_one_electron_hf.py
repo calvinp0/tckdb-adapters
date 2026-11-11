@@ -159,3 +159,41 @@ def test_electron_count_from_composition_and_charge():
     assert composition.electron_count(None, 0) is None
     assert composition.electron_count((), 0) is None
     assert composition.electron_count(("Xx",), 0) is None
+
+
+def _at(method, **extra):
+    """The declared (shared) level at ``method``, the H atom at HF in the same basis."""
+    declared = {**F12, "method": method, **extra}
+    levels = {"r0_sp": {**declared, "spin_treatment": "restricted"}, "r1_sp": {**H_U, **extra},
+              "p0_sp": {**declared, "spin_treatment": "unrestricted"},
+              "p1_sp": {**declared, "spin_treatment": "restricted"},
+              "ts_sp": {**declared, "spin_treatment": "unrestricted"}}
+    return _assess(levels, stated=[declared, {**HF, **extra}, declared, declared, declared]), declared
+
+
+@pytest.mark.parametrize("method", ["dlpno-ccsd(t)-f12", "ccsd(t)-f12a", "mp2-f12", "caspt2", "mrci+q",
+                                    "DLPNO-CCSD(T)-F12", "ccsd(t)"])
+def test_a_wavefunction_or_multireference_declared_method_is_exempt(method):
+    assessment, declared = _at(method)
+    assert assessment.one_electron_hf_calculations == ("r1_sp",)
+    assert assessment.level == {**declared, "spin_treatment": "unrestricted"}
+
+
+@pytest.mark.parametrize("method", ["b3lyp", "b2plyp", "wb97x-d3", "g4", "cbs-qb3", "pm6", "ccsd(t)-f12/ri",
+                                    "some-new-method"])
+def test_any_other_declared_family_grants_no_exemption(method):
+    """DFT, double hybrids, named composites, semiempirical and unclassified names: H at HF is a level mismatch."""
+    assessment, _ = _at(method)
+    assert assessment.level is None and assessment.one_electron_hf_calculations == ()
+
+
+def test_a_composite_scheme_reference_level_without_a_method_grants_no_exemption():
+    """The reference (first non-HF link) is a user-declared scheme with no method: unclassified, so H at HF is refused."""
+    ref = {"composite_scheme": {"name": "x"}, "basis": F12["basis"]}
+    declared = {**ref, "spin_treatment": "unrestricted"}
+    h = {"method": "hf", "basis": F12["basis"], "spin_treatment": "unrestricted"}
+    links = LINKS[:2]
+    assessment = rules.kinetics_energy_level_assessment(
+        links, calculations=_calcs({"r0_sp": declared, "r1_sp": h}), stated_levels=[ref, {"method": "hf", "basis": F12["basis"]}],
+        multiplicities={"r0_sp": 2, "r1_sp": 2}, electron_counts={"r0_sp": 18, "r1_sp": 1}, stated_electron_counts=[18, 1])
+    assert assessment.level is None and assessment.one_electron_hf_calculations == ()

@@ -1254,7 +1254,18 @@ level in `stated_levels`, may differ from the others in `method` alone, and only
   `rhf`, `rohf` and `hartree-fock` are other identity keys and are not exempt; ARC states the spin form in
   `spin_treatment`, not in the method name;
 - every other identity field except `spin_treatment` (basis, aux_basis, cabs_basis, dispersion, solvent, solvent_model,
-  core_treatment, qualifiers) equals the declared level's.
+  core_treatment, qualifiers) equals the declared level's;
+- the declared level's method is in the `wavefunction` or `multireference` family of TCKDB's `classify_method`.
+  DFT (B3LYP, B2PLYP, wB97X-D3), named composites (G4, CBS-QB3), semiempirical methods and any unclassified name
+  (for example `ccsd(t)-f12/ri`, which ARC never writes) grant no exemption: the H link at HF then differs from the
+  declared level and nothing is declared, as before this release. DLPNO-CCSD(T)-F12, CCSD(T)-F12a, MP2-F12, CASPT2 and
+  MRCI+Q qualify. The declared method is the first link's that is not itself a one-electron HF link; if its family
+  is not one of the two, nothing is exempt.
+
+**Stop-gap classifier.** `classify_method` is not in `tckdb_schemas`, so `tckdb_core/method_families.py` carries a
+faithful copy (family only, no DFT rung), pinned by `tckdb_core/tests/test_method_families.py` against the backend's
+table row for row and over a 328-name corpus (every table name, the names above, ARC spellings, case and dispersion
+variants). TODO: replace it with the `tckdb_schemas` import once TCKDB ships the classifier there (requested).
 
 The declared level is the correlated level the other links share, never HF. When every link is a one-electron HF link
 there is nothing to exempt and the rule runs as before. Spin is still judged per participant (a one-electron
@@ -1276,7 +1287,8 @@ PNO noise but not zero).
 
 Tests: `tckdb_core/tests/test_kinetics_one_electron_hf.py` (rule), `tckdb_arc/tests/test_kinetics_one_electron_hf_adapter.py`
 (rxn_210-shaped computed-reaction payload; its docstring states the 0.170 live-server caveat). Mutation-checked: dropping
-the electron-count condition fails the H- and two-electron tests, dropping the other-fields condition fails the basis tests.
+the electron-count condition fails the H- and two-electron tests, dropping the other-fields condition fails the basis tests,
+dropping the family condition fails the B3LYP, B2PLYP, G4, CBS-QB3 and unclassified tests.
 
 ### Item 4: literature on correction schemes (not adopted by TCKDB)
 

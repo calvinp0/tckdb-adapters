@@ -17,6 +17,7 @@ from tckdb_schemas.stationary_point import TAU_PROTOCOL_NOT_RECORDED_CM1
 
 from tckdb_core._logging import resolve_log
 from tckdb_core.level_rules import method_identity_key
+from tckdb_core.method_families import ONE_ELECTRON_EXEMPT_FAMILIES, method_family
 
 # ---------------------------------------------------------------------------
 # Energy-level declaration (assert_role_consistency)
@@ -272,7 +273,10 @@ def kinetics_energy_level_assessment(
     declared level's. Every correlation term vanishes for one electron, so the HF energy is the
     correlated one in the same basis (an F12 level's CABS singles term aside). The declared level
     is the correlated one the other links share, never HF; when every link is a one-electron HF
-    link there is nothing to exempt and the rule runs as before.
+    link there is nothing to exempt and the rule runs as before. The exemption also needs the
+    declared level's method to classify as ``wavefunction`` or ``multireference`` on TCKDB's
+    method-family table (:mod:`tckdb_core.method_families`): a DFT, composite, semiempirical or
+    unclassified declared method grants none, and the levels must then agree on ``method`` too.
     """
     electron_counts = electron_counts or {}
     entries: list[tuple[str, Mapping[str, Any], Mapping[str, Any]]] = []
@@ -299,11 +303,18 @@ def kinetics_energy_level_assessment(
         (level for key, _, level in entries if not _is_one_electron_hf(electron_counts.get(key), level)),
         entries[0][2])
     bare = _bare(reference)
+    # The exemption stands only beside a wave-function declared method (DFT, named composites and
+    # unclassified names get none), judged on the reference chosen above.
+    exempt_allowed = method_family(reference.get("method")) in ONE_ELECTRON_EXEMPT_FAMILIES
+
+    def _exempt(count: int | None, level: Mapping[str, Any]) -> bool:
+        return exempt_allowed and _is_one_electron_hf(count, level)
+
     substituted: list[str] = []
     for key, _, level in entries:
         if _bare(level) != bare:
             # The exemption: method is the only identity field that differs.
-            if not (_is_one_electron_hf(electron_counts.get(key), level)
+            if not (_exempt(electron_counts.get(key), level)
                     and {k: v for k, v in _bare(level).items() if k != "method"}
                     == {k: v for k, v in bare.items() if k != "method"}):
                 return KineticsLevelAssessment(None)
@@ -321,7 +332,7 @@ def kinetics_energy_level_assessment(
         if _bare(stated) == bare:
             continue
         count = stated_counts[index] if index < len(stated_counts) else None
-        if not (_is_one_electron_hf(count, stated)
+        if not (_exempt(count, stated)
                 and {k: v for k, v in _bare(stated).items() if k != "method"}
                 == {k: v for k, v in bare.items() if k != "method"}):
             return KineticsLevelAssessment(None)
