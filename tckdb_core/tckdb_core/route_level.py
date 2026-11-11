@@ -4,6 +4,12 @@ The route is what ran (observed); the level is what was requested. TCKDB
 refuses nothing here, but a producer that states both can notice that they name
 different methods or bases and report it instead of filing the request's level for
 a job that ran at another one.
+
+The parser is Gaussian-only. Callers must compare a route only when the record states
+the job ran in Gaussian (``ess_software[<job>]``). An ORCA keyword line carries slash
+tokens that are not a ``method/basis`` pair (auxiliary basis sets such as
+``aug-cc-pvtz/c``, ``def2/J``, ``def2-TZVP/C``, ``def2/JK``), and ARC exports ORCA routes
+without the leading ``!``, so the text alone cannot tell the programs apart.
 """
 
 from __future__ import annotations
@@ -29,7 +35,11 @@ def route_method_basis(route: Any) -> tuple[str, str] | None:
 
     Only an unambiguous line counts: exactly one whitespace-delimited token of
     the form ``a/b`` with no ``=``, and the line is not a composite route
-    (``#CBS-QB3 opt freq``) or an Orca ``!`` line (which have no such token).
+    (``#CBS-QB3 opt freq``). An Orca line is not supported: its auxiliary basis sets
+    carry a slash (``def2/J``), so the caller must not pass one. A Gaussian
+    density-fitting set written as a second ``a/b`` token (``b3lyp/def2tzvp def2tzvp/auto``)
+    makes the line ambiguous, and ``b3lyp/def2tzvp/auto`` is one token with two slashes that
+    the pair pattern does not match; both give ``None`` (no contradiction is reported).
     """
     if not isinstance(route, str):
         return None

@@ -3154,31 +3154,40 @@ class TCKDBAdapter(TCKDBUploaderBase):
                  "role": "optimized_from"}
             ]
 
-        if monatomic:
-            # An atom's primary is its own single point (tckdb-schemas 0.59,
-            # TCKDB#610): no opt, coarse opt, freq or rotor scan exists to carry.
-            primary_calc = self._build_monatomic_primary_sp(
-                output_doc=output_doc, species_record=species_record,
-                calc_key=sp_key, conformer_xyz_text=conformer_xyz_text)
-            opt_coarse_calc = None
-            fine_opt_depends_on = None
-            calc_keys: dict[str, str] = {_CALC_KEY_SP: sp_key}
-        else:
-            primary_calc = self._build_calc_in_bundle(
-                output_doc=output_doc,
-                species_record=species_record,
-                calc_key=opt_key,
-                calc_role=_CALC_KEY_OPT,
-                calc_type="opt",
-                level_kind="opt",
-                ess_job_key="opt",
-                result_field="opt_result",
-                result_payload=_opt_result_payload(species_record),
-                depends_on=fine_opt_depends_on,
-                tckdb_origin=None,
-                conformer_xyz_text=conformer_xyz_text,
-            )
-            calc_keys = {_CALC_KEY_OPT: opt_key}
+        try:
+            if monatomic:
+                # An atom's primary is its own single point (tckdb-schemas 0.59,
+                # TCKDB#610): no opt, coarse opt, freq or rotor scan exists to carry.
+                primary_calc = self._build_monatomic_primary_sp(
+                    output_doc=output_doc, species_record=species_record,
+                    calc_key=sp_key, conformer_xyz_text=conformer_xyz_text)
+                opt_coarse_calc = None
+                fine_opt_depends_on = None
+                calc_keys: dict[str, str] = {_CALC_KEY_SP: sp_key}
+            else:
+                primary_calc = self._build_calc_in_bundle(
+                    output_doc=output_doc,
+                    species_record=species_record,
+                    calc_key=opt_key,
+                    calc_role=_CALC_KEY_OPT,
+                    calc_type="opt",
+                    level_kind="opt",
+                    ess_job_key="opt",
+                    result_field="opt_result",
+                    result_payload=_opt_result_payload(species_record),
+                    depends_on=fine_opt_depends_on,
+                    tckdb_origin=None,
+                    conformer_xyz_text=conformer_xyz_text,
+                )
+                calc_keys = {_CALC_KEY_OPT: opt_key}
+        except ValueError as exc:
+            # The primary calculation is the one a participant cannot do without (an
+            # atom's sp, a molecule's opt), so unlike freq/sp/scan below it cannot be
+            # skipped: the whole reaction is refused, naming the participant.
+            raise ValueError(
+                f"reaction participant {actor_key!r} ({species_record.get('label')!r}): its "
+                f"primary calculation cannot be built, so the reaction is not uploaded: {exc}"
+            ) from exc
         additional: list[dict[str, Any]] = []
         # opt_coarse is type=opt, so the schema validator at
         # computed_reaction_upload.py:446 exempts it from needing
@@ -3595,21 +3604,27 @@ class TCKDBAdapter(TCKDBUploaderBase):
         # NEB/GSM is a separate case: ``path_search_result`` ships
         # actual scientific path-search data (per-image energies,
         # geometries) on the ts_guess calc, accepted by the schema.
-        primary_calc = self._build_calc_in_bundle(
-            output_doc=output_doc,
-            species_record=ts_record,
-            calc_key=ts_opt_key,
-            calc_role=_CALC_KEY_OPT,
-            calc_type="opt",
-            level_kind="opt",
-            ess_job_key="opt",
-            result_field="opt_result",
-            result_payload=_opt_result_payload(ts_record),
-            depends_on=ts_opt_depends_on,
-            tckdb_origin=None,
-            conformer_xyz_text=conformer_xyz_text,
-            include_artifacts=include_artifacts,
-        )
+        try:
+            primary_calc = self._build_calc_in_bundle(
+                output_doc=output_doc,
+                species_record=ts_record,
+                calc_key=ts_opt_key,
+                calc_role=_CALC_KEY_OPT,
+                calc_type="opt",
+                level_kind="opt",
+                ess_job_key="opt",
+                result_field="opt_result",
+                result_payload=_opt_result_payload(ts_record),
+                depends_on=ts_opt_depends_on,
+                tckdb_origin=None,
+                conformer_xyz_text=conformer_xyz_text,
+                include_artifacts=include_artifacts,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"transition state {ts_label!r}: its primary calculation cannot be built, so the "
+                f"reaction is not uploaded: {exc}"
+            ) from exc
 
         calc_keys: dict[str, str] = {_CALC_KEY_OPT: ts_opt_key}
         additional: list[dict[str, Any]] = []
@@ -4784,10 +4799,24 @@ _W_LEVEL_CONTRADICTED_BY_ROUTE = ArcWarning.LEVEL_CONTRADICTED_BY_ROUTE.value
 def _route_contradiction(
     record: Mapping[str, Any], calc_type: str, ess_job_key: str, level: Mapping[str, Any],
 ) -> str | None:
-    """Description of a clear contradiction between a 1.3 record's level and the route the job ran with."""
+    """Description of a clear contradiction between a 1.3 record's level and the route the job ran with.
+
+    Gaussian only. The route parser (``route_level.route_method_basis``) reads the one
+    ``method/basis`` token of a Gaussian ``#`` line. An ORCA keyword line carries slash tokens
+    that are not a method/basis pair (auxiliary basis sets: ``aug-cc-pvtz/c``, ``def2/J``,
+    ``def2-TZVP/C``), and ARC exports ORCA routes without the leading ``!``, so the text alone
+    does not say which program wrote it. The program of the job is stated by the record
+    (``ess_software[<job>]``, via ``arc13.software_job_key``); a job that is not stated to be
+    Gaussian is never compared, so an ORCA route is not read as a Gaussian one and the level
+    is not contradicted by it.
+    """
     if not arc13.has_levels(record):
         return None
+    ess_software = record.get("ess_software")
+    ess_software = ess_software if isinstance(ess_software, Mapping) else {}
     if calc_type == _CALC_KEY_IRC:
+        if ess_software.get("irc") != "gaussian":
+            return None
         routes = record.get("irc_log_routes")
         for route in routes if isinstance(routes, list) else ():
             found = arc13.route_contradicts_level(route, level)
@@ -4796,7 +4825,14 @@ def _route_contradiction(
         return None
     if calc_type != ess_job_key or calc_type not in arc13.ROUTE_FIELDS:
         return None
-    if arc13.software_job_key(record, calc_type) == "composite":
+    software_key = arc13.software_job_key(record, calc_type)
+    if software_key == "composite":
+        return None
+    if ess_software.get(software_key) != "gaussian":
+        if not ess_software.get(software_key) and arc13.route_for_job(record, calc_type):
+            logger.debug(
+                "TCKDB route check: the %s route of %r is not compared with the level: ess_software "
+                "states no program for job %r", calc_type, record.get("label"), software_key)
         return None
     return arc13.route_contradicts_level(arc13.route_for_job(record, calc_type), level)
 

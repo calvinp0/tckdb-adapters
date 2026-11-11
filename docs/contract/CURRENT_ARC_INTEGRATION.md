@@ -65,6 +65,8 @@ and schema versions; their percentages are not current coverage measurements.
 - **Adapter 0.15.1, kinetics energy level and spin (tckdb-schemas 0.159 to 0.161, client 0.189, TCKDB `cd84fb6a`; `tckdb_core` 0.5.1):** a kinetics block declares its
   energy level with the open-shell reference when the participants' spin treatments differ, and withholds it (with `kinetics_energy_level_spin_mixed`) when they disagree. See
   [Kinetics energy level and spin (adapter 0.15.1)](#kinetics-energy-level-and-spin-adapter-0151).
+- **Adapter 0.15.2, ORCA routes are not compared with the level (same pin, `tckdb_core` 0.5.2):** the route-versus-level check runs only for jobs the record states ran in
+  Gaussian, so an ORCA auxiliary-basis token (`aug-cc-pvtz/c`) is no longer read as a method/basis pair. See "Placeholders and contradictions" above.
 - **Adapter 0.6.3:** roadmap A1, A5 and A12 (see "Corrections and statmech
   evidence (adapter 0.6.3)" below). The golden corpus hashes are unchanged.
 - **Adapter 0.6.4:** levels the adapter states only when ARC's output supports
@@ -620,6 +622,19 @@ it) and the primary `opt` of a record with no opt job (header opt level) are mar
 `tckdb_origin.origin_detail = placeholder_primary_opt_{composite,no_opt_job}` with warnings
 `composite_geometry_level_not_stated` / `primary_opt_placeholder_no_opt_job`. A calculation whose
 recorded level a Gaussian route clearly contradicts is not built (`level_contradicted_by_route`).
+The comparison is Gaussian-only (adapter 0.15.2): the route parser reads the one `method/basis`
+token of a Gaussian `#` line, and a job is compared only when the record states it ran in Gaussian
+(`ess_software[<job>]`, via `software_job_key`; `ess_software.irc` for the IRC logs). An ORCA keyword
+line (ARC exports it without the leading `!`) carries slash tokens that are auxiliary basis sets
+(`aug-cc-pvtz/c`, `def2/J`, `def2-TZVP/C`, `def2/JK`), which read as a method/basis pair and falsely
+contradicted the correct level of an ORCA DLPNO-CCSD(T)-F12 single point. A Gaussian line with a
+density-fitting set (`b3lyp/def2tzvp/auto`, or a second `a/b` token) is ambiguous and never flagged. The
+level is never re-derived from a route. In the computed-reaction route a contradicted freq, sp or scan
+calculation of a participant or the TS is skipped with a warning; a participant's primary calculation
+(a molecule's opt, an atom's sp) cannot be skipped, so the reaction is refused and the error names the
+participant ("reaction participant 'r1_H' ('H'): its primary calculation cannot be built, so the reaction
+is not uploaded: ..."; for the TS, "transition state 'TS0': its primary calculation cannot be built ..."). Before 0.15.2 an ORCA atom's primary sp was refused that way on the false
+contradiction (`rotor_scan_rmg_rxn_1142`: reactant r1 is a one-atom O species whose sp ran in ORCA, every other participant opt Gaussian / sp ORCA), while the other runs only lost their sp calculations.
 The conformer program is a deterministic deduction (header `conformer_opt_level.software`), interim.
 The xtb banner split is a local rule pending a TCKDB normaliser change (roadmap C13).
 
