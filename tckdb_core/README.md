@@ -100,6 +100,10 @@ underscore. Underscore-prefixed names (for example `uploader._skip`, `payload_wr
 import them from `tckdb_core`, never through a producer package (`tckdb_arc` no longer re-exports
 them, and forwards the public names of its old modules with a `DeprecationWarning`).
 
+## What changed in 0.5.5
+
+Tracks tckdb-schemas 0.174 / client 0.206 (TCKDB c20b16a9). The method-family classifier is imported from `tckdb_schemas.method_families` (the stop-gap replica is deleted; `tckdb_core.method_families` keeps `method_family` and `ONE_ELECTRON_EXEMPT_FAMILIES` as a thin surface), and `level_rules.method_identity_key` is `tckdb_schemas.method_names.method_identity_key`. No behaviour change. `TARGET_SCHEMAS_LINE` moves to `(0, 174)`.
+
 ## What changed in 0.5.4
 
 `rules.kinetics_energy_level_assessment` accepts a one-electron participant's Hartree-Fock energy under a correlated kinetics level (method differs, every other identity field equal; `electron_counts` and `stated_electron_counts` are new optional arguments, and `KineticsLevelAssessment.one_electron_hf_calculations` names the substituted links), and `composition.electron_count` computes a species' electrons from its symbols and charge. With no electron counts passed the behaviour is unchanged. Mirrors a TCKDB rule not in the current pin (5557ed9a); do not pin this release before a TCKDB revision that carries it.

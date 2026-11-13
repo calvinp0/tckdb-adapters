@@ -22,11 +22,9 @@ Replicated from TCKDB ``main`` (checked against the backend by
   0.158 (ADR 0024) and are calculation parameters.
 * ``app/chemistry/basis_set_names.py::basis_identity_key``.
 * ``app/chemistry/lot_component_names.py::component_identity_key``.
-* ``app/chemistry/method_names.py::method_identity_key``: strip and lower-case,
-  the curated whole-name aliases (``wb97x-d``, ``m06-2x``, the four hyphen-free
-  composite spellings ``cbsqb3``/``rocbsqb3``/``cbs4m``/``cbsapno`` and the
-  parenthesised ``g4(mp2)``/``g3(mp2)``/``g3(mp2)b3``) and the trailing
-  ``-d3(bj)`` / ``-gd3bj`` suffix aliases.
+* ``method_identity_key``: NOT replicated since tckdb-schemas 0.174; it is
+  ``tckdb_schemas.method_names.method_identity_key`` (the alias tables here are
+  dicts derived from the shipped ``NAME_ALIASES`` / ``SUFFIX_ALIASES``).
 * ``app/chemistry/dispersion_names.py``: the dispersion alias table with its
   Gaussian route forms (``EmpiricalDispersion=X``, ``=(X)``, ``(X)``), and the
   split of a recognised dispersion folded into the method name
@@ -45,6 +43,8 @@ import json
 import re
 from collections.abc import Mapping
 from typing import Any
+
+from tckdb_schemas import method_names as _shipped
 
 # ---------------------------------------------------------------- basis / components
 
@@ -75,39 +75,14 @@ def component_identity_key(name: str | None) -> str | None:
 
 # ---------------------------------------------------------------- method key
 
-#: Whole-name aliases (alias -> key), matched after strip and lower-case.
-NAME_ALIASES: dict[str, str] = {
-    "wb97x-d": "wb97xd",
-    "m06-2x": "m062x",
-    "cbsqb3": "cbs-qb3",
-    "rocbsqb3": "rocbs-qb3",
-    "cbs4m": "cbs-4m",
-    "cbsapno": "cbs-apno",
-    "g4(mp2)": "g4mp2",
-    "g3(mp2)": "g3mp2",
-    "g3(mp2)b3": "g3mp2b3",
-}
+#: Whole-name aliases (alias -> key), derived from the shipped ``tckdb_schemas.method_names.NAME_ALIASES``.
+NAME_ALIASES: dict[str, str] = {a.alias: a.canonical for a in _shipped.NAME_ALIASES}
 
-#: Trailing ``-<alias>`` spellings of D3 with Becke-Johnson damping (alias -> key).
-SUFFIX_ALIASES: dict[str, str] = {
-    "d3(bj)": "d3bj",
-    "gd3bj": "d3bj",
-}
+#: Trailing ``-<alias>`` spellings of D3 with Becke-Johnson damping (alias -> key), from the shipped table.
+SUFFIX_ALIASES: dict[str, str] = {a.alias: a.canonical for a in _shipped.SUFFIX_ALIASES}
 
-_SUFFIX_COMPILED = tuple(
-    (re.compile("^(.+)-" + re.escape(alias) + "$", re.DOTALL), "\\1-" + canonical)
-    for alias, canonical in SUFFIX_ALIASES.items()
-)
-
-
-def method_identity_key(name: str) -> str:
-    """Identity key of a method name (idempotent)."""
-    key = name.strip().lower()
-    if key in NAME_ALIASES:
-        return NAME_ALIASES[key]
-    for pattern, replacement in _SUFFIX_COMPILED:
-        key = pattern.sub(replacement, key)
-    return key
+#: Identity key of a method name (idempotent): TCKDB's own function, shipped in ``tckdb_schemas`` (0.174).
+method_identity_key = _shipped.method_identity_key
 
 
 # ---------------------------------------------------------------- dispersion key
